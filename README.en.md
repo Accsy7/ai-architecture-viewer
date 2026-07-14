@@ -2,6 +2,15 @@
 
 [Read in Chinese](README.md)
 
+[![CI](https://github.com/Accsy7/ai-architecture-viewer/actions/workflows/ci.yml/badge.svg)](https://github.com/Accsy7/ai-architecture-viewer/actions/workflows/ci.yml)
+![Version: v0.1.0](https://img.shields.io/badge/version-v0.1.0-2f6f5e)
+[![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-7c6f64)](LICENSE)
+
+> **License:** Source code is available only for the noncommercial purposes
+> defined by the [PolyForm Noncommercial License 1.0.0](LICENSE). Derivative
+> versions must retain the attribution in [NOTICE](NOTICE) and follow the
+> [Project Name and Brand Usage Policy](TRADEMARKS.en.md).
+
 AI Architecture Viewer is a local-first tool for building a shared understanding
 of software architecture between people and AI. It brings the current
 architecture, target intent, and explicitly selected project materials into a
@@ -11,6 +20,29 @@ The user reviews, corrects, accepts, or rejects those results, turning shared
 understanding into drafts and versioned architecture records. The AI does not
 automatically scan the entire code repository, and it cannot modify a published
 architecture without human confirmation.
+
+## Product preview
+
+![Current architecture overview in the fictional demo](docs/assets/architecture-overview.png)
+
+| Evidence-backed AI proposal | AI coding collaboration skills |
+| --- | --- |
+| ![An evidence-backed AI proposal waiting for human review](docs/assets/evidence-proposal.png) | ![Collaboration skills that can be handed to a coding AI](docs/assets/collaboration-skills.png) |
+
+Every screen above comes from the bundled fictional demo. No customer,
+production, or personal data is included.
+
+### Understand an architecture in 30 seconds
+
+1. Run `npm start` and open the fictional demo, or explicitly select your own
+   project data package.
+2. Browse the current architecture, select a module, and verify its
+   responsibilities, relationships, and control boundaries.
+3. Open **AI Analysis** and include only materials approved for transmission.
+4. Review each candidate change against its evidence, then accept, reject, or
+   correct it.
+5. A person confirms the draft before publication; revision history remains
+   available for later inspection or restoration.
 
 ## Use cases
 
@@ -161,7 +193,8 @@ npm run build
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development conventions,
 [SECURITY.md](SECURITY.md) for security reporting, and
-[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for community standards.
+[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for community standards. Release
+history is documented in [CHANGELOG.md](CHANGELOG.md).
 
 ## Public-release boundaries
 
@@ -177,10 +210,10 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development conventions,
 - The license grants rights to use, modify, and distribute the software only for
   the noncommercial purposes it defines. Commercial use requires separate
   written authorization; see
-  [COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md).
+  [COMMERCIAL_LICENSE.en.md](COMMERCIAL_LICENSE.en.md).
 - Derivative works are allowed. Anyone publicly distributing a modified version
   must retain the attribution in [NOTICE](NOTICE) and follow
-  [TRADEMARKS.md](TRADEMARKS.md): use a different project name and Logo, and do
+  [TRADEMARKS.en.md](TRADEMARKS.en.md): use a different project name and Logo, and do
   not imply that the version is official, maintained by the original author,
   approved by the original author, or endorsed by the original author.
 - Third-party dependencies remain subject to their own licenses.

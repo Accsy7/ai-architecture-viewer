@@ -1,5 +1,7 @@
 # 商业授权
 
+[English](COMMERCIAL_LICENSE.en.md)
+
 本仓库的源代码以 [PolyForm Noncommercial License 1.0.0](LICENSE) 发布。该许可仅
 授予其中定义的“许可用途”的权利；本仓库不会仅凭公开发布而授予商业使用许可。
 

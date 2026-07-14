@@ -2,7 +2,34 @@
 
 [English](README.en.md)
 
+[![CI](https://github.com/Accsy7/ai-architecture-viewer/actions/workflows/ci.yml/badge.svg)](https://github.com/Accsy7/ai-architecture-viewer/actions/workflows/ci.yml)
+![Version: v0.1.0](https://img.shields.io/badge/version-v0.1.0-2f6f5e)
+[![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-7c6f64)](LICENSE)
+
+> **许可说明：** 本项目源码仅针对
+> [PolyForm Noncommercial License 1.0.0](LICENSE) 定义的非商业用途开放。
+> 二次开发必须保留 [NOTICE](NOTICE) 中的署名，并遵守
+> [项目名称与标识使用政策](TRADEMARKS.md)。
+
 一款基于本地优先理念的 AI 架构理解与协作工具。它将当前架构、目标意图以及用户明确选择的项目材料汇聚到同一个可视化工作区中。基于这些受控输入，AI 生成对架构的可追溯理解以及候选变更方案；用户可进行验证、修正、接受或拒绝，从而将共识转化为草稿和版本。AI 不会自动扫描整个代码仓库，且未经人工确认，不得修改已发布的架构。
+
+## 产品预览
+
+![虚构 Demo 的当前架构总览](docs/assets/architecture-overview.png)
+
+| 证据化 AI 提案 | AI Coding 协作技能 |
+| --- | --- |
+| ![等待人工审阅的证据化 AI 提案](docs/assets/evidence-proposal.png) | ![可交接给 Coding AI 的协作技能](docs/assets/collaboration-skills.png) |
+
+以上画面全部来自仓库内置的虚构 Demo，不包含客户、生产或个人数据。
+
+### 30 秒完成一次架构理解
+
+1. 运行 `npm start`，打开虚构 Demo 或显式指定自己的项目数据包。
+2. 浏览当前架构，选择模块并核对职责、关系和控制边界。
+3. 打开 **AI 分析**，只加入已获准发送的资料。
+4. 对照证据审阅候选变更，逐项接受、拒绝或纠正。
+5. 由人确认后写入草稿并发布；随后可在版本历史中复查或恢复。
 
 ## 使用场景
 
@@ -105,7 +132,7 @@ npm test
 npm run build
 ```
 
-开发规范请参阅 [CONTRIBUTING.md](CONTRIBUTING.md)，安全报告请参阅 [SECURITY.md](SECURITY.md)，社区标准请参阅 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)。
+开发规范请参阅 [CONTRIBUTING.md](CONTRIBUTING.md)，安全报告请参阅 [SECURITY.md](SECURITY.md)，社区标准请参阅 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)，版本变化请参阅 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 公开发布边界
 

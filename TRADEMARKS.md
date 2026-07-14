@@ -1,5 +1,7 @@
 # 项目名称与标识使用政策
 
+[English](TRADEMARKS.en.md)
+
 本政策适用于 **AI 架构查看器**、**AI Architecture Viewer** 这两个项目名称，以及
 本项目随附的原始 Logo、图标和其他用于识别原项目来源的视觉标识（统称“项目标识”）。
 
