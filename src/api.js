@@ -1,7 +1,7 @@
 export const SCHEMA_VERSION = '3.1.0';
 export const DOCUMENT_SCHEMA_VERSION = '1.0.0';
 export const LAYOUT_SCHEMA_VERSION = '1.1.0';
-export const ANALYSIS_SCHEMA_VERSION = '1.0.0';
+export const ANALYSIS_SCHEMA_VERSION = '2.0.0';
 
 async function request(path, options = {}) {
   const response = await fetch(path, {
@@ -147,26 +147,6 @@ export const previewDocument = (documentId, section = '') => {
 };
 
 export const getAnalysis = () => request('/api/analysis');
-
-export const putAnalysisSources = (baseRevision, sources) => request('/api/analysis/sources', {
-  method: 'PUT',
-  body: JSON.stringify({
-    schemaVersion: ANALYSIS_SCHEMA_VERSION,
-    baseRevision,
-    sources: sources.map((source) => ({ path: source.path, selected: Boolean(source.selected) })),
-  }),
-});
-
-export const scanAnalysisSources = (baseRevision) => request('/api/analysis/scan', {
-  method: 'POST',
-  body: JSON.stringify({ schemaVersion: ANALYSIS_SCHEMA_VERSION, baseRevision }),
-});
-
-export const generateAnalysisProposals = (view, baseRevision, diagram) =>
-  request(lanePath('/api/analysis/proposals', view, diagram), {
-    method: 'POST',
-    body: JSON.stringify({ schemaVersion: ANALYSIS_SCHEMA_VERSION, baseRevision }),
-  });
 
 export const acceptAnalysisProposal = (proposalId, baseRevision) =>
   request(`/api/analysis/proposals/${encodeURIComponent(proposalId)}/accept`, {

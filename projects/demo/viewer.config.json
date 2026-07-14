@@ -26,6 +26,6 @@
     { "key": "technical", "label": "Technical state", "tone": "technical" },
     { "key": "product", "label": "Product state", "tone": "product" },
     { "key": "authorization", "label": "Control boundary", "tone": "authorization" },
-    { "key": "aiCollaboration", "label": "AI role", "tone": "ai", "optional": true }
+    { "key": "aiCollaboration", "label": "Agent role", "tone": "ai", "optional": true }
   ]
 }

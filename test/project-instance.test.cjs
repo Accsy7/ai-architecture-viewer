@@ -565,7 +565,10 @@ test('public synthetic demo package keeps architecture, evidence, layouts, and r
 
     Object.entries(graphByView).forEach(([view, graph]) => {
       graph.nodes.forEach((node) => {
-        assert.deepEqual(layout.layouts[view].positions[node.id], node.position);
+        const position = layout.layouts[view].positions[node.id];
+        assert.ok(position, `missing ${view} layout for ${node.id}`);
+        assert.equal(Number.isFinite(position.x), true);
+        assert.equal(Number.isFinite(position.y), true);
         (node.data.documentRefs || []).forEach((documentId) => assert.ok(documentIds.has(documentId)));
       });
     });

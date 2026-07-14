@@ -2,6 +2,46 @@
 
 All notable changes to AI Architecture Viewer are documented in this file.
 
+## [0.2.0] - 2026-07-14
+
+### Changed
+
+- Reframed the product as an external architecture handoff and review surface
+  for Codex, Claude Code, and other coding agents rather than an application
+  with an embedded model provider.
+- Replaced the AI analysis drawer with an agent workspace containing traceable
+  runs, a proposal inbox, review history, and portable collaboration skills.
+- Removed the DeepSeek provider integration and all model-key requirements from
+  the core runtime.
+
+### Added
+
+- A production-oriented local STDIO MCP server built on the recommended v1
+  Model Context Protocol TypeScript SDK.
+- MCP tools for project context, published architecture, agent runs,
+  architecture snapshots, change proposals, implementation reports, review
+  status, and approved targets.
+- A vendor-neutral CLI and JSON-file fallback for agents without MCP support.
+- Agent-run and artifact provenance in analysis schema `2.0.0`, including safe
+  migration from v1 analysis data.
+- Repository-code evidence support with path, sensitive-directory, line-range,
+  and current-content-hash validation.
+- Independent project-data and code-workspace roots so the viewer can remain
+  outside the repository it helps an agent explain.
+- Snapshot-to-diff conversion that never interprets an omitted node as an
+  automatic removal.
+- End-to-end MCP handshake and external-submission tests.
+
+### Security and governance
+
+- MCP exposes no approval or publication tool. Submitted artifacts always enter
+  the human review workflow, and accepted proposals create drafts only.
+- Agent submissions are locked to the published architecture baseline captured
+  when their run was created.
+- Every run accepts only its declared artifact types, and each submission must
+  carry a manifest covering all referenced evidence.
+- `get_approved_target` never returns an unrelated, unapproved target draft.
+
 ## [0.1.0] - 2026-07-14
 
 ### Added

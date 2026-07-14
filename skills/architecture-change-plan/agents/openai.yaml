@@ -1,4 +1,4 @@
 interface:
   display_name: "Architecture Change Planning"
-  short_description: "Turn user intent into reviewable architecture plans"
-  default_prompt: "Use $architecture-change-plan to turn this request into an evidence-backed target architecture proposal."
+  short_description: "Submit reviewable architecture plans via MCP"
+  default_prompt: "Use $architecture-change-plan to turn this request into an evidence-backed proposal and submit it to the viewer through MCP."

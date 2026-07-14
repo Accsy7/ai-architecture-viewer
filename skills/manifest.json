@@ -6,28 +6,28 @@
       "id": "architecture-discovery",
       "displayName": "项目架构理解",
       "stage": "understand",
-      "description": "在授权范围内检查代码仓库，生成带文件证据的当前架构快照。",
+      "description": "在授权范围内由外部智能体检查仓库，并通过 MCP 提交带文件证据的当前架构快照。",
       "skillPath": "architecture-discovery/SKILL.md",
       "outputs": ["architecture-snapshot.json", "evidence-manifest.json"],
-      "defaultPrompt": "请读取并执行 skills/architecture-discovery/SKILL.md，在不修改代码的前提下分析当前仓库，并生成 AI 架构查看器兼容的架构快照和证据清单。"
+      "defaultPrompt": "请连接本项目的 AI Architecture Viewer MCP，读取并执行 skills/architecture-discovery/SKILL.md；先获取项目上下文并创建运行，再提交架构快照和证据清单，不要修改代码或发布架构。"
     },
     {
       "id": "architecture-change-plan",
       "displayName": "架构变更规划",
       "stage": "plan",
-      "description": "把用户目标转化为可审阅的目标架构、备选方案、风险和验收标准。",
+      "description": "由外部智能体把用户目标转化为目标架构方案，并通过 MCP 送入人工审阅。",
       "skillPath": "architecture-change-plan/SKILL.md",
       "outputs": ["task-request.json", "architecture-proposal.json", "evidence-manifest.json"],
-      "defaultPrompt": "请读取并执行 skills/architecture-change-plan/SKILL.md，根据用户目标和最新架构快照生成可审阅的目标架构提案；不要开始编码。"
+      "defaultPrompt": "请连接本项目的 AI Architecture Viewer MCP，读取并执行 skills/architecture-change-plan/SKILL.md；基于最新架构生成并提交可审阅的目标提案，不要开始编码、接受提案或发布架构。"
     },
     {
       "id": "implementation-reconcile",
       "displayName": "实施结果核验",
       "stage": "verify",
-      "description": "检查 AI Coding 的实际修改、测试结果与已批准架构之间的一致性和偏离。",
+      "description": "由外部智能体核对实际代码、测试结果与已批准架构，并提交所有偏离。",
       "skillPath": "implementation-reconcile/SKILL.md",
       "outputs": ["implementation-report.json", "architecture-snapshot.json", "evidence-manifest.json"],
-      "defaultPrompt": "请读取并执行 skills/implementation-reconcile/SKILL.md，核对实际代码、测试结果和已批准架构，并如实报告完成度与所有偏离。"
+      "defaultPrompt": "请连接本项目的 AI Architecture Viewer MCP，读取并执行 skills/implementation-reconcile/SKILL.md；获取人工批准的目标，核对代码与测试，并提交实施报告、当前快照和全部偏离。"
     }
   ]
 }

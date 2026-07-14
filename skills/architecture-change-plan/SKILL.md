@@ -9,17 +9,19 @@ Convert user intent and current-state evidence into a small, decision-ready targ
 
 ## Workflow
 
-1. Read the user goal, constraints, exclusions, latest architecture snapshot, and evidence manifest.
-2. Ask only for missing decisions that would materially change scope, safety, data handling, or acceptance.
-3. Create up to three viable options. State advantages, disadvantages, migration impact, and important unknowns.
-4. Recommend one option, but keep the recommendation separate from the user's approval.
-5. Express the recommended option as evidence-backed node and edge changes. Do not include coordinates, layout, branding, or manual-confirmation fields.
-6. Define observable acceptance criteria and explicit non-goals.
-7. Write the artifacts under `ai-coding/plans/<request-id>/`:
+1. When AI Architecture Viewer MCP tools are available, call `get_project_context` and `get_current_architecture`, then call `create_agent_run` with task type `architecture-change-plan` and view `target`. Retain the returned run ID.
+2. Read the user goal, constraints, exclusions, latest architecture snapshot, and evidence manifest.
+3. Ask only for missing decisions that would materially change scope, safety, data handling, or acceptance.
+4. Create up to three viable options. State advantages, disadvantages, migration impact, and important unknowns.
+5. Recommend one option, but keep the recommendation separate from the user's approval.
+6. Express the recommended option as evidence-backed node and edge changes. Do not include coordinates, layout, branding, or manual-confirmation fields.
+7. Define observable acceptance criteria and explicit non-goals.
+8. Write the artifacts under `ai-coding/plans/<request-id>/`:
    - `task-request.json`
    - `architecture-proposal.json`
    - `evidence-manifest.json`
-8. If `protocol/validate-artifact.cjs` is available, validate every artifact before handoff.
+9. If `protocol/validate-artifact.cjs` is available, validate every artifact before handoff.
+10. Submit the proposal and evidence with `submit_change_proposal`. If MCP is unavailable, run `npm run agent -- submit --run <run-id> --artifact <proposal-path> --evidence <manifest-path>`.
 
 ## Output rules
 
@@ -29,6 +31,7 @@ Convert user intent and current-state evidence into a small, decision-ready targ
 - Keep code execution, file mutation, deployment, and publication outside this skill.
 - Never mark the proposal approved. The user must approve it in the viewer.
 - Never replace or publish the viewer's current or target architecture directly.
+- The viewer is not an embedded planner. Perform reasoning in the coding agent, then use the viewer only for structured handoff and human review.
 
 ## Completion gate
 

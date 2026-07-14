@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "1.0.0",
+  "schemaVersion": "2.0.0",
   "baseRevision": 0,
   "lastUpdated": "2026-07-14T00:00:00.000Z",
   "sources": [
@@ -112,7 +112,155 @@
           }
         }
       ],
-      "application": null
+      "application": null,
+      "origin": {
+        "runId": "run-demo-codex-architecture",
+        "artifactId": "proposal-add-evaluation-gate",
+        "artifactType": "architecture-proposal",
+        "agentName": "Codex",
+        "agentClient": "codex"
+      }
+    }
+  ],
+  "agentRuns": [
+    {
+      "id": "run-demo-codex-architecture",
+      "agentName": "Codex",
+      "agentClient": "codex",
+      "taskType": "architecture-change-plan",
+      "status": "submitted",
+      "diagramId": "system-overview",
+      "view": "current",
+      "baseRevision": 1,
+      "baseRevisionId": "current-r1",
+      "createdAt": "2026-07-14T00:00:00.000Z",
+      "updatedAt": "2026-07-14T00:00:00.000Z",
+      "submittedAt": "2026-07-14T00:00:00.000Z",
+      "summary": "Review a repository-grounded proposal for an explicit evaluation gate.",
+      "artifactIds": [
+        "evidence-demo-evaluation",
+        "proposal-add-evaluation-gate"
+      ]
+    }
+  ],
+  "artifacts": [
+    {
+      "id": "evidence-demo-evaluation",
+      "runId": "run-demo-codex-architecture",
+      "artifactType": "evidence-manifest",
+      "submittedAt": "2026-07-14T00:00:00.000Z",
+      "artifact": {
+        "schemaVersion": "1.0.0",
+        "artifactType": "evidence-manifest",
+        "artifactId": "evidence-demo-evaluation",
+        "createdAt": "2026-07-14T00:00:00.000Z",
+        "projectRevision": {
+          "kind": "release",
+          "value": "synthetic-demo-v0.2"
+        },
+        "entries": [
+          {
+            "id": "human-review-boundary",
+            "path": "documents/system-brief.md",
+            "lineStart": 7,
+            "lineEnd": 10,
+            "summary": "Only the human review workspace may finalize a response.",
+            "contentHash": "d96e11d4d03df8f58bc40adf492e1da64c23ffd02e2d28422d71fec2cb31f504",
+            "basis": "fact"
+          },
+          {
+            "id": "evaluation-gate-behavior",
+            "path": "documents/evaluation-proposal.md",
+            "lineStart": 5,
+            "lineEnd": 7,
+            "summary": "The candidate gate checks citations but cannot approve, publish, or send.",
+            "contentHash": "8596af38f5d2ed785f820482d294c89635b0c5d6f6452570f3d85d8d06ac6bbc",
+            "basis": "fact"
+          }
+        ]
+      }
+    },
+    {
+      "id": "proposal-add-evaluation-gate",
+      "runId": "run-demo-codex-architecture",
+      "artifactType": "architecture-proposal",
+      "submittedAt": "2026-07-14T00:00:00.000Z",
+      "artifact": {
+        "schemaVersion": "1.0.0",
+        "artifactType": "architecture-proposal",
+        "artifactId": "proposal-add-evaluation-gate",
+        "createdAt": "2026-07-14T00:00:00.000Z",
+        "requestId": "request-demo-evaluation-gate",
+        "baseSnapshotId": "snapshot-demo-current",
+        "title": "Add an evaluation gate before human review",
+        "summary": "Create a reviewable current-architecture draft that adds an evidence-checking gate between retrieval and human review.",
+        "options": [
+          {
+            "id": "option-explicit-gate",
+            "title": "Add an explicit evaluation gate",
+            "summary": "Represent evidence checking as a separately reviewable responsibility.",
+            "advantages": ["Makes the control boundary visible."],
+            "disadvantages": ["Adds one more governed handoff." ]
+          }
+        ],
+        "recommendedOptionId": "option-explicit-gate",
+        "changes": [
+          {
+            "id": "add-evaluation-gate-node",
+            "kind": "add",
+            "targetType": "node",
+            "targetId": "evaluation-gate",
+            "summary": "Add a candidate evaluation gate before the existing human review workspace.",
+            "evidenceIds": ["evaluation-gate-behavior"],
+            "patch": {
+              "data": {
+                "name": "Evaluation gate",
+                "purpose": "Scores grounding and safety checks before a response reaches human review.",
+                "technical": "External agent proposal",
+                "product": "Awaiting human review",
+                "authorization": "May recommend a hold; cannot approve or send a response.",
+                "aiCollaboration": "Evidence-based candidate change"
+              }
+            }
+          },
+          {
+            "id": "add-retrieval-evaluation-edge",
+            "kind": "add",
+            "targetType": "edge",
+            "targetId": "retrieval-to-evaluation",
+            "summary": "Route the existing retrieval service through the candidate evaluation gate.",
+            "evidenceIds": ["evaluation-gate-behavior"],
+            "patch": {
+              "source": "retrieval-service",
+              "target": "evaluation-gate",
+              "data": {
+                "label": "submits cited draft",
+                "relationType": "flow"
+              }
+            }
+          },
+          {
+            "id": "add-evaluation-review-edge",
+            "kind": "add",
+            "targetType": "edge",
+            "targetId": "evaluation-to-review",
+            "summary": "Hand the candidate gate result to the existing human review workspace.",
+            "evidenceIds": ["evaluation-gate-behavior", "human-review-boundary"],
+            "patch": {
+              "source": "evaluation-gate",
+              "target": "human-review",
+              "data": {
+                "label": "holds or hands off",
+                "relationType": "governance"
+              }
+            }
+          }
+        ],
+        "acceptanceCriteria": ["A human can review every proposed node and relationship with linked evidence."],
+        "risks": ["The extra gate may be redundant if the existing review workspace already performs this check."],
+        "decisionsRequired": ["Confirm whether evaluation is a separate responsibility."],
+        "evidenceManifest": "evidence-manifest.json"
+      }
     }
   ]
 }

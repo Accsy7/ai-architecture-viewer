@@ -44,19 +44,21 @@ const {
 } = require('./schema/architecture-catalog-contract.cjs');
 const {
   ANALYSIS_SCHEMA_VERSION,
+  AGENT_TASK_TYPES,
   createEmptyAnalysis,
+  migrateAnalysis,
   validateAnalysis,
 } = require('./schema/analysis-contract.cjs');
 const {
-  AnalysisSourceError,
-  collectEvidence,
-  listAvailableAnalysisSources,
-  readAnalysisSource,
-} = require('./analysis-sources.cjs');
+  AI_CODING_PROTOCOL_VERSION,
+  validateExchangeArtifact,
+} = require('./schema/ai-coding-exchange-contract.cjs');
 const {
-  AnalysisProviderError,
-  createDeepSeekProvider,
-} = require('./analysis-provider.cjs');
+  readAnalysisSource,
+  sourceIdForPath,
+  sourceLabelForPath,
+  sourceTypeForPath,
+} = require('./analysis-sources.cjs');
 const { readSkillCatalog } = require('./skill-catalog.cjs');
 
 const HOST = '127.0.0.1';
@@ -64,6 +66,11 @@ const DEFAULT_PORT = 8800;
 const ROOT = __dirname;
 const PROJECTS_ROOT = path.join(ROOT, 'projects');
 const PROJECT_MANIFEST_FILE = 'project.json';
+const TASK_ARTIFACT_TYPES = Object.freeze({
+  'architecture-discovery': new Set(['architecture-snapshot']),
+  'architecture-change-plan': new Set(['architecture-proposal']),
+  'implementation-reconcile': new Set(['implementation-report', 'architecture-snapshot']),
+});
 const PROJECT_FILES = Object.freeze({
   state: 'state.json',
   documents: 'document-registry.json',
@@ -134,6 +141,14 @@ function resolveProjectDirectory(value = process.env.VIEWER_PROJECT_DIR) {
     throw new Error(`项目数据包目录不存在：${projectDirectory}`);
   }
   return projectDirectory;
+}
+
+function resolveWorkspaceRoot(value = process.env.VIEWER_WORKSPACE_ROOT, projectDirectory = resolveProjectDirectory()) {
+  const workspaceRoot = value ? path.resolve(ROOT, value) : projectDirectory;
+  if (!fs.existsSync(workspaceRoot) || !fs.statSync(workspaceRoot).isDirectory()) {
+    throw new Error(`待检查代码仓库目录不存在：${workspaceRoot}`);
+  }
+  return workspaceRoot;
 }
 
 function resolveProjectFile(value, projectDirectory, fileName) {
@@ -430,8 +445,9 @@ function readAnalysis(analysisFile) {
       writeJsonAtomic(initial, analysisFile);
       return initial;
     }
-    const analysis = JSON.parse(fs.readFileSync(analysisFile, 'utf8'));
-    validateAnalysis(analysis);
+    const stored = JSON.parse(fs.readFileSync(analysisFile, 'utf8'));
+    const analysis = migrateAnalysis(stored);
+    if (stored.schemaVersion !== analysis.schemaVersion) writeJsonAtomic(analysis, analysisFile);
     return analysis;
   } catch (error) {
     if (error instanceof ContractError) {
@@ -456,6 +472,37 @@ function proposalEvidenceIds(proposal) {
   return ids;
 }
 
+function publicArtifactRecord(record) {
+  const artifact = record.artifact;
+  const summary = {};
+  if (artifact.artifactType === 'evidence-manifest') {
+    summary.evidenceCount = artifact.entries.length;
+  } else if (artifact.artifactType === 'architecture-snapshot') {
+    summary.nodeCount = artifact.nodes.length;
+    summary.edgeCount = artifact.edges.length;
+    summary.unknownCount = artifact.unknowns.length;
+  } else if (artifact.artifactType === 'architecture-proposal') {
+    summary.changeCount = artifact.changes.length;
+    summary.optionCount = artifact.options.length;
+    summary.decisionCount = artifact.decisionsRequired.length;
+  } else if (artifact.artifactType === 'implementation-report') {
+    summary.status = artifact.status;
+    summary.changedFileCount = artifact.changedFiles.length;
+    summary.passedCheckCount = artifact.tests.filter((item) => item.outcome === 'passed').length;
+    summary.failedCheckCount = artifact.tests.filter((item) => item.outcome === 'failed').length;
+    summary.acceptedCriterionCount = artifact.acceptanceResults.filter((item) => item.status === 'satisfied').length;
+    summary.criterionCount = artifact.acceptanceResults.length;
+    summary.driftCount = artifact.drift.length;
+    summary.unresolvedCount = artifact.unresolved.length;
+  }
+  return {
+    id: record.id,
+    artifactType: record.artifactType,
+    submittedAt: record.submittedAt,
+    summary,
+  };
+}
+
 function assertProposalEvidenceCurrent(proposal, analysis, projectRoot) {
   const evidenceById = new Map(analysis.evidence.map((evidence) => [evidence.id, evidence]));
   const sourceById = new Map(analysis.sources.map((source) => [source.id, source]));
@@ -476,45 +523,22 @@ function assertProposalEvidenceCurrent(proposal, analysis, projectRoot) {
     }
   });
   if (staleEvidenceIds.length) {
-    throw new ContractError('提案引用的资料已变化，请重新扫描并生成新提案', 'PROPOSAL_EVIDENCE_STALE', 409, {
+    throw new ContractError('提案引用的文件已变化，请让智能体重新检查仓库并提交新提案', 'PROPOSAL_EVIDENCE_STALE', 409, {
       evidenceIds: staleEvidenceIds,
     });
   }
 }
 
-function analysisResponse(analysis, projectRoot, analysisProvider) {
-  const discovered = listAvailableAnalysisSources(projectRoot);
-  const discoveredByPath = new Map(discovered.map((source) => [source.path, source]));
-  const existingByPath = new Map(analysis.sources.map((source) => [source.path, source]));
+function analysisResponse(analysis) {
   const evidenceBySource = new Map();
   analysis.evidence.forEach((evidence) => {
     evidenceBySource.set(evidence.sourceId, (evidenceBySource.get(evidence.sourceId) || 0) + 1);
   });
-  const sources = discovered.map((candidate) => {
-    const existing = existingByPath.get(candidate.path);
-    const source = existing ? {
-      ...candidate,
-      id: existing.id,
-      label: existing.label,
-      selected: existing.selected,
-      lastScannedAt: existing.lastScannedAt,
-      contentHash: existing.contentHash,
-      sizeBytes: existing.sizeBytes,
-    } : candidate;
-    return {
-      ...source,
-      evidenceCount: evidenceBySource.get(source.id) || 0,
-      status: source.selected ? (source.lastScannedAt ? 'ready' : 'stale') : 'ignored',
-    };
-  });
-  analysis.sources.forEach((source) => {
-    if (discoveredByPath.has(source.path)) return;
-    sources.push({
-      ...clone(source),
-      evidenceCount: evidenceBySource.get(source.id) || 0,
-      status: 'failed',
-    });
-  });
+  const sources = analysis.sources.map((source) => ({
+    ...clone(source),
+    evidenceCount: evidenceBySource.get(source.id) || 0,
+    status: source.lastScannedAt ? 'ready' : 'stale',
+  }));
   const evidenceById = new Map(analysis.evidence.map((evidence) => [evidence.id, evidence]));
   const proposals = analysis.proposals.map((proposal) => ({
     ...clone(proposal),
@@ -522,9 +546,23 @@ function analysisResponse(analysis, projectRoot, analysisProvider) {
     changeCount: proposal.changes.length,
     evidenceCount: proposalEvidenceIds(proposal).size,
   }));
-  const provider = typeof analysisProvider?.describe === 'function'
-    ? analysisProvider.describe()
-    : { provider: 'deepseek', configured: false, model: null };
+  const proposalsByRun = new Map();
+  analysis.proposals.forEach((proposal) => {
+    if (!proposal.origin?.runId) return;
+    const list = proposalsByRun.get(proposal.origin.runId) || [];
+    list.push(proposal);
+    proposalsByRun.set(proposal.origin.runId, list);
+  });
+  const artifactsById = new Map(analysis.artifacts.map((record) => [record.id, record]));
+  const runs = analysis.agentRuns.map((run) => {
+    const runProposals = proposalsByRun.get(run.id) || [];
+    return {
+      ...clone(run),
+      artifacts: run.artifactIds.map((id) => artifactsById.get(id)).filter(Boolean).map(publicArtifactRecord),
+      proposalCount: runProposals.length,
+      pendingProposalCount: runProposals.filter((proposal) => proposal.status === 'pending').length,
+    };
+  });
   return {
     schemaVersion: analysis.schemaVersion,
     baseRevision: analysis.baseRevision,
@@ -532,144 +570,466 @@ function analysisResponse(analysis, projectRoot, analysisProvider) {
     sources,
     evidence: clone(analysis.evidence),
     proposals,
-    provider,
+    runs,
+    artifacts: analysis.artifacts.map((record) => ({ ...publicArtifactRecord(record), runId: record.runId })),
+    integration: {
+      mode: 'external-agent',
+      protocolVersion: AI_CODING_PROTOCOL_VERSION,
+      modelProviderRequired: false,
+      agentCanApprove: false,
+      agentCanPublish: false,
+      mcpCommand: 'npm run mcp',
+      cliCommand: 'npm run agent --',
+    },
   };
 }
 
-function selectionRequestSources(incoming, analysis, projectRoot) {
-  if (!Array.isArray(incoming.sources)) {
-    throw new ContractError('分析资料列表必须是数组', 'ANALYSIS_REQUEST_INVALID', 400);
+function assertAgentRequest(value, allowedKeys, valuePath = 'agent request') {
+  if (!isPlainObject(value)) {
+    throw new ContractError(`${valuePath} 必须是对象`, 'AGENT_REQUEST_INVALID', 400);
   }
-  const discovered = listAvailableAnalysisSources(projectRoot);
-  const discoveredByPath = new Map(discovered.map((source) => [source.path, source]));
-  const existingByPath = new Map(analysis.sources.map((source) => [source.path, source]));
-  const requested = new Map();
-  incoming.sources.forEach((source, index) => {
-    if (!isPlainObject(source) || typeof source.path !== 'string' || typeof source.selected !== 'boolean') {
-      throw new ContractError(`分析资料[${index}]必须提供 path 和 selected`, 'ANALYSIS_REQUEST_INVALID', 400);
+  Object.keys(value).forEach((key) => {
+    if (!allowedKeys.has(key)) {
+      throw new ContractError(`${valuePath} 不支持字段 ${key}`, 'AGENT_REQUEST_INVALID', 400);
     }
-    if (requested.has(source.path)) {
-      throw new ContractError(`分析资料路径重复：${source.path}`, 'ANALYSIS_REQUEST_INVALID', 400);
-    }
-    if (!discoveredByPath.has(source.path)) {
-      throw new ContractError('只能选择项目内可安全读取的资料文件', 'ANALYSIS_SOURCE_NOT_AVAILABLE', 422, { path: source.path });
-    }
-    requested.set(source.path, source.selected);
   });
-  const evidenceSourceIds = new Set(analysis.evidence.map((evidence) => evidence.sourceId));
-  const next = discovered.map((candidate) => {
-    const existing = existingByPath.get(candidate.path);
-    return {
-      ...candidate,
-      id: existing?.id || candidate.id,
-      label: existing?.label || candidate.label,
-      selected: requested.has(candidate.path) ? requested.get(candidate.path) : Boolean(existing?.selected),
-      lastScannedAt: existing?.lastScannedAt || null,
-      contentHash: existing?.contentHash || null,
-      sizeBytes: existing?.sizeBytes ?? null,
-    };
-  });
-  analysis.sources.forEach((source) => {
-    if (discoveredByPath.has(source.path) || !evidenceSourceIds.has(source.id)) return;
-    next.push({ ...clone(source), selected: false });
-  });
-  return next;
+  return value;
 }
 
-function scanSelectedAnalysisSources(analysis, projectRoot, now = new Date().toISOString()) {
-  const selectedSources = analysis.sources.filter((source) => source.selected);
-  if (!selectedSources.length) {
-    throw new ContractError('请先选择至少一份资料再分析', 'ANALYSIS_SOURCE_REQUIRED', 422);
+function requiredAgentText(value, field, maxLength = 120) {
+  if (typeof value !== 'string' || !value.trim() || value.trim().length > maxLength) {
+    throw new ContractError(`智能体提交字段 ${field} 无效`, 'AGENT_REQUEST_INVALID', 400, { field });
   }
-  const selectedIds = new Set(selectedSources.map((source) => source.id));
-  const referencedEvidence = new Set();
-  analysis.proposals.forEach((proposal) => proposalEvidenceIds(proposal).forEach((id) => referencedEvidence.add(id)));
-  const nextSources = analysis.sources.map((source) => {
-    if (!selectedIds.has(source.id)) return clone(source);
-    const material = readAnalysisSource(source.path, projectRoot);
-    return {
-      ...clone(source),
-      lastScannedAt: now,
+  return value.trim();
+}
+
+function agentDiagram(catalog, diagramId) {
+  const selectedId = diagramId || catalog.defaultDiagramId;
+  const diagram = catalog.diagrams.find((item) => item.id === selectedId);
+  if (!diagram) throw new ContractError('未找到智能体运行对应的架构图', 'DIAGRAM_NOT_FOUND', 404, { diagramId: selectedId });
+  return diagram;
+}
+
+function createAgentRun(incoming, catalog) {
+  assertAgentRequest(incoming, new Set(['agentName', 'agentClient', 'taskType', 'diagramId', 'view', 'summary']));
+  const agentName = requiredAgentText(incoming.agentName, 'agentName');
+  const agentClient = requiredAgentText(incoming.agentClient, 'agentClient', 80);
+  if (!AGENT_TASK_TYPES.has(incoming.taskType)) {
+    throw new ContractError('taskType 不是支持的智能体协作任务', 'AGENT_TASK_TYPE_INVALID', 422);
+  }
+  const diagram = agentDiagram(catalog, incoming.diagramId);
+  const defaultView = incoming.taskType === 'architecture-change-plan' ? 'target' : 'current';
+  const view = incoming.view || defaultView;
+  if (!['current', 'target'].includes(view)) {
+    throw new ContractError('智能体运行 view 必须是 current 或 target', 'AGENT_VIEW_INVALID', 422);
+  }
+  if (incoming.taskType !== 'architecture-change-plan' && view !== 'current') {
+    throw new ContractError('项目理解和实施核验只能提交到当前架构视图', 'AGENT_VIEW_INVALID', 422);
+  }
+  const lane = readState(diagram.statePath)[view];
+  const now = new Date().toISOString();
+  return {
+    id: `run-${crypto.randomUUID().toLowerCase()}`,
+    agentName,
+    agentClient,
+    taskType: incoming.taskType,
+    status: 'active',
+    diagramId: diagram.id,
+    view,
+    baseRevision: lane.published.revision,
+    baseRevisionId: lane.published.revisionId,
+    createdAt: now,
+    updatedAt: now,
+    submittedAt: null,
+    summary: incoming.summary === undefined || incoming.summary === null
+      ? null
+      : requiredAgentText(incoming.summary, 'summary', 1000),
+    artifactIds: [],
+  };
+}
+
+function artifactRecord(artifact, runId, submittedAt) {
+  return {
+    id: artifact.artifactId,
+    runId,
+    artifactType: artifact.artifactType,
+    submittedAt,
+    artifact: clone(artifact),
+  };
+}
+
+function sameJson(left, right) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function evidenceExcerpt(material, entry) {
+  const lines = material.content.replace(/\r\n?/g, '\n').split('\n');
+  if (entry.lineEnd > lines.length) {
+    throw new ContractError('证据行号超出文件范围', 'AGENT_EVIDENCE_RANGE_INVALID', 422, {
+      evidenceId: entry.id,
+      path: entry.path,
+      lineCount: lines.length,
+    });
+  }
+  const excerpt = lines.slice(entry.lineStart - 1, entry.lineEnd).join('\n').trim();
+  if (!excerpt) {
+    throw new ContractError('证据范围没有可核验文本', 'AGENT_EVIDENCE_RANGE_INVALID', 422, {
+      evidenceId: entry.id,
+      path: entry.path,
+    });
+  }
+  return excerpt.length > 12000 ? `${excerpt.slice(0, 11999)}…` : excerpt;
+}
+
+function importAgentEvidence(analysis, manifest, projectRoot, collectedAt) {
+  const next = clone(analysis);
+  const sourcesByPath = new Map(next.sources.map((source) => [source.path.toLowerCase(), source]));
+  const evidenceById = new Map(next.evidence.map((evidence) => [evidence.id, evidence]));
+
+  manifest.entries.forEach((entry) => {
+    const material = readAnalysisSource(entry.path, projectRoot);
+    if (material.contentHash !== entry.contentHash) {
+      throw new ContractError('智能体证据与当前工作区内容不一致，请重新检查仓库后提交', 'AGENT_EVIDENCE_STALE', 409, {
+        evidenceId: entry.id,
+        path: entry.path,
+      });
+    }
+    const sourceKey = entry.path.toLowerCase();
+    const existingSource = sourcesByPath.get(sourceKey);
+    const source = {
+      id: existingSource?.id || sourceIdForPath(entry.path),
+      path: entry.path,
+      label: existingSource?.label || sourceLabelForPath(entry.path),
+      type: sourceTypeForPath(entry.path),
+      selected: Boolean(existingSource?.selected),
+      lastScannedAt: collectedAt,
       contentHash: material.contentHash,
       sizeBytes: material.stats.size,
     };
-  });
-  const sourcesById = new Map(nextSources.map((source) => [source.id, source]));
-  const retainedEvidence = analysis.evidence.filter((evidence) => (
-    !selectedIds.has(evidence.sourceId) || referencedEvidence.has(evidence.id)
-  )).map(clone);
-  const evidenceById = new Map(retainedEvidence.map((evidence) => [evidence.id, evidence]));
-  selectedSources.forEach((source) => {
-    const material = readAnalysisSource(source.path, projectRoot);
-    const current = sourcesById.get(source.id);
-    collectEvidence({
-      id: current.id,
-      path: current.path,
-      content: material.content,
+    if (existingSource) Object.assign(existingSource, source);
+    else {
+      next.sources.push(source);
+      sourcesByPath.set(sourceKey, source);
+    }
+
+    const evidence = {
+      id: entry.id,
+      sourceId: source.id,
+      path: entry.path,
+      lineStart: entry.lineStart,
+      lineEnd: entry.lineEnd,
+      excerpt: evidenceExcerpt(material, entry),
       contentHash: material.contentHash,
-    }, now).forEach((evidence) => evidenceById.set(evidence.id, evidence));
+      collectedAt,
+    };
+    const existingEvidence = evidenceById.get(evidence.id);
+    const sameEvidence = existingEvidence && [
+      'id', 'sourceId', 'path', 'lineStart', 'lineEnd', 'excerpt', 'contentHash',
+    ].every((field) => existingEvidence[field] === evidence[field]);
+    if (existingEvidence && !sameEvidence) {
+      throw new ContractError('证据 ID 已被其他内容使用', 'AGENT_EVIDENCE_ID_CONFLICT', 409, { evidenceId: evidence.id });
+    }
+    if (!existingEvidence) {
+      next.evidence.push(evidence);
+      evidenceById.set(evidence.id, evidence);
+    }
   });
-  const next = {
-    ...clone(analysis),
-    sources: nextSources,
-    evidence: [...evidenceById.values()],
-  };
-  validateAnalysis(next);
   return next;
 }
 
-function modelOutputError() {
-  return new ContractError('AI 返回的提案未通过安全校验，请补充资料后重试', 'AI_OUTPUT_INVALID', 502);
+function changeIdForArtifact(artifactId, kind, targetType, targetId) {
+  const digest = crypto.createHash('sha256').update(`${artifactId}:${kind}:${targetType}:${targetId}`).digest('hex').slice(0, 20);
+  return `change-${digest}`;
 }
 
-function assertModelObject(value, allowedKeys) {
-  if (!isPlainObject(value)) throw modelOutputError();
-  if (Object.keys(value).some((key) => !allowedKeys.has(key))) throw modelOutputError();
+function proposalOrigin(run, artifact) {
+  return {
+    runId: run.id,
+    artifactId: artifact.artifactId,
+    artifactType: artifact.artifactType,
+    agentName: run.agentName,
+    agentClient: run.agentClient,
+  };
 }
 
-function normalizeGeneratedProposals(result, analysis, { diagramId, view, lane, now = new Date().toISOString() }) {
-  try {
-    assertModelObject(result, new Set(['proposals']));
-    if (!Array.isArray(result.proposals) || result.proposals.length > 5) {
-      throw modelOutputError();
-    }
-    const proposals = result.proposals.map((candidate) => {
-      assertModelObject(candidate, new Set(['title', 'summary', 'confidence', 'evidenceIds', 'changes']));
-      if (!Array.isArray(candidate.changes) || !candidate.changes.length) throw modelOutputError();
-      return {
-        id: `proposal-${crypto.randomUUID().toLowerCase()}`,
-        status: 'pending',
-        view,
-        diagramId,
-        baseRevision: lane.published.revision,
-        baseRevisionId: lane.published.revisionId,
-        title: candidate.title,
-        summary: candidate.summary,
-        confidence: candidate.confidence,
-        createdAt: now,
-        reviewedAt: null,
-        evidenceIds: clone(candidate.evidenceIds),
-        changes: candidate.changes.map((change) => {
-          assertModelObject(change, new Set(['kind', 'targetType', 'targetId', 'summary', 'evidenceIds', 'patch']));
-          return {
-            id: `change-${crypto.randomUUID().toLowerCase()}`,
-            kind: change.kind,
-            targetType: change.targetType,
-            targetId: change.targetId,
-            summary: change.summary,
-            evidenceIds: clone(change.evidenceIds),
-            patch: change.patch === null ? null : clone(change.patch),
-          };
-        }),
-        application: null,
-      };
-    });
-    validateAnalysis({ ...clone(analysis), proposals: [...analysis.proposals, ...proposals] });
-    return proposals;
-  } catch (error) {
-    if (error instanceof ContractError && error.code === 'AI_OUTPUT_INVALID') throw error;
-    throw modelOutputError();
+function artifactEvidenceIds(artifact) {
+  if (artifact.artifactType === 'architecture-snapshot') {
+    return new Set([
+      ...artifact.nodes.flatMap((node) => node.evidenceIds),
+      ...artifact.edges.flatMap((edge) => edge.evidenceIds),
+    ]);
   }
+  if (artifact.artifactType === 'architecture-proposal') {
+    return new Set(artifact.changes.flatMap((change) => change.evidenceIds));
+  }
+  if (artifact.artifactType === 'implementation-report') {
+    return new Set([
+      ...artifact.acceptanceResults.flatMap((result) => result.evidenceIds),
+      ...artifact.drift.flatMap((item) => item.evidenceIds),
+    ]);
+  }
+  return new Set();
+}
+
+function assertRunArtifactType(run, artifact) {
+  const allowedTypes = TASK_ARTIFACT_TYPES[run.taskType];
+  if (!allowedTypes?.has(artifact.artifactType)) {
+    throw new ContractError(
+      `任务 ${run.taskType} 不接受 ${artifact.artifactType} 工件`,
+      'AGENT_ARTIFACT_TYPE_MISMATCH',
+      422,
+      { taskType: run.taskType, artifactType: artifact.artifactType, allowedTypes: [...(allowedTypes || [])] },
+    );
+  }
+}
+
+function assertManifestCoversArtifact(artifact, manifest) {
+  const manifestIds = new Set(manifest.entries.map((entry) => entry.id));
+  const missingEvidenceIds = [...artifactEvidenceIds(artifact)].filter((id) => !manifestIds.has(id));
+  if (missingEvidenceIds.length) {
+    throw new ContractError(
+      '当前提交的证据清单未覆盖工件引用的全部证据',
+      'AGENT_EVIDENCE_MANIFEST_INCOMPLETE',
+      422,
+      { evidenceIds: missingEvidenceIds },
+    );
+  }
+}
+
+function proposalFromExchangeArtifact(artifact, run) {
+  const evidenceIds = [...new Set(artifact.changes.flatMap((change) => change.evidenceIds))];
+  return {
+    id: artifact.artifactId,
+    status: 'pending',
+    view: run.view,
+    diagramId: run.diagramId,
+    baseRevision: run.baseRevision,
+    baseRevisionId: run.baseRevisionId,
+    title: artifact.title,
+    summary: artifact.summary,
+    confidence: null,
+    createdAt: artifact.createdAt,
+    reviewedAt: null,
+    evidenceIds,
+    changes: artifact.changes.map((change) => clone(change)),
+    application: null,
+    origin: proposalOrigin(run, artifact),
+  };
+}
+
+function snapshotProposal(artifact, run, graph) {
+  const changes = [];
+  const graphNodes = new Map(graph.nodes.map((node) => [node.id, node]));
+  const graphEdges = new Map(graph.edges.map((edge) => [edge.id, edge]));
+  const semanticFields = ['name', 'purpose', 'technical', 'product', 'authorization'];
+
+  artifact.nodes.forEach((node) => {
+    const existing = graphNodes.get(node.id);
+    const data = Object.fromEntries(semanticFields.map((field) => [field, node[field]]));
+    if (!existing) {
+      changes.push({
+        id: changeIdForArtifact(artifact.artifactId, 'add', 'node', node.id),
+        kind: 'add',
+        targetType: 'node',
+        targetId: node.id,
+        summary: `智能体识别到新的架构职责：${node.name}`,
+        evidenceIds: clone(node.evidenceIds),
+        patch: { data },
+      });
+      return;
+    }
+    const patchData = {};
+    semanticFields.forEach((field) => {
+      if (existing.data?.[field] !== node[field]) patchData[field] = node[field];
+    });
+    if (Object.keys(patchData).length) {
+      changes.push({
+        id: changeIdForArtifact(artifact.artifactId, 'update', 'node', node.id),
+        kind: 'update',
+        targetType: 'node',
+        targetId: node.id,
+        summary: `根据仓库证据更新架构职责：${node.name}`,
+        evidenceIds: clone(node.evidenceIds),
+        patch: { data: patchData },
+      });
+    }
+  });
+
+  artifact.edges.forEach((edge) => {
+    const existing = graphEdges.get(edge.id);
+    if (!existing) {
+      changes.push({
+        id: changeIdForArtifact(artifact.artifactId, 'add', 'edge', edge.id),
+        kind: 'add',
+        targetType: 'edge',
+        targetId: edge.id,
+        summary: `智能体识别到新的架构关系：${edge.label}`,
+        evidenceIds: clone(edge.evidenceIds),
+        patch: {
+          source: edge.source,
+          target: edge.target,
+          data: { label: edge.label, relationType: edge.relationType },
+        },
+      });
+      return;
+    }
+    if (existing.source !== edge.source || existing.target !== edge.target) {
+      throw new ContractError('快照试图用同一关系 ID 改变连接端点，请使用新的稳定 ID', 'AGENT_EDGE_ID_CONFLICT', 422, {
+        edgeId: edge.id,
+      });
+    }
+    const patchData = {};
+    if (existing.data?.label !== edge.label) patchData.label = edge.label;
+    if (existing.data?.relationType !== edge.relationType) patchData.relationType = edge.relationType;
+    if (Object.keys(patchData).length) {
+      changes.push({
+        id: changeIdForArtifact(artifact.artifactId, 'update', 'edge', edge.id),
+        kind: 'update',
+        targetType: 'edge',
+        targetId: edge.id,
+        summary: `根据仓库证据更新架构关系：${edge.label}`,
+        evidenceIds: clone(edge.evidenceIds),
+        patch: { data: patchData },
+      });
+    }
+  });
+
+  if (!changes.length) return null;
+  const evidenceIds = [...new Set(changes.flatMap((change) => change.evidenceIds))];
+  const notes = [
+    artifact.assumptions.length ? `假设 ${artifact.assumptions.length} 项` : null,
+    artifact.unknowns.length ? `未知项 ${artifact.unknowns.length} 项` : null,
+  ].filter(Boolean).join('，');
+  return {
+    id: artifact.artifactId,
+    status: 'pending',
+    view: run.view,
+    diagramId: run.diagramId,
+    baseRevision: run.baseRevision,
+    baseRevisionId: run.baseRevisionId,
+    title: `审阅 ${run.agentName} 对当前架构的理解`,
+    summary: `智能体基于仓库证据提交了 ${changes.length} 项架构差异${notes ? `；${notes}` : ''}。未在快照中出现的现有节点不会被自动移除。`,
+    confidence: null,
+    createdAt: artifact.createdAt,
+    reviewedAt: null,
+    evidenceIds,
+    changes,
+    application: null,
+    origin: proposalOrigin(run, artifact),
+  };
+}
+
+function addArtifactRecord(next, run, artifact, submittedAt) {
+  const existing = next.artifacts.find((record) => record.id === artifact.artifactId);
+  if (existing) {
+    if (existing.runId !== run.id || !sameJson(existing.artifact, artifact)) {
+      throw new ContractError('工件 ID 已被其他提交使用', 'AGENT_ARTIFACT_ID_CONFLICT', 409, { artifactId: artifact.artifactId });
+    }
+    return false;
+  }
+  next.artifacts.push(artifactRecord(artifact, run.id, submittedAt));
+  return true;
+}
+
+function submitAgentArtifact(analysis, runId, incoming, { projectRoot, diagram }) {
+  assertAgentRequest(incoming, new Set(['artifact', 'evidenceManifest']));
+  const artifact = validateExchangeArtifact(incoming.artifact);
+  const requiresEvidence = ['architecture-snapshot', 'architecture-proposal', 'implementation-report'].includes(artifact.artifactType);
+  const manifest = incoming.evidenceManifest === undefined
+    ? null
+    : validateExchangeArtifact(incoming.evidenceManifest);
+  if (manifest && manifest.artifactType !== 'evidence-manifest') {
+    throw new ContractError('evidenceManifest 必须是证据清单工件', 'AGENT_EVIDENCE_MANIFEST_INVALID', 422);
+  }
+  if (requiresEvidence && !manifest) {
+    throw new ContractError('该工件必须与证据清单一起提交', 'AGENT_EVIDENCE_MANIFEST_REQUIRED', 422);
+  }
+
+  let next = clone(analysis);
+  const run = next.agentRuns.find((item) => item.id === runId);
+  if (!run) throw new ContractError('未找到该智能体运行', 'AGENT_RUN_NOT_FOUND', 404);
+  if (run.status === 'reviewed') {
+    throw new ContractError('该运行已经完成审阅，请创建新的运行提交后续结果', 'AGENT_RUN_ALREADY_REVIEWED', 409);
+  }
+  assertRunArtifactType(run, artifact);
+  assertManifestCoversArtifact(artifact, manifest);
+  const state = readState(diagram.statePath);
+  const lane = state[run.view];
+  if (lane.published.revision !== run.baseRevision || lane.published.revisionId !== run.baseRevisionId) {
+    throw new ContractError('架构基线已经变化，请创建新的智能体运行后重新提交', 'AGENT_RUN_STALE', 409, {
+      headRevision: lane.published.revision,
+      headRevisionId: lane.published.revisionId,
+    });
+  }
+
+  const submittedAt = new Date().toISOString();
+  if (manifest) next = importAgentEvidence(next, manifest, projectRoot, submittedAt);
+  if (manifest) addArtifactRecord(next, run, manifest, submittedAt);
+  addArtifactRecord(next, run, artifact, submittedAt);
+
+  const targetRun = next.agentRuns.find((item) => item.id === run.id);
+  for (const id of [manifest?.artifactId, artifact.artifactId].filter(Boolean)) {
+    if (!targetRun.artifactIds.includes(id)) targetRun.artifactIds.push(id);
+  }
+  targetRun.status = 'submitted';
+  targetRun.updatedAt = submittedAt;
+  targetRun.submittedAt ||= submittedAt;
+
+  let proposal = null;
+  if (artifact.artifactType === 'architecture-proposal') {
+    proposal = proposalFromExchangeArtifact(artifact, targetRun);
+  } else if (artifact.artifactType === 'architecture-snapshot') {
+    proposal = snapshotProposal(artifact, targetRun, lane.published.graph);
+  }
+  if (proposal) {
+    const existingProposal = next.proposals.find((item) => item.id === proposal.id);
+    if (existingProposal && !sameJson(existingProposal.origin, proposal.origin)) {
+      throw new ContractError('提案 ID 已被其他提交使用', 'AGENT_PROPOSAL_ID_CONFLICT', 409, { proposalId: proposal.id });
+    }
+    if (!existingProposal) {
+      applyProposalChanges(lane.published.graph, proposal, state);
+      next.proposals.push(proposal);
+    } else {
+      proposal = existingProposal;
+    }
+  }
+  validateAnalysis(next);
+  return { analysis: next, artifact, proposal };
+}
+
+function agentRunResponse(analysis, runId) {
+  const run = analysis.agentRuns.find((item) => item.id === runId);
+  if (!run) throw new ContractError('未找到该智能体运行', 'AGENT_RUN_NOT_FOUND', 404);
+  return {
+    protocolVersion: AI_CODING_PROTOCOL_VERSION,
+    analysisRevision: analysis.baseRevision,
+    run: clone(run),
+    artifacts: analysis.artifacts.filter((record) => record.runId === run.id).map(publicArtifactRecord),
+    proposals: analysis.proposals.filter((proposal) => proposal.origin?.runId === run.id).map((proposal) => ({
+      id: proposal.id,
+      title: proposal.title,
+      status: proposal.status,
+      reviewedAt: proposal.reviewedAt,
+      application: clone(proposal.application),
+    })),
+    permissions: {
+      canSubmit: run.status !== 'reviewed',
+      canApprove: false,
+      canPublish: false,
+    },
+  };
+}
+
+function updateReviewedRun(analysis, proposal, reviewedAt) {
+  const runId = proposal.origin?.runId;
+  if (!runId) return;
+  const run = analysis.agentRuns.find((item) => item.id === runId);
+  if (!run) return;
+  const hasPendingProposal = analysis.proposals.some((item) => (
+    item.origin?.runId === runId && item.status === 'pending'
+  ));
+  if (!hasPendingProposal) run.status = 'reviewed';
+  run.updatedAt = reviewedAt;
 }
 
 function sourceGroupForGeneratedNode(graph, proposal, targetId, state) {
@@ -792,50 +1152,6 @@ function applyProposalChanges(graph, proposal, state) {
   });
   validateGraph(next, proposal.view);
   return next;
-}
-
-function analysisModelInput({ diagram, view, lane, analysis }) {
-  const selectedSources = analysis.sources.filter((source) => source.selected && source.lastScannedAt && source.contentHash);
-  const selectedSourceIds = new Set(selectedSources.map((source) => source.id));
-  const evidence = analysis.evidence.filter((item) => {
-    const source = selectedSources.find((candidate) => candidate.id === item.sourceId);
-    return selectedSourceIds.has(item.sourceId) && source?.contentHash === item.contentHash;
-  }).slice(0, 64);
-  if (!evidence.length) {
-    throw new ContractError('请先扫描已选资料，再生成 AI 提案', 'ANALYSIS_EVIDENCE_REQUIRED', 422);
-  }
-  return {
-    task: 'architecture-governance-proposal',
-    diagram: { id: diagram.id, title: diagram.title, description: diagram.description },
-    view,
-    published: {
-      revision: lane.published.revision,
-      revisionId: lane.published.revisionId,
-      graph: clone(lane.published.graph),
-    },
-    sources: selectedSources.map((source) => ({
-      id: source.id,
-      path: source.path,
-      label: source.label,
-      contentHash: source.contentHash,
-    })),
-    evidence: evidence.map(clone),
-  };
-}
-
-async function generateWithSafeProvider(analysisProvider, input) {
-  try {
-    return await analysisProvider.generate(input);
-  } catch (error) {
-    if (error instanceof AnalysisProviderError) throw error;
-    if (error?.code === 'AI_PROVIDER_NOT_CONFIGURED') {
-      throw new AnalysisProviderError('尚未配置 AI 服务密钥', 'AI_PROVIDER_NOT_CONFIGURED', 503);
-    }
-    if (error?.code === 'AI_PROVIDER_UNAVAILABLE') {
-      throw new AnalysisProviderError('AI 服务暂时不可访问，请稍后重试', 'AI_PROVIDER_UNAVAILABLE', 502);
-    }
-    throw new AnalysisProviderError('AI 服务暂时无法生成提案，请稍后重试', 'AI_PROVIDER_FAILED', 502);
-  }
 }
 
 function responseLayout(layout, view, diagramId = 'default') {
@@ -1240,6 +1556,7 @@ function serveFile(req, res, staticRoot, pathname) {
 
 function createServer(options = {}) {
   const projectRoot = resolveProjectDirectory(options.projectDirectory || options.projectRoot || options.commandRoot);
+  const workspaceRoot = resolveWorkspaceRoot(options.workspaceRoot, projectRoot);
   const stateFile = resolveStateFile(options.stateFile, projectRoot);
   const documentsFile = resolveDocumentsFile(options.documentsFile, projectRoot);
   const layoutFile = resolveLayoutFile(options.layoutFile, projectRoot);
@@ -1254,7 +1571,6 @@ function createServer(options = {}) {
     : (options.stateFile || options.layoutFile
       ? path.join(path.dirname(stateFile), PROJECT_FILES.analysis)
       : resolveAnalysisFile(undefined, projectRoot));
-  const analysisProvider = options.analysisProvider || createDeepSeekProvider(options.analysisProviderOptions);
   const staticRoot = resolveStaticRoot(options.staticRoot || process.env.STATIC_ROOT);
   const skillsRoot = path.resolve(options.skillsRoot || path.join(ROOT, 'skills'));
 
@@ -1271,75 +1587,141 @@ function createServer(options = {}) {
         return json(res, 200, readSkillCatalog(skillsRoot));
       }
 
+      if (req.method === 'GET' && pathname === '/api/agent/context') {
+        const catalog = readArchitectureCatalog(catalogFile, stateFile, layoutFile);
+        const diagram = agentDiagram(catalog, requestUrl.searchParams.get('diagram'));
+        const view = requestUrl.searchParams.get('view') || 'current';
+        if (!['current', 'target'].includes(view)) {
+          throw new ContractError('智能体上下文 view 必须是 current 或 target', 'AGENT_VIEW_INVALID', 422);
+        }
+        const lane = readState(diagram.statePath)[view];
+        const config = readViewerConfig(configFile);
+        const registry = readRegistry(documentsFile);
+        return json(res, 200, {
+          protocolVersion: AI_CODING_PROTOCOL_VERSION,
+          project: {
+            id: config.projectId,
+            name: config.projectName,
+            scopeNote: config.scopeNote,
+          },
+          diagrams: publicArchitectureCatalog(catalog),
+          selected: {
+            diagramId: diagram.id,
+            view,
+            title: diagram.title,
+            description: diagram.description,
+            published: clone(lane.published),
+            draft: lane.draft ? {
+              draftId: lane.draft.draftId,
+              draftRevision: lane.draft.draftRevision,
+              baseRevision: lane.draft.baseRevision,
+              baseRevisionId: lane.draft.baseRevisionId,
+              savedAt: lane.draft.savedAt,
+            } : null,
+          },
+          documents: registry.documents.map((document) => ({
+            id: document.id,
+            title: document.title,
+            path: document.path,
+            status: document.status,
+          })),
+          workflow: {
+            createRunFirst: true,
+            evidenceRequired: true,
+            evidencePathsAreWorkspaceRelative: true,
+            separateWorkspaceConfigured: workspaceRoot !== projectRoot,
+            humanReviewRequired: true,
+            agentCanApprove: false,
+            agentCanPublish: false,
+          },
+        });
+      }
+
+      if (req.method === 'POST' && pathname === '/api/agent/runs') {
+        const incoming = await readJsonBody(req);
+        const catalog = readArchitectureCatalog(catalogFile, stateFile, layoutFile);
+        const run = createAgentRun(incoming, catalog);
+        const analysis = readAnalysis(analysisFile);
+        const next = { ...clone(analysis), agentRuns: [...analysis.agentRuns, run] };
+        const saved = writeAnalysis(next, analysisFile);
+        return json(res, 201, agentRunResponse(saved, run.id));
+      }
+
+      const agentRunMatch = /^\/api\/agent\/runs\/([a-z0-9][a-z0-9._-]{0,79})$/.exec(pathname);
+      if (req.method === 'GET' && agentRunMatch) {
+        return json(res, 200, agentRunResponse(readAnalysis(analysisFile), agentRunMatch[1]));
+      }
+
+      const agentArtifactMatch = /^\/api\/agent\/runs\/([a-z0-9][a-z0-9._-]{0,79})\/artifacts$/.exec(pathname);
+      if (req.method === 'POST' && agentArtifactMatch) {
+        const incoming = await readJsonBody(req);
+        const analysis = readAnalysis(analysisFile);
+        const run = analysis.agentRuns.find((item) => item.id === agentArtifactMatch[1]);
+        if (!run) throw new ContractError('未找到该智能体运行', 'AGENT_RUN_NOT_FOUND', 404);
+        const catalog = readArchitectureCatalog(catalogFile, stateFile, layoutFile);
+        const diagram = agentDiagram(catalog, run.diagramId);
+        const result = submitAgentArtifact(analysis, run.id, incoming, { projectRoot: workspaceRoot, diagram });
+        const saved = writeAnalysis(result.analysis, analysisFile);
+        return json(res, 201, {
+          ...agentRunResponse(saved, run.id),
+          submission: {
+            artifactId: result.artifact.artifactId,
+            artifactType: result.artifact.artifactType,
+            proposalId: result.proposal?.id || null,
+            requiresHumanReview: Boolean(result.proposal),
+          },
+        });
+      }
+
+      if (req.method === 'GET' && pathname === '/api/agent/approved-target') {
+        const catalog = readArchitectureCatalog(catalogFile, stateFile, layoutFile);
+        const diagram = agentDiagram(catalog, requestUrl.searchParams.get('diagram'));
+        const lane = readState(diagram.statePath).target;
+        const analysis = readAnalysis(analysisFile);
+        const accepted = analysis.proposals.filter((proposal) => (
+          proposal.diagramId === diagram.id
+          && proposal.view === 'target'
+          && proposal.status === 'accepted'
+        ));
+        const approvedDraft = lane.draft && accepted.some((proposal) => proposal.application?.draftId === lane.draft.draftId)
+          ? lane.draft
+          : null;
+        return json(res, 200, {
+          protocolVersion: AI_CODING_PROTOCOL_VERSION,
+          diagramId: diagram.id,
+          approvalStatus: approvedDraft ? 'human-approved-draft' : 'published-target',
+          approvedProposalIds: accepted.map((proposal) => proposal.id),
+          architecture: clone(approvedDraft || lane.published),
+          agentCanPublish: false,
+        });
+      }
+
       if (req.method === 'GET' && pathname === '/api/analysis') {
-        return json(res, 200, analysisResponse(readAnalysis(analysisFile), projectRoot, analysisProvider));
+        return json(res, 200, analysisResponse(readAnalysis(analysisFile)));
       }
 
       if (req.method === 'PUT' && pathname === '/api/analysis/sources') {
-        const incoming = await readJsonBody(req);
-        assertAnalysisRequestShape(incoming, new Set(['schemaVersion', 'baseRevision', 'sources']));
-        const analysis = readAnalysis(analysisFile);
-        assertAnalysisRevision(incoming, analysis);
-        const next = {
-          ...clone(analysis),
-          sources: selectionRequestSources(incoming, analysis, projectRoot),
-        };
-        return json(res, 200, analysisResponse(writeAnalysis(next, analysisFile), projectRoot, analysisProvider));
+        throw new ContractError(
+          'v0.2 不由查看器选择或扫描仓库文件；请由外部智能体提交证据清单',
+          'VIEWER_REPOSITORY_SCAN_REMOVED',
+          410,
+        );
       }
 
       if (req.method === 'POST' && pathname === '/api/analysis/scan') {
-        const incoming = await readJsonBody(req);
-        assertAnalysisRequestShape(incoming, new Set(['schemaVersion', 'baseRevision']));
-        const analysis = readAnalysis(analysisFile);
-        assertAnalysisRevision(incoming, analysis);
-        const next = scanSelectedAnalysisSources(analysis, projectRoot);
-        return json(res, 200, analysisResponse(writeAnalysis(next, analysisFile), projectRoot, analysisProvider));
+        throw new ContractError(
+          'v0.2 不由查看器选择或扫描仓库文件；请由外部智能体提交证据清单',
+          'VIEWER_REPOSITORY_SCAN_REMOVED',
+          410,
+        );
       }
 
       if (req.method === 'POST' && pathname === '/api/analysis/proposals') {
-        const incoming = await readJsonBody(req);
-        assertAnalysisRequestShape(incoming, new Set(['schemaVersion', 'baseRevision']));
-        const catalog = readArchitectureCatalog(catalogFile, stateFile, layoutFile);
-        const diagram = diagramFrom(requestUrl, catalog);
-        const view = viewFrom(requestUrl);
-        const analysis = readAnalysis(analysisFile);
-        assertAnalysisRevision(incoming, analysis);
-        const state = readState(diagram.statePath);
-        const lane = state[view];
-        if (lane.draft) {
-          throw new ContractError('请先发布或丢弃当前草案，再生成新的 AI 提案', 'ACTIVE_DRAFT', 409);
-        }
-        const input = analysisModelInput({ diagram, view, lane, analysis });
-        if (!analysisProvider || typeof analysisProvider.generate !== 'function') {
-          throw new AnalysisProviderError('当前未配置可用的 AI 服务', 'AI_PROVIDER_NOT_CONFIGURED', 503);
-        }
-        const generated = await generateWithSafeProvider(analysisProvider, input);
-        const currentAnalysis = readAnalysis(analysisFile);
-        const currentLane = readState(diagram.statePath)[view];
-        if (
-          currentAnalysis.baseRevision !== analysis.baseRevision
-          || currentLane.published.revision !== lane.published.revision
-          || currentLane.published.revisionId !== lane.published.revisionId
-          || currentLane.draft
-        ) {
-          throw new ContractError('分析资料或架构基线已经变化，请刷新后重试', 'STALE_ANALYSIS_CONTEXT', 409);
-        }
-        const proposals = normalizeGeneratedProposals(generated, currentAnalysis, {
-          diagramId: diagram.id,
-          view,
-          lane: currentLane,
-        });
-        if (!proposals.length) {
-          return json(res, 200, {
-            ...analysisResponse(currentAnalysis, projectRoot, analysisProvider),
-            generation: { proposalCount: 0 },
-          });
-        }
-        const next = { ...clone(currentAnalysis), proposals: [...currentAnalysis.proposals, ...proposals] };
-        return json(res, 201, {
-          ...analysisResponse(writeAnalysis(next, analysisFile), projectRoot, analysisProvider),
-          generation: { proposalCount: proposals.length },
-        });
+        throw new ContractError(
+          'v0.2 不再内嵌模型生成提案；请通过 MCP 或命令行创建智能体运行并提交工件',
+          'EMBEDDED_MODEL_REMOVED',
+          410,
+        );
       }
 
       const proposalActionMatch = /^\/api\/analysis\/proposals\/([a-z0-9][a-z0-9._-]{0,79})\/(accept|reject)$/.exec(pathname);
@@ -1352,9 +1734,9 @@ function createServer(options = {}) {
         const analysis = readAnalysis(analysisFile);
         assertAnalysisRevision(incoming, analysis);
         const proposal = analysis.proposals.find((item) => item.id === proposalActionMatch[1]);
-        if (!proposal) throw new ContractError('未找到该 AI 提案', 'PROPOSAL_NOT_FOUND', 404);
+        if (!proposal) throw new ContractError('未找到该智能体提案', 'PROPOSAL_NOT_FOUND', 404);
         if (proposal.status !== 'pending') {
-          throw new ContractError('该 AI 提案已经审阅，不能重复处理', 'PROPOSAL_ALREADY_REVIEWED', 409);
+          throw new ContractError('该智能体提案已经审阅，不能重复处理', 'PROPOSAL_ALREADY_REVIEWED', 409);
         }
         const now = new Date().toISOString();
         const action = proposalActionMatch[2];
@@ -1364,7 +1746,8 @@ function createServer(options = {}) {
           target.status = 'rejected';
           target.reviewedAt = now;
           target.application = null;
-          return json(res, 200, analysisResponse(writeAnalysis(next, analysisFile), projectRoot, analysisProvider));
+          updateReviewedRun(next, target, now);
+          return json(res, 200, analysisResponse(writeAnalysis(next, analysisFile)));
         }
 
         const catalog = readArchitectureCatalog(catalogFile, stateFile, layoutFile);
@@ -1373,7 +1756,7 @@ function createServer(options = {}) {
         const state = readState(diagram.statePath);
         const lane = state[proposal.view];
         if (lane.draft) {
-          throw new ContractError('请先处理当前草案，再接受新的 AI 提案', 'ACTIVE_DRAFT', 409);
+          throw new ContractError('请先处理当前草案，再接受新的智能体提案', 'ACTIVE_DRAFT', 409);
         }
         if (lane.published.revision !== proposal.baseRevision || lane.published.revisionId !== proposal.baseRevisionId) {
           throw new ContractError('提案的架构基线已过期，请重新分析后再审阅', 'PROPOSAL_STALE', 409, {
@@ -1381,7 +1764,7 @@ function createServer(options = {}) {
             headRevisionId: lane.published.revisionId,
           });
         }
-        assertProposalEvidenceCurrent(proposal, analysis, projectRoot);
+        assertProposalEvidenceCurrent(proposal, analysis, workspaceRoot);
         const graph = applyProposalChanges(lane.published.graph, proposal, state);
         assertHumanConfirmedSemantics(state.meta, proposal.view, lane.published.graph, graph, {
           userConfirmedSemanticOverride: true,
@@ -1400,11 +1783,12 @@ function createServer(options = {}) {
         target.status = 'accepted';
         target.reviewedAt = now;
         target.application = { draftId, draftRevision: 1, appliedAt: now };
+        updateReviewedRun(next, target, now);
         validateAnalysis(next);
         const savedState = writeState(state, diagram.statePath);
         const savedAnalysis = writeAnalysis(next, analysisFile);
         return json(res, 200, {
-          analysis: analysisResponse(savedAnalysis, projectRoot, analysisProvider),
+          analysis: analysisResponse(savedAnalysis),
           lane: responseState(savedState, proposal.view, diagram.id),
         });
       }
@@ -1693,6 +2077,7 @@ function createServer(options = {}) {
 if (require.main === module) {
   const port = parsePort(process.env.PORT);
   const projectRoot = resolveProjectDirectory();
+  const workspaceRoot = resolveWorkspaceRoot(undefined, projectRoot);
   const stateFile = resolveStateFile(undefined, projectRoot);
   const documentsFile = resolveDocumentsFile(undefined, projectRoot);
   const layoutFile = resolveLayoutFile(undefined, projectRoot);
@@ -1703,7 +2088,7 @@ if (require.main === module) {
       ? path.join(path.dirname(stateFile), PROJECT_FILES.catalog)
       : resolveCatalogFile(undefined, projectRoot));
   const config = readViewerConfig(configFile);
-  const server = createServer({ stateFile, documentsFile, layoutFile, configFile, catalogFile, projectRoot });
+  const server = createServer({ stateFile, documentsFile, layoutFile, configFile, catalogFile, projectRoot, workspaceRoot });
   server.listen(port, HOST, () => {
     const address = server.address();
     console.log(`${config.projectName} ${config.viewerName}：http://${HOST}:${address.port}`);
@@ -1713,6 +2098,7 @@ if (require.main === module) {
     console.log(`项目配置：${configFile}`);
     console.log(`架构目录：${catalogFile}`);
     console.log(`项目文档根目录：${projectRoot}`);
+    console.log(`待检查代码仓库：${workspaceRoot}`);
   });
 }
 
@@ -1739,6 +2125,7 @@ module.exports = {
   resolveConfigFile,
   resolveLayoutFile,
   resolveProjectDirectory,
+  resolveWorkspaceRoot,
   resolveSafeDocument,
   resolveStateFile,
   resolveStaticRoot,

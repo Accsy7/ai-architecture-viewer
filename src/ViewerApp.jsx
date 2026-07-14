@@ -12,7 +12,6 @@ import {
 } from '@xyflow/react';
 import {
   acceptAnalysisProposal,
-  generateAnalysisProposals,
   getAnalysis,
   getDiagramCatalog,
   getDocuments,
@@ -26,10 +25,8 @@ import {
   previewDocument,
   publishDraft,
   putDraft,
-  putAnalysisSources,
   putViewerLayout,
   rejectAnalysisProposal,
-  scanAnalysisSources,
 } from './api.js';
 import {
   canonicalGraphToFlow,
@@ -77,7 +74,7 @@ const DEFAULT_CONFIG = {
     { key: 'technical', label: '技术成熟度', tone: 'technical' },
     { key: 'product', label: '产品与视觉验收', tone: 'product' },
     { key: 'authorization', label: '授权边界', tone: 'authorization' },
-    { key: 'aiCollaboration', label: 'AI 协作方式', tone: 'ai', optional: true },
+    { key: 'aiCollaboration', label: '智能体协作方式', tone: 'ai', optional: true },
     { key: 'buildStrategy', label: '建设方式' },
     { key: 'horizon', label: '目标周期' },
   ],
@@ -92,13 +89,22 @@ const EMPTY_REGISTRY = {
 };
 
 const EMPTY_ANALYSIS = {
-  schemaVersion: '1.0.0',
+  schemaVersion: '2.0.0',
   baseRevision: 0,
   lastUpdated: null,
   sources: [],
   evidence: [],
   proposals: [],
-  provider: { provider: 'deepseek', configured: false, model: null },
+  runs: [],
+  artifacts: [],
+  integration: {
+    mode: 'external-agent',
+    modelProviderRequired: false,
+    agentCanApprove: false,
+    agentCanPublish: false,
+    mcpCommand: 'npm run mcp',
+    cliCommand: 'npm run agent --',
+  },
 };
 
 const EMPTY_SKILL_CATALOG = {
@@ -307,7 +313,7 @@ function Viewer() {
   const [skillCatalog, setSkillCatalog] = useState(EMPTY_SKILL_CATALOG);
   const [analysisLoading, setAnalysisLoading] = useState(false);
   const [analysisWorkbenchOpen, setAnalysisWorkbenchOpen] = useState(false);
-  const [analysisTab, setAnalysisTab] = useState('sources');
+  const [analysisTab, setAnalysisTab] = useState('runs');
   const [reviewProposalId, setReviewProposalId] = useState(null);
   const [analysisActionBusy, setAnalysisActionBusy] = useState(false);
   const [documentLoading, setDocumentLoading] = useState(false);
@@ -500,7 +506,9 @@ function Viewer() {
       sources: next?.sources || [],
       evidence: next?.evidence || [],
       proposals: next?.proposals || [],
-      provider: { ...EMPTY_ANALYSIS.provider, ...(next?.provider || {}) },
+      runs: next?.runs || [],
+      artifacts: next?.artifacts || [],
+      integration: { ...EMPTY_ANALYSIS.integration, ...(next?.integration || {}) },
     };
     analysisRef.current = normalized;
     setAnalysis(normalized);
@@ -827,7 +835,7 @@ function Viewer() {
 
   const openAnalysisWorkbench = useCallback(async () => {
     if (historicalRef.current || viewRef.current === 'compare') {
-      showToast('请先回到当前架构或目标架构，再进行 AI 分析');
+      showToast('请先回到当前架构或目标架构，再打开智能体工作台');
       return;
     }
     setAnalysisWorkbenchOpen(true);
@@ -841,64 +849,27 @@ function Viewer() {
       await navigator.clipboard.writeText(skill.defaultPrompt);
       showToast(`已复制“${skill.displayName}”调用提示`);
     } catch {
-      showToast(`无法自动复制；请让 Coding AI 读取 ${skill.skillPath}`);
+      showToast(`无法自动复制；请让编码智能体读取 ${skill.skillPath}`);
     }
   }, [showToast]);
 
-  const toggleAnalysisSource = useCallback(async (source) => {
-    const current = analysisRef.current;
-    if (!source?.path || !current.sources.some((item) => item.path === source.path)) return;
-    setAnalysisLoading(true);
+  const copyAgentConnection = useCallback(async () => {
+    const instructions = [
+      '请连接本项目的 AI Architecture Viewer MCP 服务。',
+      `启动命令：${analysisRef.current.integration?.mcpCommand || 'npm run mcp'}`,
+      '先调用 get_project_context，再调用 create_agent_run。',
+      '证据路径必须相对于查看器配置的代码仓库根目录。',
+      '根据任务提交 architecture snapshot、change proposal 或 implementation report，并附带 evidence manifest。',
+      '不要接受提案或发布架构；这两步必须由用户在查看器中完成。',
+    ].join('\n');
     try {
-      const nextSources = current.sources
-        .filter((item) => item.status !== 'failed')
-        .map((item) => item.path === source.path ? { ...item, selected: !item.selected } : item);
-      const next = await putAnalysisSources(current.baseRevision, nextSources);
-      replaceAnalysis(next);
-      showToast(source.selected ? '资料已移出本次分析' : '资料已加入本次分析');
-    } catch (error) {
-      showToast(error.message);
-    } finally {
-      setAnalysisLoading(false);
+      if (!navigator.clipboard?.writeText) throw new Error('Clipboard unavailable');
+      await navigator.clipboard.writeText(instructions);
+      showToast('已复制智能体接入说明');
+    } catch {
+      showToast('无法自动复制；请运行 npm run mcp 查看接入入口');
     }
-  }, [replaceAnalysis, showToast]);
-
-  const generateAnalysis = useCallback(async () => {
-    const activeView = viewRef.current;
-    const activeDiagram = diagramRef.current;
-    const activeLane = laneRef.current;
-    if (!['current', 'target'].includes(activeView) || historicalRef.current) {
-      showToast('请先回到可编辑的当前或目标架构');
-      return;
-    }
-    if (activeLane?.draft) {
-      showToast('请先发布或丢弃当前草案，再生成新的 AI 提案');
-      return;
-    }
-    if (!analysisRef.current.sources.some((source) => source.selected)) {
-      setAnalysisTab('sources');
-      showToast('请先在资料来源中选择至少一份文件');
-      return;
-    }
-    setAnalysisActionBusy(true);
-    setAnalysisLoading(true);
-    try {
-      const scanned = await scanAnalysisSources(analysisRef.current.baseRevision);
-      replaceAnalysis(scanned);
-      const generated = await generateAnalysisProposals(activeView, scanned.baseRevision, activeDiagram);
-      replaceAnalysis(generated);
-      setAnalysisTab('proposals');
-      const generatedCount = Number(generated.generation?.proposalCount || 0);
-      showToast(generatedCount
-        ? `已生成 ${generatedCount} 项待审阅提案`
-        : '分析完成；未发现有证据支持的架构变更');
-    } catch (error) {
-      showToast(error.message);
-    } finally {
-      setAnalysisActionBusy(false);
-      setAnalysisLoading(false);
-    }
-  }, [replaceAnalysis, showToast]);
+  }, [showToast]);
 
   const openProposalReview = useCallback((proposal) => {
     if (!proposal?.id) return;
@@ -1069,6 +1040,9 @@ function Viewer() {
   const correctionNode = nodes.find((node) => node.id === correctionNodeId) || null;
   const activeAnalysisProposals = analysis.proposals.filter((proposal) => (
     proposal.diagramId === diagramId && proposal.view === view
+  ));
+  const activeAgentRuns = analysis.runs.filter((run) => (
+    run.diagramId === diagramId && run.view === view
   ));
   const pendingAnalysisCount = activeAnalysisProposals.filter((proposal) => proposal.status === 'pending').length;
   const reviewProposal = activeAnalysisProposals.find((proposal) => proposal.id === reviewProposalId) || null;
@@ -1466,7 +1440,7 @@ function Viewer() {
                   disabled={readOnlyHistorical || view === 'compare'}
                   onClick={openAnalysisWorkbench}
                 >
-                  AI 分析 <span>{pendingAnalysisCount}</span>
+                  智能体协作 <span>{pendingAnalysisCount}</span>
                 </button>
                 {!readOnlyHistorical && view !== 'compare' && lane?.draft && (
                   <button className="publish-draft-entry" type="button" onClick={() => setPublishDialogOpen(true)}>
@@ -1647,17 +1621,17 @@ function Viewer() {
       />
       <AnalysisWorkbench
         open={analysisWorkbenchOpen}
-        sources={analysis.sources}
+        runs={activeAgentRuns}
         proposals={activeAnalysisProposals}
         reviews={analysisReviews}
         skills={skillCatalog.skills}
-        provider={analysis.provider}
+        integration={analysis.integration}
         activeTab={analysisTab}
-        analyzing={analysisLoading || analysisActionBusy}
+        busy={analysisLoading || analysisActionBusy}
         onClose={() => setAnalysisWorkbenchOpen(false)}
         onTabChange={setAnalysisTab}
-        onToggleSource={toggleAnalysisSource}
-        onAnalyze={generateAnalysis}
+        onRefresh={() => refreshAnalysis()}
+        onCopyConnection={copyAgentConnection}
         onOpenProposal={openProposalReview}
         onCopySkillPrompt={copySkillPrompt}
       />

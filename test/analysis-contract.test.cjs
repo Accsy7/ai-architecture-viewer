@@ -7,6 +7,7 @@ const {
   ANALYSIS_SCHEMA_VERSION,
   MAX_CHANGES_PER_PROPOSAL,
   createEmptyAnalysis,
+  migrateAnalysis,
   validateAnalysis,
   validateSourcePath,
 } = require('../schema/analysis-contract.cjs');
@@ -75,7 +76,10 @@ function validAnalysis() {
         },
       }],
       application: null,
+      origin: null,
     }],
+    agentRuns: [],
+    artifacts: [],
   };
 }
 
@@ -88,8 +92,23 @@ test('analysis contract creates and validates an evidence-backed pending proposa
     sources: [],
     evidence: [],
     proposals: [],
+    agentRuns: [],
+    artifacts: [],
   });
   assert.equal(validateAnalysis(validAnalysis()).proposals[0].changes[0].targetId, 'catalog-service');
+});
+
+test('analysis contract migrates v1 workbench data without inventing agent provenance', () => {
+  const legacy = validAnalysis();
+  legacy.schemaVersion = '1.0.0';
+  delete legacy.agentRuns;
+  delete legacy.artifacts;
+  delete legacy.proposals[0].origin;
+  const migrated = migrateAnalysis(legacy);
+  assert.equal(migrated.schemaVersion, ANALYSIS_SCHEMA_VERSION);
+  assert.deepEqual(migrated.agentRuns, []);
+  assert.deepEqual(migrated.artifacts, []);
+  assert.equal(migrated.proposals[0].origin, null);
 });
 
 test('analysis contract rejects unsafe project-relative source paths', () => {

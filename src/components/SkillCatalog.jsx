@@ -9,14 +9,14 @@ export default function SkillCatalog({ skills = [], onCopyPrompt }) {
     <>
       <div className="analysis-section-heading">
         <div>
-          <h3>AI Coding 协作 Skill</h3>
-          <p>让不同 Coding AI 使用同一套项目理解、架构规划和实施核验协议。</p>
+          <h3>编码智能体协作 Skill</h3>
+          <p>让 Codex、Claude Code 等不同智能体使用同一套项目理解、架构规划和实施核验协议。</p>
         </div>
         <span className="analysis-source-count">内置 {skills.length}</span>
       </div>
 
-      <p className="analysis-provider-note">
-        Skill 只生成候选架构与实施报告，不会自动接受提案或发布正式版本。复制提示后，将它交给拥有当前代码仓库访问权限的 Coding AI。
+      <p className="analysis-integration-note">
+        Skill 优先通过 MCP 把候选架构与实施报告交回工作台；它不会自动接受提案或发布正式版本。
       </p>
 
       {!skills.length && <p className="analysis-empty">暂时没有可用的协作 Skill。</p>}

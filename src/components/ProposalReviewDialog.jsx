@@ -48,7 +48,7 @@ function evidenceExcerpt(evidence) {
 }
 
 function changeTitle(change) {
-  return change?.title || change?.name || change?.label || '未命名变更';
+  return change?.title || change?.name || change?.label || change?.targetId || '未命名变更';
 }
 
 function changeDescription(change) {
@@ -83,7 +83,7 @@ function ChangeList({ changes, selectedChangeId, onSelect }) {
     <section className="analysis-review-column analysis-review-changes" aria-label="候选变更">
       <header className="analysis-review-column__heading">
         <div>
-          <p className="kicker">AI CANDIDATES</p>
+          <p className="kicker">AGENT CANDIDATES</p>
           <h3>候选变更</h3>
         </div>
         <span>{changes.length} 项</span>
@@ -251,13 +251,15 @@ export default function ProposalReviewDialog({
           <div>
             <p className="kicker">HUMAN REVIEW REQUIRED</p>
             <h2 id="proposal-review-title">{proposal.title || proposal.name || '架构变更提案'}</h2>
-            <p>{proposal.summary || '逐项检查 AI 的候选变更及其可追溯证据，再决定是否写入架构草案。'}</p>
+            <p>{proposal.summary || '逐项检查智能体提交的候选变更及其可追溯证据，再决定是否写入架构草案。'}</p>
           </div>
           <button className="quiet sheet-close" type="button" disabled={busy || Boolean(actionInFlight)} onClick={onClose} aria-label="关闭提案审阅">关闭</button>
         </header>
 
         <div className="analysis-review-summary">
-          <span className="analysis-badge analysis-badge--ai">AI 提案</span>
+          <span className="analysis-badge analysis-badge--ai">智能体提案</span>
+          {proposal.origin?.agentName && <span>{proposal.origin.agentName}</span>}
+          {proposal.origin?.agentClient && <span>{proposal.origin.agentClient}</span>}
           <span>{changes.length} 项候选变更</span>
           <span>{evidenceRegistry.length} 条已登记证据</span>
           {formatConfidence(proposal.confidence) && <span>整体置信度 {formatConfidence(proposal.confidence)}</span>}

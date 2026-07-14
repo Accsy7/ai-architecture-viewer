@@ -1,4 +1,4 @@
 interface:
   display_name: "Project Architecture Discovery"
-  short_description: "Create evidence-backed architecture snapshots"
-  default_prompt: "Use $architecture-discovery to inspect this repository and produce a viewer-compatible architecture snapshot."
+  short_description: "Submit evidence-backed architecture snapshots via MCP"
+  default_prompt: "Use $architecture-discovery to inspect this repository and submit an evidence-backed architecture snapshot to the viewer through MCP."

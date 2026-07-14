@@ -1,77 +1,47 @@
 # AI Architecture Viewer
 
-[Read in Chinese](README.md)
+[简体中文](README.md)
 
 [![CI](https://github.com/Accsy7/ai-architecture-viewer/actions/workflows/ci.yml/badge.svg)](https://github.com/Accsy7/ai-architecture-viewer/actions/workflows/ci.yml)
-![Version: v0.1.0](https://img.shields.io/badge/version-v0.1.0-2f6f5e)
+![Version: v0.2.0](https://img.shields.io/badge/version-v0.2.0-2f6f5e)
 [![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-7c6f64)](LICENSE)
 
-> **License:** Source code is available only for the noncommercial purposes
-> defined by the [PolyForm Noncommercial License 1.0.0](LICENSE). Derivative
-> versions must retain the attribution in [NOTICE](NOTICE) and follow the
-> [Project Name and Brand Usage Policy](TRADEMARKS.en.md).
+> **License:** Source code is available only for the noncommercial purposes defined by the [PolyForm Noncommercial License 1.0.0](LICENSE). Derivative versions must retain the attribution in [NOTICE](NOTICE) and follow the [Project Name and Brand Usage Policy](TRADEMARKS.en.md).
 
-AI Architecture Viewer is a local-first tool for building a shared understanding
-of software architecture between people and AI. It brings the current
-architecture, target intent, and explicitly selected project materials into a
-single visual workspace. From these controlled inputs, the AI produces a
-traceable interpretation of the architecture and proposes candidate changes.
-The user reviews, corrects, accepts, or rejects those results, turning shared
-understanding into drafts and versioned architecture records. The AI does not
-automatically scan the entire code repository, and it cannot modify a published
-architecture without human confirmation.
+AI Architecture Viewer is a local-first architecture collaboration surface between coding agents and people. Agents such as Codex and Claude Code inspect a repository with their existing tools, then submit architecture snapshots, change proposals, and implementation reports through standard MCP or JSON artifacts. The viewer turns those results into verifiable diagrams, evidence, and diffs; the user decides what to accept, revise, and publish.
 
-## Product preview
+It does not embed a model, require a model API key, or scan a repository on an agent's behalf.
 
 ![Current architecture overview in the fictional demo](docs/assets/architecture-overview.png)
 
-| Evidence-backed AI proposal | AI coding collaboration skills |
-| --- | --- |
-| ![An evidence-backed AI proposal waiting for human review](docs/assets/evidence-proposal.png) | ![Collaboration skills that can be handed to a coding AI](docs/assets/collaboration-skills.png) |
+All bundled screens and data are fictional. No customer, production, or personal data is included.
 
-Every screen above comes from the bundled fictional demo. No customer,
-production, or personal data is included.
+## What the v0.2.0 MVP does
 
-### Understand an architecture in 30 seconds
+- Lets external agents read the published architecture, diagram catalog, and project document index.
+- Creates a traceable run for each discovery, planning, or reconciliation task and locks the architecture baseline used by that run.
+- Accepts evidence manifests with repository-relative paths, line ranges, and content hashes; rejects escaped, sensitive, or stale evidence.
+- Converts agent architecture snapshots into semantic diffs. Existing nodes omitted from a snapshot are never removed automatically.
+- Places architecture proposals in a human inbox with per-change evidence and submitter provenance.
+- Reserves acceptance and rejection for the user. Acceptance writes only a draft; publication requires a second explicit human action.
+- Keeps current architecture, target architecture, diffs, drafts, and immutable revision history.
+- Bundles three portable skills for a consistent understand–plan–verify handoff.
 
-1. Run `npm start` and open the fictional demo, or explicitly select your own
-   project data package.
-2. Browse the current architecture, select a module, and verify its
-   responsibilities, relationships, and control boundaries.
-3. Open **AI Analysis** and include only materials approved for transmission.
-4. Review each candidate change against its evidence, then accept, reject, or
-   correct it.
-5. A person confirms the draft before publication; revision history remains
-   available for later inspection or restoration.
+## Workflow
 
-## Use cases
+```mermaid
+flowchart LR
+    U["User defines the goal"] --> A["Codex / Claude Code inspects the repository"]
+    A --> M["Submit snapshots, proposals, and evidence through MCP"]
+    M --> V["Viewer renders architecture diffs"]
+    V --> H{"Human review"}
+    H -->|Reject| A
+    H -->|Accept| D["Write architecture draft"]
+    D --> P{"Human publication"}
+    P --> R["Formal revision and history"]
+```
 
-- **Understand an unfamiliar or complex project**: Bring existing architecture
-  diagrams, module descriptions, technical designs, and process materials into
-  one view. Based only on the materials you explicitly select, the AI presents
-  its understanding of responsibilities, relationships, data flows, and control
-  boundaries for you to correct item by item.
-- **Review architecture evolution proposals**: Compare the current
-  architecture, target architecture, and their differences side by side before
-  adding a module, changing a call chain, or introducing a governance control.
-  The result is a candidate draft that can be discussed and revised
-  iteratively.
-- **Turn design materials into reviewable suggestions**: Extract evidence from
-  explicitly selected design notes, technical documents, or project materials
-  and produce candidate changes that remain traceable to their sources, rather
-  than changing a diagram without supporting evidence.
-- **Practice collaborative human–AI architecture governance**: The AI organizes
-  its architectural understanding and lays out options with their trade-offs;
-  people make the decisions and publish formal versions. Every change requires
-  human confirmation, and the AI cannot alter a published architecture version.
-- **Teach and demonstrate publicly**: Use the built-in fictional example to
-  explain architecture visualization, AI-assisted understanding, evidence
-  traceability, human review, and version evolution without using real business
-  or customer materials.
-
-The interface is isolated from project data. The viewer does not embed a domain
-model for any specific business, and the public repository contains fictional
-examples only.
+The capability boundary is explicit: the MCP server exposes no `approve` or `publish` tool. Agents investigate, reason, and submit; people decide and publish.
 
 ## Quick start
 
@@ -82,99 +52,126 @@ npm install
 npm start
 ```
 
-Open `http://127.0.0.1:8800` in your browser. `npm start` first builds the
-frontend and then starts the local API and web server.
-
-To use a different port:
+Open `http://127.0.0.1:8800`. To use a different port:
 
 ```powershell
 $env:PORT = '8891'
 npm start
 ```
 
-To load your own project data package from outside the repository, explicitly
-set its directory:
+The MCP server can be started separately. It starts the local viewer automatically when necessary:
 
 ```powershell
-$env:VIEWER_PROJECT_DIR = 'D:\work\my-architecture-package'
-npm start
+npm run mcp
 ```
 
-## Configure a model provider (optional)
+### Connect Codex
 
-### Data-sharing boundary
+Configure the local STDIO server in `.codex/config.toml` for a trusted project. Replace the paths with absolute paths on your machine:
 
-When generating a proposal, the server sends **evidence excerpts extracted from
-the materials you explicitly selected**, together with **the nodes,
-relationships, and fields in the current architecture view**, to the configured
-model provider. Do not select materials that you are not authorized to transmit,
-and never put real secrets in project files.
+```toml
+[mcp_servers.ai_architecture_viewer]
+command = "node"
+args = ["D:/path/to/ai-architecture-viewer/mcp-server.mjs"]
+cwd = "D:/path/to/ai-architecture-viewer"
 
-Without a model API key, viewing, comparison, manual drafting, and demo data
-remain available. Only AI-generated proposals are unavailable.
+[mcp_servers.ai_architecture_viewer.env]
+VIEWER_PROJECT_DIR = "D:/architecture-data/my-project"
+VIEWER_WORKSPACE_ROOT = "D:/work/my-project"
+```
 
-The server reads model configuration only from the process environment.
-`.env.example` documents the available variables, but the project does not
-automatically load a `.env` file. Supply actual values through your terminal
-environment, your deployment platform's secret manager, or your own
-environment-loading mechanism.
+The Codex desktop app, CLI, and IDE extension share MCP configuration. See the [official Codex MCP documentation](https://developers.openai.com/codex/mcp/).
+
+### Connect Claude Code
+
+Configure the server in the project's `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "ai-architecture-viewer": {
+      "command": "node",
+      "args": ["D:/path/to/ai-architecture-viewer/mcp-server.mjs"],
+      "cwd": "D:/path/to/ai-architecture-viewer",
+      "env": {
+        "VIEWER_PROJECT_DIR": "D:/architecture-data/my-project",
+        "VIEWER_WORKSPACE_ROOT": "${CLAUDE_PROJECT_DIR:-.}"
+      }
+    }
+  }
+}
+```
+
+The client asks you to trust a new local MCP server on first use. See the [official Claude Code MCP documentation](https://code.claude.com/docs/en/mcp).
+
+## MCP tools
+
+| Tool | Purpose | Changes formal architecture? |
+| --- | --- | --- |
+| `get_project_context` | Read the project, diagrams, baseline, and collaboration boundaries | No |
+| `get_current_architecture` | Read the current published architecture | No |
+| `create_agent_run` | Create a traceable run and lock its baseline | No |
+| `submit_architecture_snapshot` | Submit current-state understanding and evidence | No; creates candidate diffs only |
+| `submit_change_proposal` | Submit a target architecture change | No; enters the inbox only |
+| `submit_implementation_report` | Submit implementation results, checks, and drift | No |
+| `get_review_status` | Read human review outcomes | No |
+| `get_approved_target` | Read the accepted target draft or published target | No |
+
+## CLI and file fallback
+
+Agents without MCP support can produce the JSON artifacts defined under [`protocol/`](protocol/) and submit them with the local CLI:
 
 ```powershell
-$env:DEEPSEEK_API_KEY = 'replace-with-your-own-secret'
-$env:DEEPSEEK_BASE_URL = 'https://api.deepseek.com'
-$env:DEEPSEEK_MODEL = 'deepseek-v4-flash'
-npm start
+npm run agent -- context
+
+npm run agent -- create-run `
+  --agent Codex `
+  --client codex `
+  --task architecture-discovery
+
+npm run agent -- submit `
+  --run run-id-from-previous-command `
+  --artifact ai-coding/discovery/run-id/architecture-snapshot.json `
+  --evidence ai-coding/discovery/run-id/evidence-manifest.json
 ```
 
-For provider-specific configuration and model information, refer to the
-provider's official documentation.
-
-## Project data package
-
-A data package normally contains:
-
-- `project.json`: the instance inventory and default-project marker.
-- `viewer.config.json`: configuration for the UI title, views, and detail
-  fields.
-- `architecture-catalog.json`: the architecture-diagram catalog and
-  hierarchical navigation.
-- `state.json` and `viewer-layout.json`: published semantic state and local
-  layout.
-- `document-registry.json` and `documents/`: project materials that can be
-  cited.
-- `diagrams/`: state and layout for other architecture diagrams.
-- `analysis.json`: separate records of sources, evidence, and AI proposals.
-
-Keep real project data outside this repository or in a private workspace.
-
-## AI coding collaboration skills
-
-This repository bundles three vendor-neutral skills that travel with the
-project:
-
-- `architecture-discovery`: inspects an authorized repository scope and
-  produces a snapshot of the current architecture with an evidence manifest.
-- `architecture-change-plan`: turns user intent into alternatives,
-  recommendations, target-architecture changes, and acceptance criteria without
-  starting implementation.
-- `implementation-reconcile`: compares actual AI coding changes and test
-  results with the approved architecture, revealing missing, additional,
-  changed, or unverified work.
-
-Open the **Collaboration Skills** tab in the AI analysis drawer to inspect a
-skill and copy its handoff prompt. Canonical skill instructions are under
-[`skills/`](skills/), and the vendor-neutral artifact protocol is under
-[`protocol/`](protocol/). Generated `ai-coding/` output is excluded from Git
-by default and becomes analysis input only after the user explicitly selects it.
-
-Validate an exchange artifact with:
+Validate one exchange artifact with:
 
 ```powershell
 npm run protocol:validate -- ai-coding/path/to/artifact.json
 ```
 
-Skills produce candidate work only. They cannot accept their own proposals,
-modify a published architecture, or approve implementation on the user's behalf.
+## Collaboration skills
+
+[`skills/`](skills/) contains three vendor-neutral workflows:
+
+- `architecture-discovery`: inspect a user-authorized repository scope and submit a current architecture snapshot with evidence.
+- `architecture-change-plan`: turn user intent into options, a recommendation, target architecture changes, and acceptance criteria.
+- `implementation-reconcile`: compare actual code with the human-approved architecture and submit checks, completion status, and all drift.
+
+Skills prefer MCP and fall back to JSON files plus the CLI. They cannot accept their own proposals, alter published architecture, or approve implementation for the user.
+
+## Project data package
+
+The viewer, its project data package, and the inspected code repository can all live in separate directories. A package normally contains:
+
+- `project.json`: instance inventory and default-project marker.
+- `viewer.config.json`: titles, views, and detail fields.
+- `architecture-catalog.json`: diagram catalog and hierarchy.
+- `state.json` and `diagrams/`: semantic architecture, drafts, and revision history.
+- `viewer-layout.json`: presentation-only local layout.
+- `document-registry.json` and `documents/`: citable project material.
+- `analysis.json`: agent runs, exchange artifacts, evidence, and proposal reviews.
+
+Load a package from outside this repository and bind evidence verification to the actual code workspace:
+
+```powershell
+$env:VIEWER_PROJECT_DIR = 'D:\work\my-architecture-package'
+$env:VIEWER_WORKSPACE_ROOT = 'D:\work\my-code-repository'
+npm start
+```
+
+Every evidence path submitted by an agent is relative to `VIEWER_WORKSPACE_ROOT`; the viewer rereads that file inside the configured repository and verifies its content hash. When the setting is omitted, it defaults to `VIEWER_PROJECT_DIR`, preserving the simple layout where the data package lives at the repository root. Keep real project data outside the public repository or in a private workspace.
 
 ## Development and verification
 
@@ -183,44 +180,14 @@ npm test
 npm run build
 ```
 
-Before submitting changes, run at least:
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development conventions, [SECURITY.md](SECURITY.md) for security reporting, [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for community standards, and [CHANGELOG.md](CHANGELOG.md) for release history.
 
-```powershell
-git status --ignored
-npm test
-npm run build
-```
+## Public-release and security boundaries
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development conventions,
-[SECURITY.md](SECURITY.md) for security reporting, and
-[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for community standards. Release
-history is documented in [CHANGELOG.md](CHANGELOG.md).
-
-## Public-release boundaries
-
-- Default examples and documents must be fictional or explicitly authorized for
-  public release.
-- Do not commit secrets, access tokens, internal paths, customer materials, or
-  architecture materials that have not been de-identified.
-- The AI may only propose structured changes. Every write and publication must
-  be confirmed by a person.
-- This project's source code is licensed under the
-  [PolyForm Noncommercial License 1.0.0](LICENSE). It is source-available, but
-  it is not an open-source license under the OSI definition.
-- The license grants rights to use, modify, and distribute the software only for
-  the noncommercial purposes it defines. Commercial use requires separate
-  written authorization; see
-  [COMMERCIAL_LICENSE.en.md](COMMERCIAL_LICENSE.en.md).
-- Derivative works are allowed. Anyone publicly distributing a modified version
-  must retain the attribution in [NOTICE](NOTICE) and follow
-  [TRADEMARKS.en.md](TRADEMARKS.en.md): use a different project name and Logo, and do
-  not imply that the version is official, maintained by the original author,
-  approved by the original author, or endorsed by the original author.
+- Default examples and documents must be fictional or explicitly authorized for public release.
+- Never commit credentials, access tokens, customer material, internal paths, or architecture data that has not been de-identified.
+- Agents may submit structured candidates only. Acceptance and publication require human actions.
+- v0.2.0 binds to `127.0.0.1` only. Mutation APIs do not yet provide authentication, CSRF protection, or multi-user authorization; do not proxy the service to a LAN or the public internet.
+- Source code uses the [PolyForm Noncommercial License 1.0.0](LICENSE). It is source-available, not OSI open source. Commercial use requires separate written authorization; see [COMMERCIAL_LICENSE.en.md](COMMERCIAL_LICENSE.en.md).
+- Derivative works are allowed, but public modified versions must retain [NOTICE](NOTICE) attribution and follow [TRADEMARKS.en.md](TRADEMARKS.en.md): use a different name and logo and do not imply official status or endorsement.
 - Third-party dependencies remain subject to their own licenses.
-
-## Local runtime security boundary
-
-In v0.1.0, the service listens only on `127.0.0.1`. Its mutation APIs do not
-yet provide authentication, CSRF protection, or remote-access control. Do not
-expose it directly to a LAN or the public internet through a reverse proxy.
-Before deploying it for multiple users, add those protections first.

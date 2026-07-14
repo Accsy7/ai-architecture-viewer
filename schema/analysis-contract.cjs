@@ -7,12 +7,16 @@ const {
   RELATION_TYPES,
   clone,
 } = require('./state-contract.cjs');
+const { validateExchangeArtifact } = require('./ai-coding-exchange-contract.cjs');
 
-const ANALYSIS_SCHEMA_VERSION = '1.0.0';
+const ANALYSIS_SCHEMA_VERSION = '2.0.0';
 const MAX_SOURCE_COUNT = 500;
 const MAX_EVIDENCE_COUNT = 5000;
 const MAX_PROPOSAL_COUNT = 500;
-const MAX_CHANGES_PER_PROPOSAL = 20;
+const MAX_AGENT_RUN_COUNT = 500;
+const MAX_ARTIFACT_COUNT = 1000;
+const MAX_ARTIFACTS_PER_RUN = 50;
+const MAX_CHANGES_PER_PROPOSAL = 100;
 const MAX_EVIDENCE_REFS_PER_PROPOSAL = 64;
 const MAX_EVIDENCE_REFS_PER_CHANGE = 16;
 const MAX_SOURCE_BYTES = 256 * 1024;
@@ -29,9 +33,16 @@ const SOURCE_TYPES = new Set([
   'text',
   'manifest',
   'configuration',
+  'source-code',
 ]);
 const PROPOSAL_STATUSES = new Set(['pending', 'accepted', 'rejected']);
 const CONFIDENCE_LEVELS = new Set(['low', 'medium', 'high']);
+const AGENT_TASK_TYPES = new Set([
+  'architecture-discovery',
+  'architecture-change-plan',
+  'implementation-reconcile',
+]);
+const AGENT_RUN_STATUSES = new Set(['active', 'submitted', 'reviewed', 'failed']);
 const CHANGE_KINDS = new Set(['add', 'update', 'remove']);
 const CHANGE_TARGET_TYPES = new Set(['node', 'edge']);
 const TARGET_HORIZONS = new Set(['近期', '后续', '远期']);
@@ -366,6 +377,83 @@ function validateApplication(application, applicationPath = 'proposal.applicatio
   return application;
 }
 
+function validateProposalOrigin(origin, originPath = 'proposal.origin') {
+  if (origin === null) return origin;
+  assertObject(origin, originPath);
+  assertKeys(origin, new Set([
+    'runId',
+    'artifactId',
+    'artifactType',
+    'agentName',
+    'agentClient',
+  ]), originPath);
+  assertStableId(origin.runId, `${originPath}.runId`);
+  assertStableId(origin.artifactId, `${originPath}.artifactId`);
+  if (!['architecture-snapshot', 'architecture-proposal'].includes(origin.artifactType)) {
+    fail(`${originPath}.artifactType 不是可生成提案的工件类型`);
+  }
+  assertText(origin.agentName, `${originPath}.agentName`, { max: 120 });
+  assertText(origin.agentClient, `${originPath}.agentClient`, { max: 80 });
+  return origin;
+}
+
+function validateAgentRun(run, runPath = 'agentRun') {
+  assertObject(run, runPath);
+  assertKeys(run, new Set([
+    'id',
+    'agentName',
+    'agentClient',
+    'taskType',
+    'status',
+    'diagramId',
+    'view',
+    'baseRevision',
+    'baseRevisionId',
+    'createdAt',
+    'updatedAt',
+    'submittedAt',
+    'summary',
+    'artifactIds',
+  ]), runPath);
+  assertStableId(run.id, `${runPath}.id`);
+  assertText(run.agentName, `${runPath}.agentName`, { max: 120 });
+  assertText(run.agentClient, `${runPath}.agentClient`, { max: 80 });
+  if (!AGENT_TASK_TYPES.has(run.taskType)) fail(`${runPath}.taskType 不是支持的智能体任务类型`);
+  if (!AGENT_RUN_STATUSES.has(run.status)) fail(`${runPath}.status 不是支持的运行状态`);
+  assertStableId(run.diagramId, `${runPath}.diagramId`);
+  if (!['current', 'target'].includes(run.view)) fail(`${runPath}.view 必须是 current 或 target`);
+  assertBaseRevision(run.baseRevision, `${runPath}.baseRevision`);
+  assertStableId(run.baseRevisionId, `${runPath}.baseRevisionId`);
+  assertTimestamp(run.createdAt, `${runPath}.createdAt`);
+  assertTimestamp(run.updatedAt, `${runPath}.updatedAt`);
+  assertTimestamp(run.submittedAt, `${runPath}.submittedAt`, { nullable: true });
+  if (run.summary !== null) assertText(run.summary, `${runPath}.summary`, { max: 1000 });
+  assertArray(run.artifactIds, `${runPath}.artifactIds`, { max: MAX_ARTIFACTS_PER_RUN });
+  const artifactIds = new Set();
+  run.artifactIds.forEach((id, index) => {
+    assertStableId(id, `${runPath}.artifactIds[${index}]`);
+    if (artifactIds.has(id)) fail(`${runPath}.artifactIds 不得包含重复工件 ${id}`);
+    artifactIds.add(id);
+  });
+  if (Date.parse(run.updatedAt) < Date.parse(run.createdAt)) fail(`${runPath}.updatedAt 不得早于 createdAt`);
+  if (run.status === 'active' && run.submittedAt !== null) fail(`${runPath} 的活动运行不得包含 submittedAt`);
+  if (run.status !== 'active' && run.submittedAt === null) fail(`${runPath} 的已提交运行必须包含 submittedAt`);
+  return run;
+}
+
+function validateAgentArtifact(record, recordPath = 'artifactRecord') {
+  assertObject(record, recordPath);
+  assertKeys(record, new Set(['id', 'runId', 'artifactType', 'submittedAt', 'artifact']), recordPath);
+  assertStableId(record.id, `${recordPath}.id`);
+  assertStableId(record.runId, `${recordPath}.runId`);
+  assertText(record.artifactType, `${recordPath}.artifactType`, { max: 80 });
+  assertTimestamp(record.submittedAt, `${recordPath}.submittedAt`);
+  const artifact = validateExchangeArtifact(record.artifact);
+  if (artifact.artifactId !== record.id) fail(`${recordPath}.id 必须与 artifact.artifactId 一致`);
+  if (artifact.artifactType !== record.artifactType) fail(`${recordPath}.artifactType 必须与工件内容一致`);
+  return record;
+}
+
 function validateProposal(proposal, proposalPath = 'proposal', { knownEvidenceIds } = {}) {
   assertObject(proposal, proposalPath);
   assertKeys(proposal, new Set([
@@ -383,6 +471,7 @@ function validateProposal(proposal, proposalPath = 'proposal', { knownEvidenceId
     'evidenceIds',
     'changes',
     'application',
+    'origin',
   ]), proposalPath);
   assertStableId(proposal.id, `${proposalPath}.id`);
   if (!PROPOSAL_STATUSES.has(proposal.status)) fail(`${proposalPath}.status 不是支持的提案状态`);
@@ -392,7 +481,9 @@ function validateProposal(proposal, proposalPath = 'proposal', { knownEvidenceId
   assertStableId(proposal.baseRevisionId, `${proposalPath}.baseRevisionId`);
   assertText(proposal.title, `${proposalPath}.title`, { max: 160 });
   assertText(proposal.summary, `${proposalPath}.summary`, { max: 2000 });
-  if (!CONFIDENCE_LEVELS.has(proposal.confidence)) fail(`${proposalPath}.confidence 必须是 low、medium 或 high`);
+  if (proposal.confidence !== null && !CONFIDENCE_LEVELS.has(proposal.confidence)) {
+    fail(`${proposalPath}.confidence 必须是 low、medium、high 或 null`);
+  }
   assertTimestamp(proposal.createdAt, `${proposalPath}.createdAt`);
   assertTimestamp(proposal.reviewedAt, `${proposalPath}.reviewedAt`, { nullable: true });
   validateEvidenceIds(proposal.evidenceIds, `${proposalPath}.evidenceIds`, {
@@ -412,6 +503,7 @@ function validateProposal(proposal, proposalPath = 'proposal', { knownEvidenceId
     changeTargets.add(targetKey);
   });
   validateApplication(proposal.application, `${proposalPath}.application`);
+  validateProposalOrigin(proposal.origin, `${proposalPath}.origin`);
   if (proposal.status === 'pending') {
     if (proposal.reviewedAt !== null || proposal.application !== null) {
       fail(`${proposalPath} 的待审提案不得包含审阅或应用记录`);
@@ -438,6 +530,8 @@ function validateAnalysis(analysis) {
     'sources',
     'evidence',
     'proposals',
+    'agentRuns',
+    'artifacts',
   ]), 'analysis');
   if (analysis.schemaVersion !== ANALYSIS_SCHEMA_VERSION) {
     fail(
@@ -451,6 +545,33 @@ function validateAnalysis(analysis) {
   assertArray(analysis.sources, 'analysis.sources', { min: 0, max: MAX_SOURCE_COUNT });
   assertArray(analysis.evidence, 'analysis.evidence', { min: 0, max: MAX_EVIDENCE_COUNT });
   assertArray(analysis.proposals, 'analysis.proposals', { min: 0, max: MAX_PROPOSAL_COUNT });
+  assertArray(analysis.agentRuns, 'analysis.agentRuns', { min: 0, max: MAX_AGENT_RUN_COUNT });
+  assertArray(analysis.artifacts, 'analysis.artifacts', { min: 0, max: MAX_ARTIFACT_COUNT });
+
+  const runsById = new Map();
+  analysis.agentRuns.forEach((run, index) => {
+    const runPath = `analysis.agentRuns[${index}]`;
+    validateAgentRun(run, runPath);
+    if (runsById.has(run.id)) fail(`analysis.agentRuns 包含重复运行 ID ${run.id}`);
+    runsById.set(run.id, run);
+  });
+
+  const artifactsById = new Map();
+  analysis.artifacts.forEach((record, index) => {
+    const recordPath = `analysis.artifacts[${index}]`;
+    validateAgentArtifact(record, recordPath);
+    if (artifactsById.has(record.id)) fail(`analysis.artifacts 包含重复工件 ID ${record.id}`);
+    if (!runsById.has(record.runId)) fail(`${recordPath}.runId 引用了未知运行 ${record.runId}`);
+    artifactsById.set(record.id, record);
+  });
+  analysis.agentRuns.forEach((run, index) => {
+    run.artifactIds.forEach((artifactId) => {
+      const record = artifactsById.get(artifactId);
+      if (!record || record.runId !== run.id) {
+        fail(`analysis.agentRuns[${index}].artifactIds 引用了不属于该运行的工件 ${artifactId}`);
+      }
+    });
+  });
 
   const sourcesById = new Map();
   const sourcePaths = new Set();
@@ -491,8 +612,40 @@ function validateAnalysis(analysis) {
       if (changeIds.has(change.id)) fail(`analysis.proposals 包含重复变更 ID ${change.id}`);
       changeIds.add(change.id);
     });
+    if (proposal.origin) {
+      const run = runsById.get(proposal.origin.runId);
+      const artifact = artifactsById.get(proposal.origin.artifactId);
+      if (!run) fail(`${proposalPath}.origin.runId 引用了未知运行 ${proposal.origin.runId}`);
+      if (!artifact || artifact.runId !== run.id) {
+        fail(`${proposalPath}.origin.artifactId 引用了不属于该运行的工件 ${proposal.origin.artifactId}`);
+      }
+    }
   });
   return analysis;
+}
+
+function migrateAnalysis(value) {
+  const incoming = clone(value);
+  if (incoming?.schemaVersion === ANALYSIS_SCHEMA_VERSION) {
+    validateAnalysis(incoming);
+    return incoming;
+  }
+  if (incoming?.schemaVersion !== '1.0.0') {
+    fail(
+      `analysis.schemaVersion 无法迁移到 ${ANALYSIS_SCHEMA_VERSION}`,
+      'ANALYSIS_SCHEMA_VERSION_MISMATCH',
+      409,
+    );
+  }
+  const migrated = {
+    ...incoming,
+    schemaVersion: ANALYSIS_SCHEMA_VERSION,
+    agentRuns: [],
+    artifacts: [],
+    proposals: (incoming.proposals || []).map((proposal) => ({ ...proposal, origin: null })),
+  };
+  validateAnalysis(migrated);
+  return migrated;
 }
 
 function createEmptyAnalysis(now = new Date().toISOString()) {
@@ -503,6 +656,8 @@ function createEmptyAnalysis(now = new Date().toISOString()) {
     sources: [],
     evidence: [],
     proposals: [],
+    agentRuns: [],
+    artifacts: [],
   };
   validateAnalysis(analysis);
   return clone(analysis);
@@ -510,6 +665,8 @@ function createEmptyAnalysis(now = new Date().toISOString()) {
 
 module.exports = {
   ANALYSIS_SCHEMA_VERSION,
+  AGENT_RUN_STATUSES,
+  AGENT_TASK_TYPES,
   CHANGE_KINDS,
   CHANGE_TARGET_TYPES,
   CONFIDENCE_LEVELS,
@@ -523,7 +680,10 @@ module.exports = {
   PROPOSAL_STATUSES,
   SOURCE_TYPES,
   createEmptyAnalysis,
+  migrateAnalysis,
   validateAnalysis,
+  validateAgentArtifact,
+  validateAgentRun,
   validateApplication,
   validateEvidence,
   validateProposal,

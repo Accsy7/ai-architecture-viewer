@@ -10,15 +10,17 @@ Create a factual current-state architecture package without modifying applicatio
 ## Workflow
 
 1. Confirm the repository root and the user-authorized scope. Treat unspecified external directories, secrets, generated output, dependency caches, and customer data as out of scope.
-2. Record the workspace revision. Prefer a commit identifier when available; otherwise use a stable workspace label and state that the tree is uncommitted.
-3. Inspect entry points, manifests, build and test configuration, runtime boundaries, modules, storage, external integrations, and human or authorization gates.
-4. Separate facts from inferences. Support every node, edge, and material conclusion with one or more evidence IDs.
-5. Use repository-relative forward-slash paths. Never emit absolute paths, credentials, full secret values, or unapproved source bodies.
-6. Write the artifacts under `ai-coding/discovery/<run-id>/`:
+2. When AI Architecture Viewer MCP tools are available, call `get_project_context`, then call `create_agent_run` with task type `architecture-discovery`. Retain the returned run ID. If MCP is unavailable, continue with file artifacts and the CLI fallback below.
+3. Record the workspace revision. Prefer a commit identifier when available; otherwise use a stable workspace label and state that the tree is uncommitted.
+4. Inspect entry points, manifests, build and test configuration, runtime boundaries, modules, storage, external integrations, and human or authorization gates.
+5. Separate facts from inferences. Support every node, edge, and material conclusion with one or more evidence IDs.
+6. Use repository-relative forward-slash paths. Never emit absolute paths, credentials, full secret values, or unapproved source bodies.
+7. Write the artifacts under `ai-coding/discovery/<run-id>/`:
    - `architecture-snapshot.json`
    - `evidence-manifest.json`
-7. If `protocol/validate-artifact.cjs` is available, validate both files before reporting completion.
-8. Report unknowns and conflicting evidence explicitly. Do not invent missing architecture facts.
+8. If `protocol/validate-artifact.cjs` is available, validate both files before submission.
+9. Submit both artifacts with `submit_architecture_snapshot`. If MCP is unavailable, run `npm run agent -- submit --run <run-id> --artifact <snapshot-path> --evidence <manifest-path>` after a run ID has been created through the viewer API or CLI.
+10. Report unknowns and conflicting evidence explicitly. Do not invent missing architecture facts.
 
 ## Output rules
 
@@ -28,6 +30,8 @@ Create a factual current-state architecture package without modifying applicatio
 - Use only `flow`, `support`, `reference`, `governance`, or `handoff` as relation types.
 - Mark evidence as `fact` or `inference`; an inference must explain its uncertainty.
 - Do not edit `state.json`, `analysis.json`, viewer layout files, or any published architecture revision.
+- Treat the viewer as a handoff and review surface, not as the repository scanner. Use the coding agent's authorized repository tools for inspection.
+- Never call or simulate approval or publication. A submitted snapshot remains a candidate until the user reviews it.
 
 ## Completion gate
 
