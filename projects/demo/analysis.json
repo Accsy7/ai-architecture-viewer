@@ -1,0 +1,118 @@
+{
+  "schemaVersion": "1.0.0",
+  "baseRevision": 0,
+  "lastUpdated": "2026-07-14T00:00:00.000Z",
+  "sources": [
+    {
+      "id": "system-brief",
+      "path": "documents/system-brief.md",
+      "label": "Synthetic system brief",
+      "type": "markdown",
+      "selected": true,
+      "lastScannedAt": "2026-07-14T00:00:00.000Z",
+      "contentHash": "d96e11d4d03df8f58bc40adf492e1da64c23ffd02e2d28422d71fec2cb31f504",
+      "sizeBytes": 707
+    },
+    {
+      "id": "evaluation-proposal",
+      "path": "documents/evaluation-proposal.md",
+      "label": "Candidate evaluation gate",
+      "type": "markdown",
+      "selected": true,
+      "lastScannedAt": "2026-07-14T00:00:00.000Z",
+      "contentHash": "8596af38f5d2ed785f820482d294c89635b0c5d6f6452570f3d85d8d06ac6bbc",
+      "sizeBytes": 451
+    }
+  ],
+  "evidence": [
+    {
+      "id": "human-review-boundary",
+      "sourceId": "system-brief",
+      "path": "documents/system-brief.md",
+      "lineStart": 7,
+      "lineEnd": 10,
+      "excerpt": "A synthetic support request is routed to grounded assistance, while a human review workspace remains the only component allowed to finalize a response.",
+      "contentHash": "d96e11d4d03df8f58bc40adf492e1da64c23ffd02e2d28422d71fec2cb31f504",
+      "collectedAt": "2026-07-14T00:00:00.000Z"
+    },
+    {
+      "id": "evaluation-gate-behavior",
+      "sourceId": "evaluation-proposal",
+      "path": "documents/evaluation-proposal.md",
+      "lineStart": 5,
+      "lineEnd": 7,
+      "excerpt": "The candidate gate checks whether a cited draft has supporting snippets and may recommend a hold, but cannot approve, publish, or send a response.",
+      "contentHash": "8596af38f5d2ed785f820482d294c89635b0c5d6f6452570f3d85d8d06ac6bbc",
+      "collectedAt": "2026-07-14T00:00:00.000Z"
+    }
+  ],
+  "proposals": [
+    {
+      "id": "proposal-add-evaluation-gate",
+      "status": "pending",
+      "view": "current",
+      "diagramId": "system-overview",
+      "baseRevision": 1,
+      "baseRevisionId": "current-r1",
+      "title": "Add an evaluation gate before human review",
+      "summary": "Create a reviewable current-architecture draft that adds an evidence-checking gate between retrieval and human review.",
+      "confidence": "high",
+      "createdAt": "2026-07-14T00:00:00.000Z",
+      "reviewedAt": null,
+      "evidenceIds": ["evaluation-gate-behavior", "human-review-boundary"],
+      "changes": [
+        {
+          "id": "add-evaluation-gate-node",
+          "kind": "add",
+          "targetType": "node",
+          "targetId": "evaluation-gate",
+          "summary": "Add a candidate evaluation gate before the existing human review workspace.",
+          "evidenceIds": ["evaluation-gate-behavior"],
+          "patch": {
+            "data": {
+              "name": "Evaluation gate",
+              "purpose": "Scores grounding and safety checks before a response reaches human review.",
+              "technical": "Candidate AI proposal",
+              "product": "Awaiting human review",
+              "authorization": "May recommend a hold; cannot approve or send a response.",
+              "aiCollaboration": "Evidence-based candidate change"
+            }
+          }
+        },
+        {
+          "id": "add-retrieval-evaluation-edge",
+          "kind": "add",
+          "targetType": "edge",
+          "targetId": "retrieval-to-evaluation",
+          "summary": "Route the existing retrieval service through the candidate evaluation gate.",
+          "evidenceIds": ["evaluation-gate-behavior"],
+          "patch": {
+            "source": "retrieval-service",
+            "target": "evaluation-gate",
+            "data": {
+              "label": "submits cited draft",
+              "relationType": "flow"
+            }
+          }
+        },
+        {
+          "id": "add-evaluation-review-edge",
+          "kind": "add",
+          "targetType": "edge",
+          "targetId": "evaluation-to-review",
+          "summary": "Hand the candidate gate result to the existing human review workspace.",
+          "evidenceIds": ["evaluation-gate-behavior", "human-review-boundary"],
+          "patch": {
+            "source": "evaluation-gate",
+            "target": "human-review",
+            "data": {
+              "label": "holds or hands off",
+              "relationType": "governance"
+            }
+          }
+        }
+      ],
+      "application": null
+    }
+  ]
+}

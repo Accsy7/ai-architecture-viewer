@@ -1,0 +1,18 @@
+{
+  "schemaVersion": "1.0.0",
+  "artifactType": "evidence-manifest",
+  "artifactId": "evidence-manifest-replace-me",
+  "createdAt": "1970-01-01T00:00:00.000Z",
+  "projectRevision": { "kind": "workspace", "value": "uncommitted" },
+  "entries": [
+    {
+      "id": "evidence-replace-me",
+      "path": "src/replace-me.js",
+      "lineStart": 1,
+      "lineEnd": 1,
+      "summary": "Replace with the observed fact.",
+      "contentHash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "basis": "fact"
+    }
+  ]
+}

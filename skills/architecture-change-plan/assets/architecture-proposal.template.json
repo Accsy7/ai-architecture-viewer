@@ -1,0 +1,35 @@
+{
+  "schemaVersion": "1.0.0",
+  "artifactType": "architecture-proposal",
+  "artifactId": "proposal-replace-me",
+  "createdAt": "1970-01-01T00:00:00.000Z",
+  "requestId": "request-replace-me",
+  "baseSnapshotId": "snapshot-replace-me",
+  "title": "Replace with a decision-ready title",
+  "summary": "Replace with the recommended architecture outcome.",
+  "options": [
+    {
+      "id": "option-recommended",
+      "title": "Recommended option",
+      "summary": "Replace with the approach.",
+      "advantages": ["Replace with a material advantage."],
+      "disadvantages": ["Replace with a material disadvantage."]
+    }
+  ],
+  "recommendedOptionId": "option-recommended",
+  "changes": [
+    {
+      "id": "change-replace-me",
+      "kind": "update",
+      "targetType": "node",
+      "targetId": "module-replace-me",
+      "summary": "Replace with the semantic architecture change.",
+      "evidenceIds": ["evidence-replace-me"],
+      "patch": { "data": { "purpose": "Replace with the proposed responsibility." } }
+    }
+  ],
+  "acceptanceCriteria": ["Replace with an observable acceptance criterion."],
+  "risks": [],
+  "decisionsRequired": [],
+  "evidenceManifest": "evidence-manifest.json"
+}

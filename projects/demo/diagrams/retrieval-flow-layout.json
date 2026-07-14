@@ -1,0 +1,34 @@
+{
+  "schemaVersion": "1.1.0",
+  "baseRevision": 0,
+  "lastUpdated": "2026-07-14T00:00:00.000Z",
+  "layouts": {
+    "current": {
+      "positions": {
+        "question-input": { "x": 0, "y": 60 },
+        "retrieval-service": { "x": 380, "y": 60 },
+        "knowledge-index": { "x": 690, "y": 60 },
+        "response-workspace": { "x": 1080, "y": 60 }
+      },
+      "containers": {
+        "question-group": { "x": -80, "y": -80, "width": 340, "height": 330 },
+        "retrieval-group": { "x": 300, "y": -80, "width": 660, "height": 330 },
+        "verification-group": { "x": 1000, "y": -80, "width": 660, "height": 500 }
+      }
+    },
+    "target": {
+      "positions": {
+        "question-input": { "x": 0, "y": 60 },
+        "retrieval-service": { "x": 380, "y": 60 },
+        "knowledge-index": { "x": 690, "y": 60 },
+        "citation-check": { "x": 1080, "y": 60 },
+        "response-workspace": { "x": 1080, "y": 270 }
+      },
+      "containers": {
+        "question-group": { "x": -80, "y": -80, "width": 340, "height": 330 },
+        "retrieval-group": { "x": 300, "y": -80, "width": 660, "height": 330 },
+        "verification-group": { "x": 1000, "y": -80, "width": 660, "height": 500 }
+      }
+    }
+  }
+}

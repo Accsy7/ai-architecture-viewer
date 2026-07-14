@@ -1,0 +1,40 @@
+{
+  "schemaVersion": "1.0.0",
+  "baseRevision": 0,
+  "lastUpdated": "2026-07-14T00:00:00.000Z",
+  "documents": [
+    {
+      "id": "system-brief",
+      "title": "Synthetic system brief",
+      "type": "current_fact",
+      "status": "active",
+      "authority": "source_of_truth",
+      "path": "documents/system-brief.md",
+      "summary": "A fictional baseline for the public demonstration package.",
+      "supersedes": null,
+      "lastVerifiedAt": "2026-07-14T00:00:00.000Z"
+    },
+    {
+      "id": "retrieval-design",
+      "title": "Grounded response design",
+      "type": "technical_spec",
+      "status": "active",
+      "authority": "supporting",
+      "path": "documents/retrieval-design.md",
+      "summary": "Design notes for retrieval and citation handling in the synthetic system.",
+      "supersedes": null,
+      "lastVerifiedAt": "2026-07-14T00:00:00.000Z"
+    },
+    {
+      "id": "evaluation-proposal",
+      "title": "Evaluation gate proposal",
+      "type": "target_design",
+      "status": "draft",
+      "authority": "candidate",
+      "path": "documents/evaluation-proposal.md",
+      "summary": "A fictional candidate change that must be reviewed by a person before publication.",
+      "supersedes": null,
+      "lastVerifiedAt": "2026-07-14T00:00:00.000Z"
+    }
+  ]
+}

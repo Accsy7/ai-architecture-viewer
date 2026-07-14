@@ -1,0 +1,29 @@
+{
+  "schemaVersion": "1.0.0",
+  "baseRevision": 1,
+  "lastUpdated": "2026-07-13T00:00:00.000Z",
+  "documents": [
+    {
+      "id": "alpha-doc",
+      "title": "Alpha 文档",
+      "type": "technical_spec",
+      "status": "active",
+      "authority": "supporting",
+      "path": "documents/alpha.md",
+      "summary": "通用合同测试文档。",
+      "supersedes": null,
+      "lastVerifiedAt": "2026-07-13T00:00:00.000Z"
+    },
+    {
+      "id": "beta-doc",
+      "title": "Beta 文档",
+      "type": "decision",
+      "status": "active",
+      "authority": "source_of_truth",
+      "path": "documents/beta.md",
+      "summary": "通用合同测试决策。",
+      "supersedes": null,
+      "lastVerifiedAt": "2026-07-13T00:00:00.000Z"
+    }
+  ]
+}

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Project Architecture Discovery"
+  short_description: "Create evidence-backed architecture snapshots"
+  default_prompt: "Use $architecture-discovery to inspect this repository and produce a viewer-compatible architecture snapshot."

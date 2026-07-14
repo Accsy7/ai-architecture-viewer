@@ -1,0 +1,4 @@
+interface:
+  display_name: "Architecture Change Planning"
+  short_description: "Turn user intent into reviewable architecture plans"
+  default_prompt: "Use $architecture-change-plan to turn this request into an evidence-backed target architecture proposal."

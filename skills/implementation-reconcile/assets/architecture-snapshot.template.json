@@ -1,0 +1,29 @@
+{
+  "schemaVersion": "1.0.0",
+  "artifactType": "architecture-snapshot",
+  "artifactId": "snapshot-after-implementation",
+  "createdAt": "1970-01-01T00:00:00.000Z",
+  "project": {
+    "name": "replace-me",
+    "revision": { "kind": "workspace", "value": "uncommitted" }
+  },
+  "scope": {
+    "included": ["src"],
+    "excluded": ["node_modules"]
+  },
+  "nodes": [
+    {
+      "id": "module-replace-me",
+      "name": "Replace me",
+      "purpose": "Replace with the implemented responsibility.",
+      "technical": "Replace with observed implementation facts.",
+      "product": "Replace with observed user-facing meaning.",
+      "authorization": "Replace with observed authority boundaries.",
+      "evidenceIds": ["evidence-replace-me"]
+    }
+  ],
+  "edges": [],
+  "assumptions": [],
+  "unknowns": [],
+  "evidenceManifest": "evidence-manifest.json"
+}

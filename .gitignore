@@ -1,0 +1,31 @@
+# Dependencies and generated output
+node_modules/
+dist/
+coverage/
+test-results/
+playwright-report/
+output/
+ai-coding/
+.cache/
+
+# Local runtime files
+*.log
+*.pid
+*.tmp
+*.temp
+npm-debug.log*
+.DS_Store
+
+# Secrets and machine-specific configuration
+.env
+.env.*
+!.env.example
+*.local
+
+# Local project packages are private by default; the synthetic demo opts in.
+/projects/*
+!/projects/demo/
+!/projects/demo/**
+
+# Local-only migration material: retained on this machine, never published.
+docs/MIGRATION.md

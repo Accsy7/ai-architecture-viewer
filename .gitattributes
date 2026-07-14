@@ -1,0 +1,12 @@
+# Keep text files stable across Windows, macOS, and Linux checkouts.
+* text=auto eol=lf
+
+# Common binary assets must never receive line-ending conversion.
+*.gif binary
+*.ico binary
+*.jpeg binary
+*.jpg binary
+*.png binary
+*.webp binary
+*.woff binary
+*.woff2 binary

@@ -1,0 +1,345 @@
+{
+  "schemaVersion": "3.1.0",
+  "meta": {
+    "project": "Synthetic Support Assistant",
+    "title": "Evidence-backed architecture proposal demo",
+    "lastUpdated": "2026-07-14T00:00:00.000Z",
+    "pendingDecision": "Review the proposed evaluation gate before publishing the target architecture.",
+    "viewSummaries": {
+      "current": ["Published synthetic baseline", "Human review is required before a response is sent"],
+      "target": ["A draft evaluation gate is proposed", "The proposal is not published or automatically applied"],
+      "compare": ["One evaluation component and two controlled relationships are proposed"]
+    },
+    "groups": [
+      {
+        "id": "ingress-group",
+        "level": "L1",
+        "group": "Ingress",
+        "label": "Request intake",
+        "description": "Accept and route a fictional support request.",
+        "color": "#edf4ff",
+        "accent": "#5d7ea9",
+        "position": { "x": -80, "y": -80 },
+        "width": 660,
+        "height": 330
+      },
+      {
+        "id": "grounding-group",
+        "level": "L1",
+        "group": "Grounding",
+        "label": "Grounded assistance",
+        "description": "Retrieve knowledge and draft a cited response.",
+        "color": "#edf8f2",
+        "accent": "#56876a",
+        "position": { "x": 650, "y": -80 },
+        "width": 660,
+        "height": 330
+      },
+      {
+        "id": "review-group",
+        "level": "L1",
+        "group": "Review",
+        "label": "Human review",
+        "description": "Keep a person in control of the final response.",
+        "color": "#fff5e9",
+        "accent": "#b77a48",
+        "position": { "x": 1380, "y": -80 },
+        "width": 340,
+        "height": 330
+      }
+    ]
+  },
+  "current": {
+    "published": {
+      "revision": 1,
+      "revisionId": "current-r1",
+      "parentRevisionId": null,
+      "origin": "migration",
+      "restoredFromRevisionId": null,
+      "message": null,
+      "publishedAt": "2026-07-14T00:00:00.000Z",
+      "publishedBy": "user",
+      "graph": {
+        "nodes": [
+          {
+            "id": "request-intake",
+            "type": "architectureNode",
+            "position": { "x": 0, "y": 60 },
+            "width": 260,
+            "height": 150,
+            "data": {
+              "name": "Request intake",
+              "group": "Ingress",
+              "purpose": "Receives a fictional customer support question and creates a reviewable request.",
+              "technical": "Published demo baseline",
+              "product": "Synthetic public example",
+              "authorization": "Accepts only demonstration content.",
+              "documentRefs": ["system-brief"],
+              "focus": true
+            }
+          },
+          {
+            "id": "policy-router",
+            "type": "architectureNode",
+            "position": { "x": 320, "y": 60 },
+            "width": 260,
+            "height": 150,
+            "data": {
+              "name": "Policy router",
+              "group": "Ingress",
+              "purpose": "Routes a request to the grounded-assistance path or a person.",
+              "technical": "Published demo baseline",
+              "product": "Synthetic public example",
+              "authorization": "May route but cannot send a final answer.",
+              "documentRefs": ["system-brief"]
+            }
+          },
+          {
+            "id": "retrieval-service",
+            "type": "architectureNode",
+            "position": { "x": 730, "y": 60 },
+            "width": 260,
+            "height": 150,
+            "data": {
+              "name": "Retrieval service",
+              "group": "Grounding",
+              "purpose": "Finds synthetic knowledge snippets for a grounded response draft.",
+              "technical": "Published demo baseline",
+              "product": "Synthetic public example",
+              "authorization": "Reads only the synthetic knowledge index.",
+              "aiCollaboration": "Retrieval context for an assistant",
+              "relatedDiagramId": "retrieval-flow",
+              "relatedNodeId": "retrieval-service",
+              "documentRefs": ["retrieval-design"]
+            }
+          },
+          {
+            "id": "knowledge-index",
+            "type": "architectureNode",
+            "position": { "x": 1040, "y": 60 },
+            "width": 260,
+            "height": 150,
+            "data": {
+              "name": "Knowledge index",
+              "group": "Grounding",
+              "purpose": "Stores fictional help-center material used only by this sample.",
+              "technical": "Published demo baseline",
+              "product": "Synthetic public example",
+              "authorization": "Read-only index; no customer records are stored.",
+              "documentRefs": ["retrieval-design"]
+            }
+          },
+          {
+            "id": "human-review",
+            "type": "architectureNode",
+            "position": { "x": 1420, "y": 60 },
+            "width": 260,
+            "height": 150,
+            "data": {
+              "name": "Human review workspace",
+              "group": "Review",
+              "purpose": "Lets a person inspect evidence and approve or rewrite a response.",
+              "technical": "Published demo baseline",
+              "product": "Synthetic public example",
+              "authorization": "A person remains responsible for the final response.",
+              "documentRefs": ["system-brief"]
+            }
+          }
+        ],
+        "edges": [
+          {
+            "id": "request-to-router",
+            "source": "request-intake",
+            "target": "policy-router",
+            "data": { "label": "creates request", "relationType": "flow", "controlledBoundaryPosture": "none", "routingMode": "auto" }
+          },
+          {
+            "id": "router-to-retrieval",
+            "source": "policy-router",
+            "target": "retrieval-service",
+            "data": { "label": "routes grounded query", "relationType": "flow", "controlledBoundaryPosture": "controlled", "routingMode": "auto" }
+          },
+          {
+            "id": "retrieval-to-index",
+            "source": "retrieval-service",
+            "target": "knowledge-index",
+            "data": { "label": "reads approved snippets", "relationType": "reference", "controlledBoundaryPosture": "controlled", "routingMode": "auto" }
+          },
+          {
+            "id": "router-to-review",
+            "source": "policy-router",
+            "target": "human-review",
+            "data": { "label": "hands off draft", "relationType": "handoff", "controlledBoundaryPosture": "controlled", "routingMode": "auto" }
+          }
+        ]
+      }
+    },
+    "draft": null,
+    "history": []
+  },
+  "target": {
+    "published": {
+      "revision": 0,
+      "revisionId": "target-r0",
+      "parentRevisionId": null,
+      "origin": "migration",
+      "restoredFromRevisionId": null,
+      "message": null,
+      "publishedAt": null,
+      "publishedBy": null,
+      "graph": { "nodes": [], "edges": [] }
+    },
+    "draft": {
+      "draftId": "target-draft-r0",
+      "draftRevision": 1,
+      "baseRevision": 0,
+      "baseRevisionId": "target-r0",
+      "savedAt": "2026-07-14T00:00:00.000Z",
+      "graph": {
+        "nodes": [
+          {
+            "id": "request-intake",
+            "type": "architectureNode",
+            "position": { "x": 0, "y": 60 },
+            "width": 260,
+            "height": 150,
+            "data": {
+              "name": "Request intake",
+              "group": "Ingress",
+              "purpose": "Receives a fictional customer support question and creates a reviewable request.",
+              "technical": "Target draft",
+              "horizon": "近期",
+              "product": "Synthetic public example",
+              "authorization": "Accepts only demonstration content.",
+              "documentRefs": ["system-brief"],
+              "focus": true
+            }
+          },
+          {
+            "id": "policy-router",
+            "type": "architectureNode",
+            "position": { "x": 320, "y": 60 },
+            "width": 260,
+            "height": 150,
+            "data": {
+              "name": "Policy router",
+              "group": "Ingress",
+              "purpose": "Routes a request to the grounded-assistance path or a person.",
+              "technical": "Target draft",
+              "horizon": "近期",
+              "product": "Synthetic public example",
+              "authorization": "May route but cannot send a final answer.",
+              "documentRefs": ["system-brief"]
+            }
+          },
+          {
+            "id": "retrieval-service",
+            "type": "architectureNode",
+            "position": { "x": 730, "y": 60 },
+            "width": 260,
+            "height": 150,
+            "data": {
+              "name": "Retrieval service",
+              "group": "Grounding",
+              "purpose": "Finds synthetic knowledge snippets for a grounded response draft.",
+              "technical": "Target draft",
+              "horizon": "近期",
+              "product": "Synthetic public example",
+              "authorization": "Reads only the synthetic knowledge index.",
+              "aiCollaboration": "Retrieval context for an assistant",
+              "relatedDiagramId": "retrieval-flow",
+              "relatedNodeId": "retrieval-service",
+              "documentRefs": ["retrieval-design"]
+            }
+          },
+          {
+            "id": "knowledge-index",
+            "type": "architectureNode",
+            "position": { "x": 1040, "y": 60 },
+            "width": 260,
+            "height": 150,
+            "data": {
+              "name": "Knowledge index",
+              "group": "Grounding",
+              "purpose": "Stores fictional help-center material used only by this sample.",
+              "technical": "Target draft",
+              "horizon": "近期",
+              "product": "Synthetic public example",
+              "authorization": "Read-only index; no customer records are stored.",
+              "documentRefs": ["retrieval-design"]
+            }
+          },
+          {
+            "id": "evaluation-gate",
+            "type": "architectureNode",
+            "position": { "x": 1080, "y": 250 },
+            "width": 260,
+            "height": 150,
+            "data": {
+              "name": "Evaluation gate",
+              "group": "Grounding",
+              "purpose": "Scores grounding and safety checks before a response reaches human review.",
+              "technical": "Candidate AI proposal",
+              "horizon": "近期",
+              "product": "Awaiting human review",
+              "authorization": "May recommend a hold; cannot approve or send a response.",
+              "aiCollaboration": "Evidence-based candidate change",
+              "documentRefs": ["evaluation-proposal"],
+              "focus": true
+            }
+          },
+          {
+            "id": "human-review",
+            "type": "architectureNode",
+            "position": { "x": 1420, "y": 60 },
+            "width": 260,
+            "height": 150,
+            "data": {
+              "name": "Human review workspace",
+              "group": "Review",
+              "purpose": "Lets a person inspect evidence and approve or rewrite a response.",
+              "technical": "Target draft",
+              "horizon": "近期",
+              "product": "Synthetic public example",
+              "authorization": "A person remains responsible for the final response.",
+              "documentRefs": ["system-brief"]
+            }
+          }
+        ],
+        "edges": [
+          {
+            "id": "request-to-router",
+            "source": "request-intake",
+            "target": "policy-router",
+            "data": { "label": "creates request", "relationType": "flow", "controlledBoundaryPosture": "none", "routingMode": "auto" }
+          },
+          {
+            "id": "router-to-retrieval",
+            "source": "policy-router",
+            "target": "retrieval-service",
+            "data": { "label": "routes grounded query", "relationType": "flow", "controlledBoundaryPosture": "controlled", "routingMode": "auto" }
+          },
+          {
+            "id": "retrieval-to-index",
+            "source": "retrieval-service",
+            "target": "knowledge-index",
+            "data": { "label": "reads approved snippets", "relationType": "reference", "controlledBoundaryPosture": "controlled", "routingMode": "auto" }
+          },
+          {
+            "id": "retrieval-to-evaluation",
+            "source": "retrieval-service",
+            "target": "evaluation-gate",
+            "data": { "label": "submits cited draft", "relationType": "flow", "controlledBoundaryPosture": "controlled", "routingMode": "auto" }
+          },
+          {
+            "id": "evaluation-to-review",
+            "source": "evaluation-gate",
+            "target": "human-review",
+            "data": { "label": "holds or hands off", "relationType": "governance", "controlledBoundaryPosture": "controlled", "routingMode": "auto" }
+          }
+        ]
+      }
+    },
+    "history": []
+  }
+}

@@ -1,0 +1,135 @@
+{
+  "schemaVersion": "2.0.0",
+  "meta": {
+    "title": "Generic Architecture Fixture",
+    "lastUpdated": "2026-07-13T00:00:00.000Z"
+  },
+  "current": {
+    "published": {
+      "version": 1,
+      "publishedAt": "2026-07-13T00:00:00.000Z",
+      "publishedBy": "user",
+      "nodes": [
+        {
+          "id": "input-module",
+          "name": "输入模块",
+          "group": "输入",
+          "purpose": "接收经过确认的输入。",
+          "technical": "已实现",
+          "product": "当前模块",
+          "authorization": "只处理项目授权范围内的数据。",
+          "x": 20,
+          "y": 200
+        },
+        {
+          "id": "processing-module",
+          "name": "处理模块",
+          "group": "处理",
+          "purpose": "执行通用处理。",
+          "technical": "已实现",
+          "product": "当前模块",
+          "authorization": "不越过已确认边界。",
+          "x": 60,
+          "y": 200
+        },
+        {
+          "id": "output-module",
+          "name": "输出模块",
+          "group": "输出",
+          "purpose": "提供可核对的输出。",
+          "technical": "已实现",
+          "product": "当前模块",
+          "authorization": "输出需要人工核对。",
+          "x": 100,
+          "y": 200
+        }
+      ],
+      "edges": [
+        {
+          "id": "edge-input-processing",
+          "from": "input-module",
+          "to": "processing-module",
+          "label": "提供输入",
+          "style": "support"
+        },
+        {
+          "id": "edge-processing-output",
+          "from": "processing-module",
+          "to": "output-module",
+          "label": "受控输出",
+          "style": "blocked"
+        }
+      ]
+    },
+    "draft": null,
+    "history": []
+  },
+  "target": {
+    "published": {
+      "version": 0,
+      "publishedAt": null,
+      "publishedBy": null,
+      "nodes": [],
+      "edges": []
+    },
+    "draft": {
+      "baseVersion": 0,
+      "savedAt": "2026-07-13T00:00:00.000Z",
+      "nodes": [
+        {
+          "id": "input-module",
+          "name": "输入模块",
+          "group": "输入",
+          "purpose": "接收经过确认的输入。",
+          "technical": "目标实现",
+          "product": "目标模块",
+          "authorization": "只处理项目授权范围内的数据。",
+          "horizon": "近期",
+          "x": 20,
+          "y": 500
+        },
+        {
+          "id": "processing-module",
+          "name": "处理模块",
+          "group": "处理",
+          "purpose": "执行通用处理。",
+          "technical": "目标实现",
+          "product": "目标模块",
+          "authorization": "不越过已确认边界。",
+          "horizon": "近期",
+          "x": 60,
+          "y": 500
+        },
+        {
+          "id": "output-module",
+          "name": "输出模块",
+          "group": "输出",
+          "purpose": "提供可核对的输出。",
+          "technical": "目标实现",
+          "product": "目标模块",
+          "authorization": "输出需要人工核对。",
+          "horizon": "近期",
+          "x": 100,
+          "y": 500
+        }
+      ],
+      "edges": [
+        {
+          "id": "edge-input-processing",
+          "from": "input-module",
+          "to": "processing-module",
+          "label": "提供输入",
+          "style": "support"
+        },
+        {
+          "id": "edge-processing-output",
+          "from": "processing-module",
+          "to": "output-module",
+          "label": "受控输出",
+          "style": "blocked"
+        }
+      ]
+    },
+    "history": []
+  }
+}

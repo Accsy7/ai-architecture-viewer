@@ -1,0 +1,291 @@
+{
+  "schemaVersion": "3.1.0",
+  "meta": {
+    "project": "Synthetic Support Assistant",
+    "title": "Grounded response flow",
+    "lastUpdated": "2026-07-14T00:00:00.000Z",
+    "pendingDecision": "Review whether the candidate citation check should become part of the published flow.",
+    "groups": [
+      {
+        "id": "question-group",
+        "level": "L2",
+        "group": "Question",
+        "label": "Question preparation",
+        "description": "A fictional support question becomes a retrieval request.",
+        "color": "#edf4ff",
+        "accent": "#5d7ea9",
+        "position": { "x": -80, "y": -80 },
+        "width": 340,
+        "height": 330
+      },
+      {
+        "id": "retrieval-group",
+        "level": "L2",
+        "group": "Retrieval",
+        "label": "Grounding",
+        "description": "Retrieve approved fictional material for the assistant.",
+        "color": "#edf8f2",
+        "accent": "#56876a",
+        "position": { "x": 300, "y": -80 },
+        "width": 660,
+        "height": 330
+      },
+      {
+        "id": "verification-group",
+        "level": "L2",
+        "group": "Verification",
+        "label": "Verification and review",
+        "description": "Check citations before a person reviews the draft.",
+        "color": "#fff5e9",
+        "accent": "#b77a48",
+        "position": { "x": 1000, "y": -80 },
+        "width": 660,
+        "height": 500
+      }
+    ]
+  },
+  "current": {
+    "published": {
+      "revision": 1,
+      "revisionId": "current-r1",
+      "parentRevisionId": null,
+      "origin": "migration",
+      "restoredFromRevisionId": null,
+      "message": null,
+      "publishedAt": "2026-07-14T00:00:00.000Z",
+      "publishedBy": "user",
+      "graph": {
+        "nodes": [
+          {
+            "id": "question-input",
+            "type": "architectureNode",
+            "position": { "x": 0, "y": 60 },
+            "width": 260,
+            "height": 150,
+            "data": {
+              "name": "Question preparation",
+              "group": "Question",
+              "purpose": "Normalizes a fictional support question for retrieval.",
+              "technical": "Published demo baseline",
+              "product": "Synthetic public example",
+              "authorization": "Does not retain personal data.",
+              "documentRefs": ["system-brief"]
+            }
+          },
+          {
+            "id": "retrieval-service",
+            "type": "architectureNode",
+            "position": { "x": 380, "y": 60 },
+            "width": 260,
+            "height": 150,
+            "data": {
+              "name": "Retrieval service",
+              "group": "Retrieval",
+              "purpose": "Builds a grounded context from synthetic help-center snippets.",
+              "technical": "Published demo baseline",
+              "product": "Synthetic public example",
+              "authorization": "Reads only the local synthetic index.",
+              "aiCollaboration": "Provides evidence context",
+              "documentRefs": ["retrieval-design"],
+              "focus": true
+            }
+          },
+          {
+            "id": "knowledge-index",
+            "type": "architectureNode",
+            "position": { "x": 690, "y": 60 },
+            "width": 260,
+            "height": 150,
+            "data": {
+              "name": "Knowledge index",
+              "group": "Retrieval",
+              "purpose": "Represents curated fictional material available to the retrieval service.",
+              "technical": "Published demo baseline",
+              "product": "Synthetic public example",
+              "authorization": "Read-only source material.",
+              "documentRefs": ["retrieval-design"]
+            }
+          },
+          {
+            "id": "response-workspace",
+            "type": "architectureNode",
+            "position": { "x": 1080, "y": 60 },
+            "width": 260,
+            "height": 150,
+            "data": {
+              "name": "Response workspace",
+              "group": "Verification",
+              "purpose": "Shows the cited draft to a person for review and editing.",
+              "technical": "Published demo baseline",
+              "product": "Synthetic public example",
+              "authorization": "A person controls the final message.",
+              "documentRefs": ["system-brief"]
+            }
+          }
+        ],
+        "edges": [
+          {
+            "id": "question-to-retrieval",
+            "source": "question-input",
+            "target": "retrieval-service",
+            "data": { "label": "creates grounded query", "relationType": "flow", "controlledBoundaryPosture": "none", "routingMode": "auto" }
+          },
+          {
+            "id": "retrieval-to-index",
+            "source": "retrieval-service",
+            "target": "knowledge-index",
+            "data": { "label": "finds supporting snippets", "relationType": "reference", "controlledBoundaryPosture": "controlled", "routingMode": "auto" }
+          },
+          {
+            "id": "retrieval-to-workspace",
+            "source": "retrieval-service",
+            "target": "response-workspace",
+            "data": { "label": "hands off cited draft", "relationType": "handoff", "controlledBoundaryPosture": "controlled", "routingMode": "auto" }
+          }
+        ]
+      }
+    },
+    "draft": null,
+    "history": []
+  },
+  "target": {
+    "published": {
+      "revision": 0,
+      "revisionId": "target-r0",
+      "parentRevisionId": null,
+      "origin": "migration",
+      "restoredFromRevisionId": null,
+      "message": null,
+      "publishedAt": null,
+      "publishedBy": null,
+      "graph": { "nodes": [], "edges": [] }
+    },
+    "draft": {
+      "draftId": "target-draft-r0",
+      "draftRevision": 1,
+      "baseRevision": 0,
+      "baseRevisionId": "target-r0",
+      "savedAt": "2026-07-14T00:00:00.000Z",
+      "graph": {
+        "nodes": [
+          {
+            "id": "question-input",
+            "type": "architectureNode",
+            "position": { "x": 0, "y": 60 },
+            "width": 260,
+            "height": 150,
+            "data": {
+              "name": "Question preparation",
+              "group": "Question",
+              "purpose": "Normalizes a fictional support question for retrieval.",
+              "technical": "Target draft",
+              "horizon": "近期",
+              "product": "Synthetic public example",
+              "authorization": "Does not retain personal data.",
+              "documentRefs": ["system-brief"]
+            }
+          },
+          {
+            "id": "retrieval-service",
+            "type": "architectureNode",
+            "position": { "x": 380, "y": 60 },
+            "width": 260,
+            "height": 150,
+            "data": {
+              "name": "Retrieval service",
+              "group": "Retrieval",
+              "purpose": "Builds a grounded context from synthetic help-center snippets.",
+              "technical": "Target draft",
+              "horizon": "近期",
+              "product": "Synthetic public example",
+              "authorization": "Reads only the local synthetic index.",
+              "aiCollaboration": "Provides evidence context",
+              "documentRefs": ["retrieval-design"],
+              "focus": true
+            }
+          },
+          {
+            "id": "knowledge-index",
+            "type": "architectureNode",
+            "position": { "x": 690, "y": 60 },
+            "width": 260,
+            "height": 150,
+            "data": {
+              "name": "Knowledge index",
+              "group": "Retrieval",
+              "purpose": "Represents curated fictional material available to the retrieval service.",
+              "technical": "Target draft",
+              "horizon": "近期",
+              "product": "Synthetic public example",
+              "authorization": "Read-only source material.",
+              "documentRefs": ["retrieval-design"]
+            }
+          },
+          {
+            "id": "citation-check",
+            "type": "architectureNode",
+            "position": { "x": 1080, "y": 60 },
+            "width": 260,
+            "height": 150,
+            "data": {
+              "name": "Citation check",
+              "group": "Verification",
+              "purpose": "Checks that a response draft has supporting synthetic evidence before review.",
+              "technical": "Candidate AI proposal",
+              "horizon": "近期",
+              "product": "Awaiting human review",
+              "authorization": "Can flag missing evidence but cannot approve a response.",
+              "aiCollaboration": "Candidate verification step",
+              "documentRefs": ["evaluation-proposal"],
+              "focus": true
+            }
+          },
+          {
+            "id": "response-workspace",
+            "type": "architectureNode",
+            "position": { "x": 1080, "y": 270 },
+            "width": 260,
+            "height": 150,
+            "data": {
+              "name": "Response workspace",
+              "group": "Verification",
+              "purpose": "Shows the cited draft to a person for review and editing.",
+              "technical": "Target draft",
+              "horizon": "近期",
+              "product": "Synthetic public example",
+              "authorization": "A person controls the final message.",
+              "documentRefs": ["system-brief"]
+            }
+          }
+        ],
+        "edges": [
+          {
+            "id": "question-to-retrieval",
+            "source": "question-input",
+            "target": "retrieval-service",
+            "data": { "label": "creates grounded query", "relationType": "flow", "controlledBoundaryPosture": "none", "routingMode": "auto" }
+          },
+          {
+            "id": "retrieval-to-index",
+            "source": "retrieval-service",
+            "target": "knowledge-index",
+            "data": { "label": "finds supporting snippets", "relationType": "reference", "controlledBoundaryPosture": "controlled", "routingMode": "auto" }
+          },
+          {
+            "id": "retrieval-to-citation-check",
+            "source": "retrieval-service",
+            "target": "citation-check",
+            "data": { "label": "submits cited draft", "relationType": "flow", "controlledBoundaryPosture": "controlled", "routingMode": "auto" }
+          },
+          {
+            "id": "citation-check-to-workspace",
+            "source": "citation-check",
+            "target": "response-workspace",
+            "data": { "label": "holds or hands off", "relationType": "governance", "controlledBoundaryPosture": "controlled", "routingMode": "auto" }
+          }
+        ]
+      }
+    },
+    "history": []
+  }
+}

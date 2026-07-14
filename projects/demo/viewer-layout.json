@@ -1,0 +1,36 @@
+{
+  "schemaVersion": "1.1.0",
+  "baseRevision": 0,
+  "lastUpdated": "2026-07-14T00:00:00.000Z",
+  "layouts": {
+    "current": {
+      "positions": {
+        "request-intake": { "x": 0, "y": 60 },
+        "policy-router": { "x": 320, "y": 60 },
+        "retrieval-service": { "x": 730, "y": 60 },
+        "knowledge-index": { "x": 1040, "y": 60 },
+        "human-review": { "x": 1420, "y": 60 }
+      },
+      "containers": {
+        "ingress-group": { "x": -80, "y": -80, "width": 660, "height": 330 },
+        "grounding-group": { "x": 650, "y": -80, "width": 660, "height": 330 },
+        "review-group": { "x": 1380, "y": -80, "width": 340, "height": 330 }
+      }
+    },
+    "target": {
+      "positions": {
+        "request-intake": { "x": 0, "y": 60 },
+        "policy-router": { "x": 320, "y": 60 },
+        "retrieval-service": { "x": 730, "y": 60 },
+        "knowledge-index": { "x": 1040, "y": 60 },
+        "evaluation-gate": { "x": 1080, "y": 250 },
+        "human-review": { "x": 1420, "y": 60 }
+      },
+      "containers": {
+        "ingress-group": { "x": -80, "y": -80, "width": 660, "height": 330 },
+        "grounding-group": { "x": 650, "y": -80, "width": 760, "height": 500 },
+        "review-group": { "x": 1380, "y": -80, "width": 340, "height": 330 }
+      }
+    }
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "name": "ai-architecture-viewer",
+  "version": "0.1.0",
+  "description": "A local-first visual workbench for reviewing governed AI architecture proposals.",
+  "private": true,
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "keywords": [
+    "ai",
+    "architecture",
+    "governance",
+    "visualization",
+    "react"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "prestart": "npm run build",
+    "start": "node server.js",
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "check": "vite build",
+    "test": "npm run test:contracts && npm run test:instance",
+    "test:contracts": "node --test test/contracts.test.cjs test/server.test.cjs test/analysis-contract.test.cjs test/analysis-server.test.cjs test/ai-coding-exchange.test.cjs",
+    "protocol:validate": "node protocol/validate-artifact.cjs",
+    "test:instance": "node --test test/project-instance.test.cjs"
+  },
+  "dependencies": {
+    "@xyflow/react": "12.11.2",
+    "react": "19.2.7",
+    "react-dom": "19.2.7"
+  },
+  "devDependencies": {
+    "vite": "8.1.4"
+  }
+}

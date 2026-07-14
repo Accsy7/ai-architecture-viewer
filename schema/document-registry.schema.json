@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://architecture-viewer.local/schema/document-registry-1.0.0.json",
+  "title": "AI Architecture Viewer Document Registry",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "baseRevision", "lastUpdated", "documents"],
+  "properties": {
+    "schemaVersion": { "const": "1.0.0" },
+    "baseRevision": { "type": "integer", "minimum": 0 },
+    "lastUpdated": { "type": "string", "format": "date-time" },
+    "documents": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/document" }
+    }
+  },
+  "$defs": {
+    "stableId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,79}$" },
+    "document": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "type", "status", "authority", "path", "summary", "supersedes", "lastVerifiedAt"],
+      "properties": {
+        "id": { "$ref": "#/$defs/stableId" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "type": { "enum": ["current_fact", "target_design", "technical_spec", "decision", "work_package", "acceptance_evidence", "risk_question", "other"] },
+        "status": { "enum": ["active", "draft", "superseded", "archived"] },
+        "authority": { "enum": ["source_of_truth", "supporting", "reference", "candidate"] },
+        "path": { "type": "string", "minLength": 1, "maxLength": 500, "pattern": "^[^\\\\\\u0000]+\\.md$" },
+        "summary": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "supersedes": { "anyOf": [{ "$ref": "#/$defs/stableId" }, { "type": "null" }] },
+        "lastVerifiedAt": { "type": "string", "format": "date-time" }
+      }
+    }
+  }
+}

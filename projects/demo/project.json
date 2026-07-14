@@ -1,0 +1,15 @@
+{
+  "schemaVersion": "1.0.0",
+  "id": "demo",
+  "name": "Synthetic Support Assistant",
+  "default": true,
+  "viewerVersion": "0.1.0",
+  "snapshot": {
+    "createdAt": "2026-07-14T00:00:00.000Z",
+    "sourceDirectory": null,
+    "documentCount": 3,
+    "documentsAreReadOnlySnapshots": false,
+    "continuousSync": false,
+    "classification": "synthetic-public-demo"
+  }
+}

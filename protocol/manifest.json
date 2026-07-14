@@ -1,0 +1,13 @@
+{
+  "schemaVersion": "1.0.0",
+  "name": "AI Architecture Viewer Coding Exchange",
+  "description": "A vendor-neutral artifact contract for handing architecture context between users, coding agents, and the viewer.",
+  "schema": "ai-coding-exchange.schema.json",
+  "artifacts": [
+    { "type": "task-request", "fileName": "task-request.json", "producedBy": "architecture-change-plan" },
+    { "type": "architecture-snapshot", "fileName": "architecture-snapshot.json", "producedBy": "architecture-discovery or implementation-reconcile" },
+    { "type": "architecture-proposal", "fileName": "architecture-proposal.json", "producedBy": "architecture-change-plan" },
+    { "type": "evidence-manifest", "fileName": "evidence-manifest.json", "producedBy": "all skills" },
+    { "type": "implementation-report", "fileName": "implementation-report.json", "producedBy": "implementation-reconcile" }
+  ]
+}

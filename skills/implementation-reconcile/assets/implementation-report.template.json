@@ -1,0 +1,29 @@
+{
+  "schemaVersion": "1.0.0",
+  "artifactType": "implementation-report",
+  "artifactId": "report-replace-me",
+  "createdAt": "1970-01-01T00:00:00.000Z",
+  "requestId": "request-replace-me",
+  "approvedProposalId": "proposal-replace-me",
+  "status": "partial",
+  "resultingRevision": { "kind": "workspace", "value": "uncommitted" },
+  "changedFiles": ["src/replace-me.js"],
+  "tests": [
+    {
+      "command": "replace-with-test-command",
+      "outcome": "not-run",
+      "summary": "Explain why the check was not run."
+    }
+  ],
+  "acceptanceResults": [
+    {
+      "criterion": "Replace with the approved criterion.",
+      "status": "unverified",
+      "evidenceIds": []
+    }
+  ],
+  "drift": [],
+  "unresolved": ["Replace with the remaining issue."],
+  "evidenceManifest": "evidence-manifest.json",
+  "resultingSnapshot": "architecture-snapshot.json"
+}

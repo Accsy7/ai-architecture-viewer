@@ -1,0 +1,187 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://architecture-viewer.local/schema/architecture-state-3.1.0.json",
+  "title": "AI Architecture Viewer State",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "meta", "current", "target"],
+  "properties": {
+    "schemaVersion": { "const": "3.1.0" },
+    "meta": { "type": "object" },
+    "current": { "$ref": "#/$defs/lane" },
+    "target": { "$ref": "#/$defs/lane" }
+  },
+  "$defs": {
+    "stableId": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,79}$"
+    },
+    "nullableStableId": {
+      "anyOf": [{ "$ref": "#/$defs/stableId" }, { "type": "null" }]
+    },
+    "nullableText": {
+      "anyOf": [{ "type": "string", "minLength": 1, "maxLength": 500 }, { "type": "null" }]
+    },
+    "nullableTimestamp": {
+      "anyOf": [{ "type": "string", "format": "date-time" }, { "type": "null" }]
+    },
+    "position": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y"],
+      "properties": {
+        "x": { "type": "number", "minimum": -1000000, "maximum": 1000000 },
+        "y": { "type": "number", "minimum": -1000000, "maximum": 1000000 }
+      }
+    },
+    "nodeData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "group", "purpose", "technical", "product", "authorization"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "group": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "purpose": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "technical": { "type": "string", "minLength": 1, "maxLength": 240 },
+        "product": { "type": "string", "minLength": 1, "maxLength": 240 },
+        "authorization": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "horizon": { "enum": ["近期", "后续", "远期"] },
+        "focus": { "type": "boolean" },
+        "buildStrategy": { "enum": ["自建", "现有自建", "外部集成", "待决定"] },
+        "humanConfirmed": { "type": "boolean" },
+        "confirmationNote": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "confirmedAt": { "type": "string", "format": "date-time" },
+        "aiCollaboration": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "relatedDiagramId": { "$ref": "#/$defs/stableId" },
+        "relatedNodeId": { "$ref": "#/$defs/stableId" },
+        "documentRefs": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/stableId" }
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "humanConfirmed": { "const": true } }, "required": ["humanConfirmed"] },
+          "then": { "required": ["confirmationNote", "confirmedAt"] }
+        },
+        {
+          "if": { "required": ["relatedNodeId"] },
+          "then": { "required": ["relatedDiagramId"] }
+        }
+      ]
+    },
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type", "position", "width", "height", "data"],
+      "properties": {
+        "id": { "$ref": "#/$defs/stableId" },
+        "type": { "const": "architectureNode" },
+        "position": { "$ref": "#/$defs/position" },
+        "width": { "type": "number", "minimum": 160, "maximum": 720 },
+        "height": { "type": "number", "minimum": 96, "maximum": 520 },
+        "data": { "$ref": "#/$defs/nodeData" }
+      }
+    },
+    "edgeData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label", "relationType", "controlledBoundaryPosture", "routingMode"],
+      "properties": {
+        "label": { "type": "string", "minLength": 1, "maxLength": 240 },
+        "relationType": { "enum": ["flow", "support", "reference", "governance", "handoff"] },
+        "controlledBoundaryPosture": { "enum": ["none", "controlled", "blocked"] },
+        "routingMode": { "enum": ["auto", "manual"] },
+        "sourcePort": { "enum": ["top", "right", "bottom", "left"] },
+        "targetPort": { "enum": ["top", "right", "bottom", "left"] },
+        "waypoints": {
+          "type": "array",
+          "maxItems": 24,
+          "items": { "$ref": "#/$defs/position" }
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "routingMode": { "const": "manual" } } },
+          "then": { "required": ["sourcePort", "targetPort"] }
+        },
+        {
+          "if": { "properties": { "routingMode": { "const": "auto" } } },
+          "then": {
+            "not": {
+              "anyOf": [
+                { "required": ["sourcePort"] },
+                { "required": ["targetPort"] },
+                { "required": ["waypoints"] }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "edge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "source", "target", "data"],
+      "properties": {
+        "id": { "$ref": "#/$defs/stableId" },
+        "source": { "$ref": "#/$defs/stableId" },
+        "target": { "$ref": "#/$defs/stableId" },
+        "type": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "data": { "$ref": "#/$defs/edgeData" }
+      }
+    },
+    "graph": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["nodes", "edges"],
+      "properties": {
+        "nodes": { "type": "array", "maxItems": 200, "items": { "$ref": "#/$defs/node" } },
+        "edges": { "type": "array", "maxItems": 1000, "items": { "$ref": "#/$defs/edge" } }
+      }
+    },
+    "revision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "revision", "revisionId", "parentRevisionId", "origin", "restoredFromRevisionId",
+        "message", "publishedAt", "publishedBy", "graph"
+      ],
+      "properties": {
+        "revision": { "type": "integer", "minimum": 0 },
+        "revisionId": { "$ref": "#/$defs/stableId" },
+        "parentRevisionId": { "$ref": "#/$defs/nullableStableId" },
+        "origin": { "enum": ["migration", "publish", "restore"] },
+        "restoredFromRevisionId": { "$ref": "#/$defs/nullableStableId" },
+        "message": { "$ref": "#/$defs/nullableText" },
+        "publishedAt": { "$ref": "#/$defs/nullableTimestamp" },
+        "publishedBy": { "anyOf": [{ "const": "user" }, { "type": "null" }] },
+        "graph": { "$ref": "#/$defs/graph" }
+      }
+    },
+    "draft": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["draftId", "draftRevision", "baseRevision", "baseRevisionId", "savedAt", "graph"],
+      "properties": {
+        "draftId": { "$ref": "#/$defs/stableId" },
+        "draftRevision": { "type": "integer", "minimum": 1 },
+        "baseRevision": { "type": "integer", "minimum": 0 },
+        "baseRevisionId": { "$ref": "#/$defs/stableId" },
+        "savedAt": { "type": "string", "format": "date-time" },
+        "graph": { "$ref": "#/$defs/graph" }
+      }
+    },
+    "lane": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["published", "draft", "history"],
+      "properties": {
+        "published": { "$ref": "#/$defs/revision" },
+        "draft": { "anyOf": [{ "$ref": "#/$defs/draft" }, { "type": "null" }] },
+        "history": { "type": "array", "items": { "$ref": "#/$defs/revision" } }
+      }
+    }
+  }
+}

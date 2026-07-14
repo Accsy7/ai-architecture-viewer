@@ -1,0 +1,31 @@
+{
+  "schemaVersion": "1.0.0",
+  "projectId": "demo",
+  "projectName": "Synthetic Support Assistant",
+  "viewerName": "AI Architecture Viewer",
+  "eyebrow": "PUBLIC MVP · SYNTHETIC DEMO",
+  "scopeNote": "A fictional support assistant used to demonstrate evidence-backed architecture proposals. No customer, production, or personal data is included.",
+  "defaultFocusNodeId": "request-intake",
+  "views": {
+    "current": {
+      "label": "Current architecture",
+      "description": "Inspect the published baseline and its evidence."
+    },
+    "target": {
+      "label": "Target draft",
+      "description": "Review the proposed architecture before it can be published."
+    },
+    "compare": {
+      "label": "Compare",
+      "description": "See the structural and semantic differences between baseline and draft."
+    }
+  },
+  "nodeFields": [
+    { "key": "group", "label": "Architecture area" },
+    { "key": "purpose", "label": "Purpose", "multiline": true },
+    { "key": "technical", "label": "Technical state", "tone": "technical" },
+    { "key": "product", "label": "Product state", "tone": "product" },
+    { "key": "authorization", "label": "Control boundary", "tone": "authorization" },
+    { "key": "aiCollaboration", "label": "AI role", "tone": "ai", "optional": true }
+  ]
+}

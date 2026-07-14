@@ -1,0 +1,48 @@
+{
+  "schemaVersion": "1.0.0",
+  "defaultDiagramId": "system-overview",
+  "diagrams": [
+    {
+      "id": "system-overview",
+      "title": "Support assistant overview",
+      "description": "The fictional end-to-end support assistant used by this public demo.",
+      "viewpoint": "system-context",
+      "level": "system",
+      "parentDiagramId": null,
+      "ownerNodeId": null,
+      "defaultFocusNodeId": "request-intake",
+      "navigation": {
+        "sectionId": "system",
+        "sectionLabel": "System architecture",
+        "sectionOrder": 10,
+        "label": "Overview",
+        "order": 10,
+        "sectionRoot": true,
+        "menuVisible": true
+      },
+      "stateFile": "state.json",
+      "layoutFile": "viewer-layout.json"
+    },
+    {
+      "id": "retrieval-flow",
+      "title": "Grounded response flow",
+      "description": "A drill-down of retrieval, citation checking, and assisted response drafting.",
+      "viewpoint": "retrieval-flow",
+      "level": "container",
+      "parentDiagramId": "system-overview",
+      "ownerNodeId": "retrieval-service",
+      "defaultFocusNodeId": "retrieval-service",
+      "navigation": {
+        "sectionId": "system",
+        "sectionLabel": "System architecture",
+        "sectionOrder": 10,
+        "label": "Grounded response flow",
+        "order": 20,
+        "sectionRoot": false,
+        "menuVisible": true
+      },
+      "stateFile": "diagrams/retrieval-flow.json",
+      "layoutFile": "diagrams/retrieval-flow-layout.json"
+    }
+  ]
+}

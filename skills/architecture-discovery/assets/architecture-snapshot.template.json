@@ -1,0 +1,29 @@
+{
+  "schemaVersion": "1.0.0",
+  "artifactType": "architecture-snapshot",
+  "artifactId": "snapshot-replace-me",
+  "createdAt": "1970-01-01T00:00:00.000Z",
+  "project": {
+    "name": "replace-me",
+    "revision": { "kind": "workspace", "value": "uncommitted" }
+  },
+  "scope": {
+    "included": ["src"],
+    "excluded": ["node_modules"]
+  },
+  "nodes": [
+    {
+      "id": "module-replace-me",
+      "name": "Replace me",
+      "purpose": "Replace with a factual responsibility.",
+      "technical": "Replace with implementation facts.",
+      "product": "Replace with user-facing meaning.",
+      "authorization": "Replace with authority boundaries.",
+      "evidenceIds": ["evidence-replace-me"]
+    }
+  ],
+  "edges": [],
+  "assumptions": [],
+  "unknowns": [],
+  "evidenceManifest": "evidence-manifest.json"
+}
