@@ -75,7 +75,7 @@ function proposalStatusClass(status) {
 
 function artifactSummary(artifact) {
   const summary = artifact?.summary || {};
-  if (artifact?.artifactType === 'evidence-manifest') return `${summary.evidenceCount || 0} 条证据`;
+  if (artifact?.artifactType === 'evidence-manifest') return `${summary.evidenceCount || 0} 条依据`;
   if (artifact?.artifactType === 'architecture-snapshot') {
     return `${summary.nodeCount || 0} 个节点 · ${summary.edgeCount || 0} 条关系`;
   }
@@ -106,7 +106,7 @@ function RunList({ runs, integration, busy, onRefresh, onCopyConnection }) {
       <div className="analysis-section-heading">
         <div>
           <h3>外部智能体运行</h3>
-          <p>Codex、Claude Code 等智能体在自己的仓库工具中检查代码，再把结构化结果交给这里审阅。</p>
+          <p>Codex、Claude Code 等智能体可从代码仓库、设计文档或用户确认的讨论结论形成结构化结果，再交给这里审阅。</p>
         </div>
         <button className="quiet" type="button" disabled={busy} onClick={onRefresh}>{busy ? '正在刷新…' : '刷新收件箱'}</button>
       </div>
@@ -115,7 +115,7 @@ function RunList({ runs, integration, busy, onRefresh, onCopyConnection }) {
         <div>
           <span className="analysis-badge analysis-badge--ai">MCP · LOCAL</span>
           <strong>查看器不内嵌模型，也不会自动扫描仓库</strong>
-          <p>智能体通过 MCP 调用 <code>get_project_context</code>、创建运行并提交快照或提案；人工仍是唯一的接受与发布者。</p>
+          <p>概念项目无需代码仓库即可提交目标提案；代码项目则用代码事实描述当前架构。人工仍是唯一的接受与发布者。</p>
         </div>
         <div className="analysis-integration-commands">
           <code>{integration?.mcpCommand || 'npm run mcp'}</code>
@@ -206,7 +206,7 @@ function ProposalList({ proposals, busy, onRefresh, onOpenProposal }) {
               {proposal.summary && <p>{proposal.summary}</p>}
               <div className="analysis-meta-row">
                 <span>{changeCount} 项变更</span>
-                <span>{evidenceCount} 条证据</span>
+                <span>{evidenceCount} 条依据</span>
                 {proposal.origin?.agentName && <span>{proposal.origin.agentName}</span>}
                 {proposal.origin?.agentClient && <span>{proposal.origin.agentClient}</span>}
                 {confidence && <span>置信度 {confidence}</span>}

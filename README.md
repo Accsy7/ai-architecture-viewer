@@ -3,12 +3,12 @@
 [English](README.en.md)
 
 [![CI](https://github.com/Accsy7/ai-architecture-viewer/actions/workflows/ci.yml/badge.svg)](https://github.com/Accsy7/ai-architecture-viewer/actions/workflows/ci.yml)
-![Version: v0.2.0](https://img.shields.io/badge/version-v0.2.0-2f6f5e)
+![Version: v0.3.0](https://img.shields.io/badge/version-v0.3.0-2f6f5e)
 [![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-7c6f64)](LICENSE)
 
 > **许可说明：** 本项目源码仅针对 [PolyForm Noncommercial License 1.0.0](LICENSE) 定义的非商业用途开放。二次开发必须保留 [NOTICE](NOTICE) 中的署名，并遵守 [项目名称与标识使用政策](TRADEMARKS.md)。
 
-AI 架构查看器是一个本地优先的“编码智能体 ↔ 用户”架构协作界面。Codex、Claude Code 等智能体使用自己已有的仓库工具理解代码，再通过标准 MCP 或 JSON 文件协议提交架构快照、变更提案和实施报告；查看器负责把这些结果呈现为可核验的图、证据和差异，并由用户决定是否接受、修订和发布。
+AI 架构查看器是一个本地优先的“编码智能体 ↔ 用户”架构协作界面。概念项目可以先由用户与 Codex、Claude Code 等智能体通过讨论或 Markdown 设计材料形成目标架构；代码项目可以由智能体使用已有的仓库工具提交当前架构快照和实施报告。查看器把这些结果呈现为可核验的图、依据和差异，并由用户决定是否接受、修订和发布。
 
 它不内嵌大模型，不需要模型 API Key，也不会替智能体自动扫描整个代码仓库。
 
@@ -16,11 +16,14 @@ AI 架构查看器是一个本地优先的“编码智能体 ↔ 用户”架构
 
 仓库内置的所有画面和数据均为虚构 Demo，不包含客户、生产或个人数据。
 
-## v0.2.0 MVP 能做什么
+## v0.3.0 MVP 能做什么
 
-- 让外部智能体读取当前已发布架构、图谱目录和项目文档索引。
+- 让外部智能体以精简语义结构读取已发布架构、稳定 ID、职责、关系和边界，无需重复传输布局数据。
+- 支持无代码仓库的概念项目：从用户确认的讨论结论或 Markdown 设计材料提交目标架构提案。
 - 为每次项目理解、架构规划或实施核验创建独立运行记录，并锁定提交时的架构基线。
-- 接收带文件路径、行号和内容哈希的证据清单，拒绝越界、敏感或已经变化的证据。
+- 区分“用户确认、设计文档、代码事实、智能体推断”四类依据，并在审阅界面逐条显示。
+- 对文件依据校验相对路径、行号和内容哈希，拒绝越界、敏感或已经变化的内容。
+- 讨论和设计材料只能支持目标设计，不能被提交为当前已经实现的事实。
 - 将智能体的架构快照自动转换为语义差异；快照没有提到的现有节点不会被自动删除。
 - 将架构提案放入人工收件箱，逐项显示变更、证据和提交来源。
 - 只有用户可以接受或拒绝提案；接受只会写入草案，发布仍需再次人工确认。
@@ -31,17 +34,28 @@ AI 架构查看器是一个本地优先的“编码智能体 ↔ 用户”架构
 
 ```mermaid
 flowchart LR
-    U["用户提出目标"] --> A["Codex / Claude Code 检查仓库"]
-    A --> M["通过 MCP 提交快照、提案与证据"]
-    M --> V["查看器呈现架构差异"]
+    U["用户与智能体确认目标"] --> C["讨论结论 / Markdown 设计材料"]
+    C --> T["提交目标架构提案"]
+    R["代码仓库事实"] --> S["提交当前快照或实施报告"]
+    T --> V["查看器标注依据并呈现差异"]
+    S --> V
     V --> H{"人工审阅"}
-    H -->|拒绝| A
+    H -->|拒绝| U
     H -->|接受| D["写入架构草案"]
     D --> P{"人工发布"}
-    P --> R["正式版本与历史"]
+    P --> G["已发布目标与版本历史"]
+    G --> A["智能体精简读取目标并开发"]
+    A --> R
 ```
 
 权限边界很明确：MCP 服务器没有 `approve` 或 `publish` 工具。智能体负责调查、推理和提交；用户负责决策和发布。
+
+| 依据类型 | 含义 | 可证明当前已实现 |
+| --- | --- | --- |
+| 用户确认 | 用户明确确认的目标或边界 | 否 |
+| 设计文档 | Markdown 等材料描述的目标设计 | 否 |
+| 代码事实 | 从仓库文件直接核验的实现事实 | 是 |
+| 智能体推断 | 尚未被用户或代码证实的判断 | 否 |
 
 ## 快速开始
 
@@ -109,13 +123,13 @@ Codex 桌面应用、CLI 和 IDE 扩展共享 MCP 配置。参阅 [Codex MCP 官
 | 工具 | 用途 | 是否改变正式架构 |
 | --- | --- | --- |
 | `get_project_context` | 读取项目、图谱、基线和协作边界 | 否 |
-| `get_current_architecture` | 读取当前已发布架构 | 否 |
+| `get_current_architecture` | 以精简语义图读取当前已发布架构 | 否 |
 | `create_agent_run` | 创建可追溯运行并锁定基线 | 否 |
 | `submit_architecture_snapshot` | 提交当前架构理解和证据 | 否，只生成候选差异 |
 | `submit_change_proposal` | 提交目标架构变更 | 否，只进入收件箱 |
 | `submit_implementation_report` | 提交实施结果、测试和偏离 | 否 |
 | `get_review_status` | 查询人工审阅结果 | 否 |
-| `get_approved_target` | 读取人工已接受的目标草案或正式目标 | 否 |
+| `get_approved_target` | 以精简语义图读取人工已接受的目标草案或正式目标 | 否 |
 
 ## 命令行与文件后备入口
 
@@ -146,7 +160,7 @@ npm run protocol:validate -- ai-coding/path/to/artifact.json
 [`skills/`](skills/) 内置三套供应商中立流程：
 
 - `architecture-discovery`：在用户授权范围内检查仓库，提交当前架构快照和证据清单。
-- `architecture-change-plan`：把用户目标转化为备选方案、推荐方案、目标架构差异和验收标准。
+- `architecture-change-plan`：从用户确认的讨论、设计文档或代码事实形成备选方案、目标架构差异和验收标准；概念项目无需代码仓库。
 - `implementation-reconcile`：把实际代码与人工批准的架构对照，提交测试结果、完成度和全部偏离。
 
 Skill 优先使用 MCP；不可用时回退到 JSON 文件和命令行。它们不能接受自己的提案、修改已发布架构或代表用户批准实施。
@@ -171,7 +185,7 @@ $env:VIEWER_WORKSPACE_ROOT = 'D:\work\my-code-repository'
 npm start
 ```
 
-智能体提交的所有证据路径都相对于 `VIEWER_WORKSPACE_ROOT`；查看器会在该目录内重新读取文件并核对内容哈希。未设置时，它默认与 `VIEWER_PROJECT_DIR` 相同，兼容把数据包直接放在代码仓库根目录的简单用法。真实项目数据应保存在此公共仓库之外或私有工作区中。
+智能体提交的文件依据路径都相对于 `VIEWER_WORKSPACE_ROOT`；查看器会在该目录内重新读取文件并核对内容哈希。讨论依据没有虚构的文件路径，而是保存来源标签、确认时间和供用户审阅的摘录。概念项目可以只提供设计资料，不要求代码仓库；代码项目的“当前架构”和“实施结果”则必须由代码事实支持。未设置工作区时，它默认与 `VIEWER_PROJECT_DIR` 相同。真实项目数据应保存在此公共仓库之外或私有工作区中。
 
 ## 开发与验证
 
@@ -187,7 +201,7 @@ npm run build
 - 默认示例和文档必须为虚构内容或已获准公开发布。
 - 不得提交密钥、访问令牌、客户材料、内部路径或未经脱敏的架构数据。
 - 智能体只能提交结构化候选；接受和发布均需人工操作。
-- v0.2.0 仅监听 `127.0.0.1`，变更 API 尚无身份验证、CSRF 防护或多用户授权。不要将其反向代理到局域网或互联网。
+- v0.3.0 仅监听 `127.0.0.1`，变更 API 尚无身份验证、CSRF 防护或多用户授权。不要将其反向代理到局域网或互联网。
 - 源码采用 [PolyForm Noncommercial License 1.0.0](LICENSE)，属于 source-available 而非 OSI 开源许可。商业使用需另行书面授权，见 [COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md)。
 - 允许衍生作品，但公开发布的修改版本必须保留 [NOTICE](NOTICE) 署名，并遵守 [TRADEMARKS.md](TRADEMARKS.md)：使用不同项目名称和 Logo，不得暗示为官方版本或获得原作者背书。
 - 第三方依赖仍受其自身许可证约束。

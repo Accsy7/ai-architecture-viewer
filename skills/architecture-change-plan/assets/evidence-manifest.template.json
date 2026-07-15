@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "1.0.0",
+  "schemaVersion": "1.1.0",
   "artifactType": "evidence-manifest",
   "artifactId": "evidence-manifest-replace-me",
   "createdAt": "1970-01-01T00:00:00.000Z",
@@ -7,12 +7,12 @@
   "entries": [
     {
       "id": "evidence-replace-me",
-      "path": "docs/replace-me.md",
-      "lineStart": 1,
-      "lineEnd": 1,
-      "summary": "Replace with the fact or decision basis used by the proposal.",
-      "contentHash": "0000000000000000000000000000000000000000000000000000000000000000",
-      "basis": "fact"
+      "sourceKind": "discussion",
+      "basis": "user-confirmed",
+      "sourceLabel": "User and coding-agent design discussion",
+      "recordedAt": "1970-01-01T00:00:00.000Z",
+      "summary": "Replace with a target-architecture decision explicitly confirmed by the user.",
+      "excerpt": "The user confirmed this target-architecture responsibility and boundary."
     }
   ]
 }

@@ -196,6 +196,7 @@ function listAvailableAnalysisSources(projectRoot) {
         resolveSafeAnalysisSource(relativePath, root);
         sources.push({
           id: sourceIdForPath(relativePath),
+          sourceKind: 'workspace-file',
           path: relativePath,
           label: sourceLabelForPath(relativePath),
           type: sourceTypeForPath(relativePath),
@@ -246,6 +247,8 @@ function collectEvidence(source, collectedAt = new Date().toISOString()) {
     chunks.push({
       id: `evidence-${source.id}-${lineStart}-${stableHash(`${source.contentHash}:${lineStart}:${lineEnd}`, 10)}`,
       sourceId: source.id,
+      sourceKind: 'workspace-file',
+      basis: 'code-fact',
       path: source.path,
       lineStart,
       lineEnd,

@@ -125,7 +125,7 @@ registerTool(server, 'get_project_context', {
 
 registerTool(server, 'get_current_architecture', {
   title: 'Get current published architecture',
-  description: 'Read the current published architecture graph for a diagram without changing viewer state.',
+  description: 'Read the current published architecture as a compact semantic graph with stable IDs, responsibilities, relationships, and boundaries.',
   inputSchema: z.object({ diagramId: z.string().optional() }),
   annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
 }, async ({ diagramId }) => {
@@ -173,21 +173,21 @@ async function submit(runId, artifact, evidenceManifest) {
 
 registerTool(server, 'submit_architecture_snapshot', {
   title: 'Submit architecture snapshot',
-  description: 'Submit an evidence-backed current architecture snapshot. The viewer converts semantic differences into a human-reviewable proposal and never removes omitted nodes automatically.',
+  description: 'Submit a code-fact-backed current architecture snapshot. Discussion and design intent cannot be used as proof of implementation. Omitted nodes are never removed automatically.',
   inputSchema: submissionSchema,
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
 }, ({ runId, artifact, evidenceManifest }) => submit(runId, artifact, evidenceManifest));
 
 registerTool(server, 'submit_change_proposal', {
   title: 'Submit architecture change proposal',
-  description: 'Submit an evidence-backed target architecture proposal to the human review inbox. This does not approve, apply, or publish it.',
+  description: 'Submit a target proposal backed by user confirmation, design documents, code facts, or labeled agent inference. Concept projects do not require a code repository. This does not approve, apply, or publish it.',
   inputSchema: submissionSchema,
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
 }, ({ runId, artifact, evidenceManifest }) => submit(runId, artifact, evidenceManifest));
 
 registerTool(server, 'submit_implementation_report', {
   title: 'Submit implementation reconciliation report',
-  description: 'Submit an evidence-backed report of code changes, checks, acceptance results, and architecture drift for human inspection.',
+  description: 'Submit a code-fact-backed report of changes, checks, acceptance results, and architecture drift for human inspection.',
   inputSchema: submissionSchema,
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
 }, ({ runId, artifact, evidenceManifest }) => submit(runId, artifact, evidenceManifest));
@@ -201,7 +201,7 @@ registerTool(server, 'get_review_status', {
 
 registerTool(server, 'get_approved_target', {
   title: 'Get human-approved target',
-  description: 'Read the latest human-approved target draft when present, otherwise the published target baseline. This tool cannot publish it.',
+  description: 'Read the latest human-approved target draft when present, otherwise the published target baseline, as a compact semantic graph. This tool cannot publish it.',
   inputSchema: z.object({ diagramId: z.string().optional() }),
   annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
 }, ({ diagramId }) => viewerRequest(`/api/agent/approved-target${query({ diagram: diagramId })}`));

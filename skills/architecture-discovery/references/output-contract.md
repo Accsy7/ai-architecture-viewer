@@ -1,6 +1,6 @@
 # Discovery output contract
 
-Produce artifacts compatible with protocol version `1.0.0`.
+Produce artifacts compatible with protocol version `1.1.0`.
 
 ## architecture-snapshot.json
 
@@ -16,6 +16,6 @@ Every node needs `id`, `name`, `purpose`, `technical`, `product`, `authorization
 
 ## evidence-manifest.json
 
-Each entry needs a stable ID, repository-relative path, line range, SHA-256 content hash, short summary, and `basis` of `fact` or `inference`. Include a short excerpt only when it is approved for the artifact.
+Each entry referenced by the current snapshot needs a stable ID, `sourceKind` of `workspace-file`, `basis` of `code-fact`, a repository-relative path, line range, SHA-256 content hash, and short summary. Include a short excerpt only when it is approved for the artifact. Inferences belong in snapshot assumptions or unknowns and cannot prove current implementation.
 
 Use the canonical schema at `protocol/ai-coding-exchange.schema.json` when the skill is running inside the AI Architecture Viewer repository.

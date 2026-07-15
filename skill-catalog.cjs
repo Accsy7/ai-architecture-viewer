@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { AI_CODING_PROTOCOL_VERSION } = require('./schema/ai-coding-exchange-contract.cjs');
 
 const SKILL_CATALOG_SCHEMA_VERSION = '1.0.0';
 const SKILL_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -44,7 +45,9 @@ function readSkillCatalog(skillsRoot = path.join(__dirname, 'skills')) {
   }
   if (!catalog || typeof catalog !== 'object' || Array.isArray(catalog)) throw new SkillCatalogError('Skill catalog must be an object');
   if (catalog.schemaVersion !== SKILL_CATALOG_SCHEMA_VERSION) throw new SkillCatalogError(`Skill catalog schemaVersion must be ${SKILL_CATALOG_SCHEMA_VERSION}`);
-  if (catalog.protocolVersion !== '1.0.0') throw new SkillCatalogError('Skill catalog protocolVersion must be 1.0.0');
+  if (catalog.protocolVersion !== AI_CODING_PROTOCOL_VERSION) {
+    throw new SkillCatalogError(`Skill catalog protocolVersion must be ${AI_CODING_PROTOCOL_VERSION}`);
+  }
   if (!Array.isArray(catalog.skills) || !catalog.skills.length || catalog.skills.length > 20) throw new SkillCatalogError('Skill catalog must contain 1 to 20 skills');
 
   const ids = new Set();

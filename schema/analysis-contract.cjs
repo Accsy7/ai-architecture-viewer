@@ -9,7 +9,7 @@ const {
 } = require('./state-contract.cjs');
 const { validateExchangeArtifact } = require('./ai-coding-exchange-contract.cjs');
 
-const ANALYSIS_SCHEMA_VERSION = '2.0.0';
+const ANALYSIS_SCHEMA_VERSION = '2.1.0';
 const MAX_SOURCE_COUNT = 500;
 const MAX_EVIDENCE_COUNT = 5000;
 const MAX_PROPOSAL_COUNT = 500;
@@ -34,6 +34,14 @@ const SOURCE_TYPES = new Set([
   'manifest',
   'configuration',
   'source-code',
+  'discussion',
+]);
+const SOURCE_KINDS = new Set(['workspace-file', 'discussion']);
+const EVIDENCE_BASES = new Set([
+  'user-confirmed',
+  'design-document',
+  'code-fact',
+  'agent-inference',
 ]);
 const PROPOSAL_STATUSES = new Set(['pending', 'accepted', 'rejected']);
 const CONFIDENCE_LEVELS = new Set(['low', 'medium', 'high']);
@@ -121,6 +129,11 @@ function assertPositiveRevision(value, valuePath) {
   }
 }
 
+function assertBaseRevisionId(value, valuePath, baseRevision) {
+  if (baseRevision === 0 && value === null) return;
+  assertStableId(value, valuePath);
+}
+
 function assertHash(value, valuePath, { nullable = false } = {}) {
   if (nullable && value === null) return;
   if (typeof value !== 'string' || !SHA256_HASH.test(value)) {
@@ -163,6 +176,7 @@ function validateSource(source, sourcePath = 'source') {
   assertObject(source, sourcePath);
   assertKeys(source, new Set([
     'id',
+    'sourceKind',
     'path',
     'label',
     'type',
@@ -172,7 +186,14 @@ function validateSource(source, sourcePath = 'source') {
     'sizeBytes',
   ]), sourcePath);
   assertStableId(source.id, `${sourcePath}.id`);
-  validateSourcePath(source.path, `${sourcePath}.path`);
+  if (!SOURCE_KINDS.has(source.sourceKind)) fail(`${sourcePath}.sourceKind 不是支持的资料来源`);
+  if (source.sourceKind === 'workspace-file') {
+    validateSourcePath(source.path, `${sourcePath}.path`);
+    if (source.type === 'discussion') fail(`${sourcePath}.type 与文件资料不匹配`);
+  } else {
+    if (source.path !== null) fail(`${sourcePath}.path 必须为 null，讨论依据不能冒充文件路径`);
+    if (source.type !== 'discussion') fail(`${sourcePath}.type 必须是 discussion`);
+  }
   assertText(source.label, `${sourcePath}.label`, { max: 160 });
   if (!SOURCE_TYPES.has(source.type)) fail(`${sourcePath}.type 不是支持的资料类型`);
   if (typeof source.selected !== 'boolean') fail(`${sourcePath}.selected 必须是布尔值`);
@@ -193,6 +214,8 @@ function validateEvidence(evidence, evidencePath = 'evidence') {
   assertKeys(evidence, new Set([
     'id',
     'sourceId',
+    'sourceKind',
+    'basis',
     'path',
     'lineStart',
     'lineEnd',
@@ -202,15 +225,26 @@ function validateEvidence(evidence, evidencePath = 'evidence') {
   ]), evidencePath);
   assertStableId(evidence.id, `${evidencePath}.id`);
   assertStableId(evidence.sourceId, `${evidencePath}.sourceId`);
-  validateSourcePath(evidence.path, `${evidencePath}.path`);
-  if (!Number.isSafeInteger(evidence.lineStart) || evidence.lineStart < 1) {
-    fail(`${evidencePath}.lineStart 必须是从 1 开始的安全整数`);
-  }
-  if (!Number.isSafeInteger(evidence.lineEnd) || evidence.lineEnd < evidence.lineStart) {
-    fail(`${evidencePath}.lineEnd 必须不早于 lineStart`);
-  }
-  if (evidence.lineEnd - evidence.lineStart + 1 > MAX_EVIDENCE_LINE_SPAN) {
-    fail(`${evidencePath} 的行范围不得超过 ${MAX_EVIDENCE_LINE_SPAN} 行`);
+  if (!SOURCE_KINDS.has(evidence.sourceKind)) fail(`${evidencePath}.sourceKind 不是支持的资料来源`);
+  if (!EVIDENCE_BASES.has(evidence.basis)) fail(`${evidencePath}.basis 不是支持的依据类型`);
+  if (evidence.sourceKind === 'workspace-file') {
+    validateSourcePath(evidence.path, `${evidencePath}.path`);
+    if (!Number.isSafeInteger(evidence.lineStart) || evidence.lineStart < 1) {
+      fail(`${evidencePath}.lineStart 必须是从 1 开始的安全整数`);
+    }
+    if (!Number.isSafeInteger(evidence.lineEnd) || evidence.lineEnd < evidence.lineStart) {
+      fail(`${evidencePath}.lineEnd 必须不早于 lineStart`);
+    }
+    if (evidence.lineEnd - evidence.lineStart + 1 > MAX_EVIDENCE_LINE_SPAN) {
+      fail(`${evidencePath} 的行范围不得超过 ${MAX_EVIDENCE_LINE_SPAN} 行`);
+    }
+  } else {
+    if (evidence.path !== null || evidence.lineStart !== null || evidence.lineEnd !== null) {
+      fail(`${evidencePath} 的讨论依据不得声明文件路径或行号`);
+    }
+    if (!['user-confirmed', 'agent-inference'].includes(evidence.basis)) {
+      fail(`${evidencePath}.basis 必须是 user-confirmed 或 agent-inference`);
+    }
   }
   assertText(evidence.excerpt, `${evidencePath}.excerpt`, { max: MAX_EVIDENCE_EXCERPT_CHARS });
   assertHash(evidence.contentHash, `${evidencePath}.contentHash`);
@@ -423,7 +457,7 @@ function validateAgentRun(run, runPath = 'agentRun') {
   assertStableId(run.diagramId, `${runPath}.diagramId`);
   if (!['current', 'target'].includes(run.view)) fail(`${runPath}.view 必须是 current 或 target`);
   assertBaseRevision(run.baseRevision, `${runPath}.baseRevision`);
-  assertStableId(run.baseRevisionId, `${runPath}.baseRevisionId`);
+  assertBaseRevisionId(run.baseRevisionId, `${runPath}.baseRevisionId`, run.baseRevision);
   assertTimestamp(run.createdAt, `${runPath}.createdAt`);
   assertTimestamp(run.updatedAt, `${runPath}.updatedAt`);
   assertTimestamp(run.submittedAt, `${runPath}.submittedAt`, { nullable: true });
@@ -478,7 +512,7 @@ function validateProposal(proposal, proposalPath = 'proposal', { knownEvidenceId
   if (!['current', 'target'].includes(proposal.view)) fail(`${proposalPath}.view 必须是 current 或 target`);
   assertStableId(proposal.diagramId, `${proposalPath}.diagramId`);
   assertBaseRevision(proposal.baseRevision, `${proposalPath}.baseRevision`);
-  assertStableId(proposal.baseRevisionId, `${proposalPath}.baseRevisionId`);
+  assertBaseRevisionId(proposal.baseRevisionId, `${proposalPath}.baseRevisionId`, proposal.baseRevision);
   assertText(proposal.title, `${proposalPath}.title`, { max: 160 });
   assertText(proposal.summary, `${proposalPath}.summary`, { max: 2000 });
   if (proposal.confidence !== null && !CONFIDENCE_LEVELS.has(proposal.confidence)) {
@@ -579,10 +613,10 @@ function validateAnalysis(analysis) {
     const sourcePath = `analysis.sources[${index}]`;
     validateSource(source, sourcePath);
     if (sourcesById.has(source.id)) fail(`analysis.sources 包含重复资料 ID ${source.id}`);
-    const pathKey = source.path.toLowerCase();
-    if (sourcePaths.has(pathKey)) fail(`analysis.sources 包含重复资料路径 ${source.path}`);
+    const pathKey = source.path?.toLowerCase();
+    if (pathKey && sourcePaths.has(pathKey)) fail(`analysis.sources 包含重复资料路径 ${source.path}`);
     sourcesById.set(source.id, source);
-    sourcePaths.add(pathKey);
+    if (pathKey) sourcePaths.add(pathKey);
   });
 
   const evidenceIds = new Set();
@@ -592,6 +626,9 @@ function validateAnalysis(analysis) {
     if (evidenceIds.has(evidence.id)) fail(`analysis.evidence 包含重复证据 ID ${evidence.id}`);
     const source = sourcesById.get(evidence.sourceId);
     if (!source) fail(`${evidencePath}.sourceId 引用了未知资料 ${evidence.sourceId}`, 'ANALYSIS_SOURCE_REFERENCE_UNKNOWN');
+    if (source.sourceKind !== evidence.sourceKind) {
+      fail(`${evidencePath}.sourceKind 必须与其资料来源一致`, 'ANALYSIS_EVIDENCE_SOURCE_KIND_MISMATCH');
+    }
     if (source.path !== evidence.path) {
       fail(`${evidencePath}.path 必须与其 sourceId 的资料路径一致`, 'ANALYSIS_EVIDENCE_PATH_MISMATCH');
     }
@@ -630,20 +667,47 @@ function migrateAnalysis(value) {
     validateAnalysis(incoming);
     return incoming;
   }
-  if (incoming?.schemaVersion !== '1.0.0') {
+  if (!['1.0.0', '2.0.0'].includes(incoming?.schemaVersion)) {
     fail(
       `analysis.schemaVersion 无法迁移到 ${ANALYSIS_SCHEMA_VERSION}`,
       'ANALYSIS_SCHEMA_VERSION_MISMATCH',
       409,
     );
   }
+  const legacyBases = new Map();
+  for (const record of incoming.artifacts || []) {
+    if (record?.artifactType !== 'evidence-manifest') continue;
+    for (const entry of record.artifact?.entries || []) {
+      legacyBases.set(entry.id, entry.basis);
+    }
+  }
+  const migratedSources = (incoming.sources || []).map((source) => ({
+    ...source,
+    sourceKind: source.sourceKind || 'workspace-file',
+  }));
+  const sourcesById = new Map(migratedSources.map((source) => [source.id, source]));
+  const migratedEvidence = (incoming.evidence || []).map((evidence) => {
+    const source = sourcesById.get(evidence.sourceId);
+    const legacyBasis = legacyBases.get(evidence.id);
+    const basis = evidence.basis
+      || (legacyBasis === 'inference' ? 'agent-inference' : null)
+      || (source?.type === 'source-code' ? 'code-fact' : 'design-document');
+    return {
+      ...evidence,
+      sourceKind: evidence.sourceKind || source?.sourceKind || 'workspace-file',
+      basis,
+    };
+  });
   const migrated = {
     ...incoming,
     schemaVersion: ANALYSIS_SCHEMA_VERSION,
-    agentRuns: [],
-    artifacts: [],
+    sources: migratedSources,
+    evidence: migratedEvidence,
+    agentRuns: incoming.schemaVersion === '1.0.0' ? [] : (incoming.agentRuns || []),
+    artifacts: incoming.schemaVersion === '1.0.0' ? [] : (incoming.artifacts || []),
     proposals: (incoming.proposals || []).map((proposal) => ({ ...proposal, origin: null })),
   };
+  if (incoming.schemaVersion === '2.0.0') migrated.proposals = incoming.proposals || [];
   validateAnalysis(migrated);
   return migrated;
 }
@@ -670,6 +734,7 @@ module.exports = {
   CHANGE_KINDS,
   CHANGE_TARGET_TYPES,
   CONFIDENCE_LEVELS,
+  EVIDENCE_BASES,
   MAX_CHANGES_PER_PROPOSAL,
   MAX_EVIDENCE_COUNT,
   MAX_EVIDENCE_EXCERPT_CHARS,
@@ -679,6 +744,7 @@ module.exports = {
   MAX_SOURCE_COUNT,
   PROPOSAL_STATUSES,
   SOURCE_TYPES,
+  SOURCE_KINDS,
   createEmptyAnalysis,
   migrateAnalysis,
   validateAnalysis,

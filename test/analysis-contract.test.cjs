@@ -27,6 +27,7 @@ function validAnalysis() {
     lastUpdated: NOW,
     sources: [{
       id: 'readme',
+      sourceKind: 'workspace-file',
       path: 'docs/architecture.md',
       label: 'Architecture notes',
       type: 'markdown',
@@ -38,6 +39,8 @@ function validAnalysis() {
     evidence: [{
       id: 'evidence-readme-1',
       sourceId: 'readme',
+      sourceKind: 'workspace-file',
+      basis: 'design-document',
       path: 'docs/architecture.md',
       lineStart: 12,
       lineEnd: 16,
@@ -103,12 +106,112 @@ test('analysis contract migrates v1 workbench data without inventing agent prove
   legacy.schemaVersion = '1.0.0';
   delete legacy.agentRuns;
   delete legacy.artifacts;
+  delete legacy.sources[0].sourceKind;
+  delete legacy.evidence[0].sourceKind;
+  delete legacy.evidence[0].basis;
   delete legacy.proposals[0].origin;
   const migrated = migrateAnalysis(legacy);
   assert.equal(migrated.schemaVersion, ANALYSIS_SCHEMA_VERSION);
   assert.deepEqual(migrated.agentRuns, []);
   assert.deepEqual(migrated.artifacts, []);
   assert.equal(migrated.proposals[0].origin, null);
+  assert.equal(migrated.sources[0].sourceKind, 'workspace-file');
+  assert.equal(migrated.evidence[0].basis, 'design-document');
+});
+
+test('analysis contract migrates v0.2 sources and evidence without losing proposal provenance', () => {
+  const legacy = validAnalysis();
+  legacy.schemaVersion = '2.0.0';
+  delete legacy.sources[0].sourceKind;
+  delete legacy.evidence[0].sourceKind;
+  delete legacy.evidence[0].basis;
+  legacy.proposals[0].origin = {
+    runId: 'run-one',
+    artifactId: 'proposal-artifact',
+    artifactType: 'architecture-proposal',
+    agentName: 'Codex',
+    agentClient: 'codex',
+  };
+  legacy.agentRuns = [{
+    id: 'run-one',
+    agentName: 'Codex',
+    agentClient: 'codex',
+    taskType: 'architecture-change-plan',
+    status: 'submitted',
+    diagramId: 'overview',
+    view: 'current',
+    baseRevision: 3,
+    baseRevisionId: 'current-r3',
+    createdAt: NOW,
+    updatedAt: NOW,
+    submittedAt: NOW,
+    summary: null,
+    artifactIds: ['proposal-artifact'],
+  }];
+  legacy.artifacts = [{
+    id: 'proposal-artifact',
+    runId: 'run-one',
+    artifactType: 'architecture-proposal',
+    submittedAt: NOW,
+    artifact: {
+      schemaVersion: '1.0.0',
+      artifactType: 'architecture-proposal',
+      artifactId: 'proposal-artifact',
+      createdAt: NOW,
+      requestId: 'request-one',
+      baseSnapshotId: 'snapshot-one',
+      title: 'Legacy proposal',
+      summary: 'A v0.2 proposal remains readable.',
+      options: [{ id: 'option-one', title: 'One', summary: 'Keep it.', advantages: [], disadvantages: [] }],
+      recommendedOptionId: 'option-one',
+      changes: legacy.proposals[0].changes,
+      acceptanceCriteria: ['It remains readable.'],
+      risks: [],
+      decisionsRequired: [],
+      evidenceManifest: 'evidence-manifest.json',
+    },
+  }];
+  const migrated = migrateAnalysis(legacy);
+  assert.equal(migrated.schemaVersion, ANALYSIS_SCHEMA_VERSION);
+  assert.equal(migrated.proposals[0].origin.runId, 'run-one');
+  assert.equal(migrated.agentRuns.length, 1);
+  assert.equal(migrated.artifacts.length, 1);
+  assert.equal(migrated.evidence[0].basis, 'design-document');
+});
+
+test('analysis contract stores discussion evidence without pretending it has a file location', () => {
+  const discussion = validAnalysis();
+  discussion.sources = [{
+    id: 'discussion-one',
+    sourceKind: 'discussion',
+    path: null,
+    label: 'Product direction discussion',
+    type: 'discussion',
+    selected: false,
+    lastScannedAt: NOW,
+    contentHash: HASH_A,
+    sizeBytes: 80,
+  }];
+  discussion.evidence = [{
+    id: 'evidence-user-confirmed',
+    sourceId: 'discussion-one',
+    sourceKind: 'discussion',
+    basis: 'user-confirmed',
+    path: null,
+    lineStart: null,
+    lineEnd: null,
+    excerpt: 'The user confirmed this target responsibility.',
+    contentHash: HASH_A,
+    collectedAt: NOW,
+  }];
+  discussion.proposals[0].view = 'target';
+  discussion.proposals[0].changes[0].patch.data.horizon = '近期';
+  discussion.proposals[0].evidenceIds = ['evidence-user-confirmed'];
+  discussion.proposals[0].changes[0].evidenceIds = ['evidence-user-confirmed'];
+  assert.doesNotThrow(() => validateAnalysis(discussion));
+
+  discussion.evidence[0].basis = 'code-fact';
+  contractError(() => validateAnalysis(discussion));
 });
 
 test('analysis contract rejects unsafe project-relative source paths', () => {

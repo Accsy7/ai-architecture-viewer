@@ -15,7 +15,7 @@ Verify what was actually built and make all architecture drift visible to the us
 4. Run the relevant tests, builds, checks, or safe diagnostics. Record command, outcome, and a concise result; never hide failures.
 5. Map implementation evidence to each acceptance criterion and approved architecture change.
 6. Classify drift as `missing`, `extra`, `changed`, or `unverified`. Explain whether it appears justified, but do not silently rewrite the approved target.
-7. Generate the resulting current-state architecture from code facts, keeping facts separate from inference.
+7. Generate the resulting current-state architecture only from `code-fact` evidence. Record inference as unresolved or unverified; never present target intent or design documentation as implemented fact.
 8. Write the artifacts under `ai-coding/reconciliation/<run-id>/`:
    - `implementation-report.json`
    - `architecture-snapshot.json`
@@ -31,6 +31,7 @@ Verify what was actually built and make all architecture drift visible to the us
 - Report changed files using repository-relative paths.
 - Do not edit the approved proposal, accept your own report, or publish a viewer revision.
 - Do not claim tests passed unless they were run and their result was observed.
+- Use `sourceKind: workspace-file` and `basis: code-fact` for evidence referenced by the implementation report or resulting current snapshot.
 - Use the coding agent's repository tools for inspection and testing. The viewer receives the result; it does not run or direct the implementation.
 
 ## Completion gate

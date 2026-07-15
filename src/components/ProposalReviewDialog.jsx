@@ -17,6 +17,15 @@ const CHANGE_STATUS = {
   edited: '人工修订',
 };
 
+const EVIDENCE_BASIS = {
+  'user-confirmed': { label: '用户确认', tone: 'user-confirmed' },
+  'design-document': { label: '设计文档', tone: 'design-document' },
+  'code-fact': { label: '代码事实', tone: 'code-fact' },
+  'agent-inference': { label: '智能体推断', tone: 'agent-inference' },
+  fact: { label: '旧版事实', tone: 'neutral' },
+  inference: { label: '旧版推断', tone: 'agent-inference' },
+};
+
 function asList(value) {
   return Array.isArray(value) ? value : [];
 }
@@ -33,7 +42,8 @@ function formatConfidence(value) {
 }
 
 function evidencePath(evidence) {
-  return evidence?.relativePath || evidence?.path || evidence?.sourcePath || evidence?.location || '来源路径未记录';
+  if (evidence?.sourceKind === 'discussion') return evidence?.sourceLabel || '讨论来源未记录';
+  return evidence?.relativePath || evidence?.path || evidence?.sourcePath || evidence?.location || evidence?.sourceLabel || '来源未记录';
 }
 
 function evidenceLabel(evidence) {
@@ -45,6 +55,10 @@ function evidenceLabel(evidence) {
 
 function evidenceExcerpt(evidence) {
   return evidence?.excerpt || evidence?.content || evidence?.summary || '此证据未保存文本摘录。';
+}
+
+function evidenceBasis(evidence) {
+  return EVIDENCE_BASIS[evidence?.basis] || { label: evidence?.basis || '依据类型未记录', tone: 'neutral' };
 }
 
 function changeTitle(change) {
@@ -123,16 +137,16 @@ function EvidencePanel({ change, evidence, onLocateEvidence }) {
   const before = change?.before ?? change?.previousValue;
   const after = change?.after ?? change?.nextValue;
   return (
-    <aside className="analysis-review-column analysis-review-evidence" aria-label="变更证据">
+    <aside className="analysis-review-column analysis-review-evidence" aria-label="架构依据">
       <header className="analysis-review-column__heading">
         <div>
-          <p className="kicker">TRACEABLE EVIDENCE</p>
+          <p className="kicker">TRACEABLE BASIS</p>
           <h3>依据与影响</h3>
         </div>
         <span>{evidence.length} 条</span>
       </header>
 
-      {!change && <p className="analysis-empty">选择左侧的变更以查看其证据。</p>}
+      {!change && <p className="analysis-empty">选择左侧的变更以查看其依据。</p>}
 
       {change && (
         <>
@@ -153,22 +167,29 @@ function EvidencePanel({ change, evidence, onLocateEvidence }) {
 
           {!evidence.length && (
             <div className="analysis-evidence-warning">
-              <strong>未找到可核验的证据</strong>
+              <strong>未找到可审阅的依据</strong>
               <p>该建议不能直接接受；请补充资料或将其拒绝。</p>
             </div>
           )}
 
           <div className="analysis-evidence-list">
-            {evidence.map((item, index) => (
+            {evidence.map((item, index) => {
+              const basis = evidenceBasis(item);
+              const isDiscussion = item.sourceKind === 'discussion';
+              return (
               <article className="analysis-evidence-card" key={item.id || `${evidencePath(item)}-${index}`}>
+                <div className="analysis-evidence-card__meta">
+                  <span className="analysis-evidence-card__source">依据 {index + 1}</span>
+                  <span className={`analysis-badge analysis-badge--${basis.tone}`}>{basis.label}</span>
+                </div>
                 <div>
-                  <span className="analysis-evidence-card__source">证据 {index + 1}</span>
                   <code>{evidenceLabel(item)}</code>
                 </div>
                 <pre>{evidenceExcerpt(item)}</pre>
-                {onLocateEvidence && <button className="quiet" type="button" onClick={() => onLocateEvidence(item, change)}>定位原文</button>}
+                {onLocateEvidence && <button className="quiet" type="button" onClick={() => onLocateEvidence(item, change)}>{isDiscussion ? '查看讨论摘录' : '定位原文'}</button>}
               </article>
-            ))}
+              );
+            })}
           </div>
         </>
       )}
@@ -239,7 +260,10 @@ export default function ProposalReviewDialog({
   const evidenceComplete = changes.length > 0 && changes.every((change) => (
     allowEvidenceFreeAccept || changeEvidence(change, evidenceRegistry).length > 0
   ));
-  const canAccept = proposalPending && evidenceComplete && !isAccepted(status) && status !== 'rejected';
+  const currentEvidenceIsCodeFact = proposal.view !== 'current' || changes.every((change) => (
+    changeEvidence(change, evidenceRegistry).every((item) => item.basis === 'code-fact')
+  ));
+  const canAccept = proposalPending && evidenceComplete && currentEvidenceIsCodeFact && !isAccepted(status) && status !== 'rejected';
   const canReject = proposalPending && Boolean(selectedChange) && !isAccepted(status) && status !== 'rejected';
 
   return (
@@ -258,10 +282,13 @@ export default function ProposalReviewDialog({
 
         <div className="analysis-review-summary">
           <span className="analysis-badge analysis-badge--ai">智能体提案</span>
+          <span className={`analysis-badge analysis-badge--${proposal.view === 'target' ? 'draft' : 'neutral'}`}>
+            {proposal.view === 'target' ? '目标设计' : '当前实现'}
+          </span>
           {proposal.origin?.agentName && <span>{proposal.origin.agentName}</span>}
           {proposal.origin?.agentClient && <span>{proposal.origin.agentClient}</span>}
           <span>{changes.length} 项候选变更</span>
-          <span>{evidenceRegistry.length} 条已登记证据</span>
+          <span>{evidenceRegistry.length} 条已登记依据</span>
           {formatConfidence(proposal.confidence) && <span>整体置信度 {formatConfidence(proposal.confidence)}</span>}
         </div>
 
@@ -272,7 +299,8 @@ export default function ProposalReviewDialog({
 
         <footer className="analysis-review-dialog__footer">
           <div>
-            {!evidenceComplete && !allowEvidenceFreeAccept && <small>提案中的每项变更都需要至少一条可定位证据。</small>}
+            {!evidenceComplete && !allowEvidenceFreeAccept && <small>提案中的每项变更都需要至少一条可审阅依据。</small>}
+            {evidenceComplete && !currentEvidenceIsCodeFact && <small>当前架构只能由“代码事实”支持；讨论、设计文档或推断只能用于目标提案。</small>}
           </div>
           <div className="dialog-actions">
             <button className="quiet" type="button" disabled={!canReject || busy || Boolean(actionInFlight)} onClick={() => invokeAction(onRejectProposal, 'reject')}>

@@ -1,7 +1,7 @@
 export const SCHEMA_VERSION = '3.1.0';
 export const DOCUMENT_SCHEMA_VERSION = '1.0.0';
 export const LAYOUT_SCHEMA_VERSION = '1.1.0';
-export const ANALYSIS_SCHEMA_VERSION = '2.0.0';
+export const ANALYSIS_SCHEMA_VERSION = '2.1.0';
 
 async function request(path, options = {}) {
   const response = await fetch(path, {

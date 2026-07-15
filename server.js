@@ -97,6 +97,11 @@ const MIME_TYPES = {
   '.woff': 'font/woff',
   '.woff2': 'font/woff2',
 };
+const AGENT_NODE_DATA_FIELDS = new Set([
+  'name', 'group', 'purpose', 'technical', 'product', 'authorization', 'horizon',
+  'focus', 'buildStrategy', 'aiCollaboration', 'relatedDiagramId', 'relatedNodeId',
+]);
+const AGENT_EDGE_DATA_FIELDS = new Set(['label', 'relationType', 'controlledBoundaryPosture']);
 
 function parsePort(value) {
   const port = value === undefined || value === '' ? DEFAULT_PORT : Number(value);
@@ -514,6 +519,12 @@ function assertProposalEvidenceCurrent(proposal, analysis, projectRoot) {
       staleEvidenceIds.push(evidenceId);
       return;
     }
+    if (evidence.sourceKind === 'discussion') {
+      if (source.sourceKind !== 'discussion' || source.contentHash !== evidence.contentHash) {
+        staleEvidenceIds.push(evidenceId);
+      }
+      return;
+    }
     try {
       if (readAnalysisSource(source.path, projectRoot).contentHash !== evidence.contentHash) {
         staleEvidenceIds.push(evidenceId);
@@ -529,6 +540,23 @@ function assertProposalEvidenceCurrent(proposal, analysis, projectRoot) {
   }
 }
 
+function assertProposalEvidenceBasisAllowed(proposal, analysis) {
+  if (proposal.view !== 'current') return;
+  const evidenceById = new Map(analysis.evidence.map((evidence) => [evidence.id, evidence]));
+  const forbidden = [...proposalEvidenceIds(proposal)]
+    .map((id) => evidenceById.get(id))
+    .filter((evidence) => evidence && evidence.basis !== 'code-fact')
+    .map((evidence) => ({ id: evidence.id, basis: evidence.basis }));
+  if (forbidden.length) {
+    throw new ContractError(
+      '该提案把目标意图用作当前实现依据；请让智能体根据代码事实重新提交',
+      'PROPOSAL_EVIDENCE_BASIS_FORBIDDEN',
+      422,
+      { evidence: forbidden },
+    );
+  }
+}
+
 function analysisResponse(analysis) {
   const evidenceBySource = new Map();
   analysis.evidence.forEach((evidence) => {
@@ -539,7 +567,16 @@ function analysisResponse(analysis) {
     evidenceCount: evidenceBySource.get(source.id) || 0,
     status: source.lastScannedAt ? 'ready' : 'stale',
   }));
-  const evidenceById = new Map(analysis.evidence.map((evidence) => [evidence.id, evidence]));
+  const sourcesById = new Map(sources.map((source) => [source.id, source]));
+  const publicEvidence = analysis.evidence.map((evidence) => {
+    const source = sourcesById.get(evidence.sourceId);
+    return {
+      ...clone(evidence),
+      sourceLabel: source?.label || null,
+      sourceType: source?.type || null,
+    };
+  });
+  const evidenceById = new Map(publicEvidence.map((evidence) => [evidence.id, evidence]));
   const proposals = analysis.proposals.map((proposal) => ({
     ...clone(proposal),
     evidence: [...proposalEvidenceIds(proposal)].map((id) => evidenceById.get(id)).filter(Boolean).map(clone),
@@ -568,7 +605,7 @@ function analysisResponse(analysis) {
     baseRevision: analysis.baseRevision,
     lastUpdated: analysis.lastUpdated,
     sources,
-    evidence: clone(analysis.evidence),
+    evidence: publicEvidence,
     proposals,
     runs,
     artifacts: analysis.artifacts.map((record) => ({ ...publicArtifactRecord(record), runId: record.runId })),
@@ -681,12 +718,82 @@ function evidenceExcerpt(material, entry) {
   return excerpt.length > 12000 ? `${excerpt.slice(0, 11999)}…` : excerpt;
 }
 
+function normalizedEvidenceSourceKind(entry) {
+  return entry.sourceKind || 'workspace-file';
+}
+
+function normalizedEvidenceBasis(entry) {
+  if (entry.basis === 'inference') return 'agent-inference';
+  if (entry.basis === 'fact') {
+    return sourceTypeForPath(entry.path) === 'source-code' ? 'code-fact' : 'design-document';
+  }
+  return entry.basis;
+}
+
+function discussionEvidenceHash(entry) {
+  return crypto.createHash('sha256').update(JSON.stringify({
+    sourceLabel: entry.sourceLabel,
+    recordedAt: entry.recordedAt,
+    summary: entry.summary,
+    excerpt: entry.excerpt,
+  })).digest('hex');
+}
+
+function discussionSourceId(entry) {
+  const digest = crypto.createHash('sha256')
+    .update(`${entry.sourceLabel}:${entry.recordedAt}:${entry.id}`)
+    .digest('hex')
+    .slice(0, 24);
+  return `discussion-${digest}`;
+}
+
 function importAgentEvidence(analysis, manifest, projectRoot, collectedAt) {
   const next = clone(analysis);
-  const sourcesByPath = new Map(next.sources.map((source) => [source.path.toLowerCase(), source]));
+  const sourcesByPath = new Map(next.sources.filter((source) => source.path).map((source) => [source.path.toLowerCase(), source]));
+  const sourcesById = new Map(next.sources.map((source) => [source.id, source]));
   const evidenceById = new Map(next.evidence.map((evidence) => [evidence.id, evidence]));
 
   manifest.entries.forEach((entry) => {
+    const sourceKind = normalizedEvidenceSourceKind(entry);
+    const basis = normalizedEvidenceBasis(entry);
+    if (sourceKind === 'discussion') {
+      const contentHash = discussionEvidenceHash(entry);
+      const sourceId = discussionSourceId(entry);
+      const source = {
+        id: sourceId,
+        sourceKind,
+        path: null,
+        label: entry.sourceLabel,
+        type: 'discussion',
+        selected: false,
+        lastScannedAt: entry.recordedAt,
+        contentHash,
+        sizeBytes: Buffer.byteLength(entry.excerpt, 'utf8'),
+      };
+      const existingSource = sourcesById.get(sourceId);
+      if (existingSource && !sameJson(existingSource, source)) {
+        throw new ContractError('讨论来源 ID 已被其他内容使用', 'AGENT_EVIDENCE_ID_CONFLICT', 409, { evidenceId: entry.id });
+      }
+      if (!existingSource) {
+        next.sources.push(source);
+        sourcesById.set(sourceId, source);
+      }
+      const evidence = {
+        id: entry.id,
+        sourceId,
+        sourceKind,
+        basis,
+        path: null,
+        lineStart: null,
+        lineEnd: null,
+        excerpt: entry.excerpt.trim(),
+        contentHash,
+        collectedAt,
+      };
+      addImportedEvidence(next, evidenceById, evidence);
+      return;
+    }
+
     const material = readAnalysisSource(entry.path, projectRoot);
     if (material.contentHash !== entry.contentHash) {
       throw new ContractError('智能体证据与当前工作区内容不一致，请重新检查仓库后提交', 'AGENT_EVIDENCE_STALE', 409, {
@@ -698,6 +805,7 @@ function importAgentEvidence(analysis, manifest, projectRoot, collectedAt) {
     const existingSource = sourcesByPath.get(sourceKey);
     const source = {
       id: existingSource?.id || sourceIdForPath(entry.path),
+      sourceKind,
       path: entry.path,
       label: existingSource?.label || sourceLabelForPath(entry.path),
       type: sourceTypeForPath(entry.path),
@@ -710,11 +818,14 @@ function importAgentEvidence(analysis, manifest, projectRoot, collectedAt) {
     else {
       next.sources.push(source);
       sourcesByPath.set(sourceKey, source);
+      sourcesById.set(source.id, source);
     }
 
     const evidence = {
       id: entry.id,
       sourceId: source.id,
+      sourceKind,
+      basis,
       path: entry.path,
       lineStart: entry.lineStart,
       lineEnd: entry.lineEnd,
@@ -722,19 +833,23 @@ function importAgentEvidence(analysis, manifest, projectRoot, collectedAt) {
       contentHash: material.contentHash,
       collectedAt,
     };
-    const existingEvidence = evidenceById.get(evidence.id);
-    const sameEvidence = existingEvidence && [
-      'id', 'sourceId', 'path', 'lineStart', 'lineEnd', 'excerpt', 'contentHash',
-    ].every((field) => existingEvidence[field] === evidence[field]);
-    if (existingEvidence && !sameEvidence) {
-      throw new ContractError('证据 ID 已被其他内容使用', 'AGENT_EVIDENCE_ID_CONFLICT', 409, { evidenceId: evidence.id });
-    }
-    if (!existingEvidence) {
-      next.evidence.push(evidence);
-      evidenceById.set(evidence.id, evidence);
-    }
+    addImportedEvidence(next, evidenceById, evidence);
   });
   return next;
+}
+
+function addImportedEvidence(analysis, evidenceById, evidence) {
+  const existingEvidence = evidenceById.get(evidence.id);
+  const sameEvidence = existingEvidence && [
+    'id', 'sourceId', 'sourceKind', 'basis', 'path', 'lineStart', 'lineEnd', 'excerpt', 'contentHash',
+  ].every((field) => existingEvidence[field] === evidence[field]);
+  if (existingEvidence && !sameEvidence) {
+    throw new ContractError('证据 ID 已被其他内容使用', 'AGENT_EVIDENCE_ID_CONFLICT', 409, { evidenceId: evidence.id });
+  }
+  if (!existingEvidence) {
+    analysis.evidence.push(evidence);
+    evidenceById.set(evidence.id, evidence);
+  }
 }
 
 function changeIdForArtifact(artifactId, kind, targetType, targetId) {
@@ -792,6 +907,38 @@ function assertManifestCoversArtifact(artifact, manifest) {
       'AGENT_EVIDENCE_MANIFEST_INCOMPLETE',
       422,
       { evidenceIds: missingEvidenceIds },
+    );
+  }
+}
+
+function assertEvidenceBasisAllowed(run, artifact, manifest) {
+  if (run.view !== 'current') return;
+  const referencedIds = artifactEvidenceIds(artifact);
+  const forbidden = manifest.entries
+    .filter((entry) => referencedIds.has(entry.id) && normalizedEvidenceBasis(entry) !== 'code-fact')
+    .map((entry) => ({ id: entry.id, basis: normalizedEvidenceBasis(entry) }));
+  if (forbidden.length) {
+    throw new ContractError(
+      '当前架构与实施结果只能引用代码事实；用户讨论和设计材料只能支持目标架构',
+      'AGENT_EVIDENCE_BASIS_FORBIDDEN',
+      422,
+      { evidence: forbidden },
+    );
+  }
+}
+
+function assertEvidenceBasisIntegrity(manifest) {
+  const mislabeled = manifest.entries.filter((entry) => (
+    normalizedEvidenceSourceKind(entry) === 'workspace-file'
+    && normalizedEvidenceBasis(entry) === 'code-fact'
+    && sourceTypeForPath(entry.path) === 'markdown'
+  ));
+  if (mislabeled.length) {
+    throw new ContractError(
+      'Markdown 设计材料不能标记为代码事实',
+      'AGENT_EVIDENCE_BASIS_INVALID',
+      422,
+      { evidenceIds: mislabeled.map((entry) => entry.id) },
     );
   }
 }
@@ -953,6 +1100,8 @@ function submitAgentArtifact(analysis, runId, incoming, { projectRoot, diagram }
   }
   assertRunArtifactType(run, artifact);
   assertManifestCoversArtifact(artifact, manifest);
+  assertEvidenceBasisIntegrity(manifest);
+  assertEvidenceBasisAllowed(run, artifact, manifest);
   const state = readState(diagram.statePath);
   const lane = state[run.view];
   if (lane.published.revision !== run.baseRevision || lane.published.revisionId !== run.baseRevisionId) {
@@ -1378,6 +1527,31 @@ function enrichedRegistry(registry, stateOrEntries, projectRoot = resolveProject
   };
 }
 
+function pickAgentFields(value, allowed) {
+  return Object.fromEntries(Object.entries(value || {}).filter(([key, item]) => allowed.has(key) && item !== undefined));
+}
+
+function compactAgentArchitecture(revision) {
+  const { graph, ...metadata } = revision;
+  return {
+    ...clone(metadata),
+    representation: 'semantic-graph-v1',
+    graph: {
+      nodes: graph.nodes.map((node) => ({
+        id: node.id,
+        ...(node.type ? { type: node.type } : {}),
+        data: pickAgentFields(node.data, AGENT_NODE_DATA_FIELDS),
+      })),
+      edges: graph.edges.map((edge) => ({
+        id: edge.id,
+        source: edge.source,
+        target: edge.target,
+        data: pickAgentFields(edge.data, AGENT_EDGE_DATA_FIELDS),
+      })),
+    },
+  };
+}
+
 function addedDocumentRefs(beforeGraph, afterGraph) {
   const before = new Map(beforeGraph.nodes.map((node) => [node.id, new Set(node.data.documentRefs || [])]));
   const added = [];
@@ -1610,7 +1784,7 @@ function createServer(options = {}) {
             view,
             title: diagram.title,
             description: diagram.description,
-            published: clone(lane.published),
+            published: compactAgentArchitecture(lane.published),
             draft: lane.draft ? {
               draftId: lane.draft.draftId,
               draftRevision: lane.draft.draftRevision,
@@ -1628,6 +1802,9 @@ function createServer(options = {}) {
           workflow: {
             createRunFirst: true,
             evidenceRequired: true,
+            supportedEvidenceBases: ['user-confirmed', 'design-document', 'code-fact', 'agent-inference'],
+            conceptProjectsSupported: true,
+            currentArchitectureRequiresCodeFacts: true,
             evidencePathsAreWorkspaceRelative: true,
             separateWorkspaceConfigured: workspaceRoot !== projectRoot,
             humanReviewRequired: true,
@@ -1691,7 +1868,7 @@ function createServer(options = {}) {
           diagramId: diagram.id,
           approvalStatus: approvedDraft ? 'human-approved-draft' : 'published-target',
           approvedProposalIds: accepted.map((proposal) => proposal.id),
-          architecture: clone(approvedDraft || lane.published),
+          architecture: compactAgentArchitecture(approvedDraft || lane.published),
           agentCanPublish: false,
         });
       }
@@ -1702,7 +1879,7 @@ function createServer(options = {}) {
 
       if (req.method === 'PUT' && pathname === '/api/analysis/sources') {
         throw new ContractError(
-          'v0.2 不由查看器选择或扫描仓库文件；请由外部智能体提交证据清单',
+          '查看器不选择或扫描仓库文件；请由外部智能体提交结构化依据清单',
           'VIEWER_REPOSITORY_SCAN_REMOVED',
           410,
         );
@@ -1710,7 +1887,7 @@ function createServer(options = {}) {
 
       if (req.method === 'POST' && pathname === '/api/analysis/scan') {
         throw new ContractError(
-          'v0.2 不由查看器选择或扫描仓库文件；请由外部智能体提交证据清单',
+          '查看器不选择或扫描仓库文件；请由外部智能体提交结构化依据清单',
           'VIEWER_REPOSITORY_SCAN_REMOVED',
           410,
         );
@@ -1764,6 +1941,7 @@ function createServer(options = {}) {
             headRevisionId: lane.published.revisionId,
           });
         }
+        assertProposalEvidenceBasisAllowed(proposal, analysis);
         assertProposalEvidenceCurrent(proposal, analysis, workspaceRoot);
         const graph = applyProposalChanges(lane.published.graph, proposal, state);
         assertHumanConfirmedSemantics(state.meta, proposal.view, lane.published.graph, graph, {

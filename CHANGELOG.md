@@ -2,6 +2,28 @@
 
 All notable changes to AI Architecture Viewer are documented in this file.
 
+## [0.3.0] - 2026-07-15
+
+### Added
+
+- A concept-project target proposal flow that accepts user-confirmed discussion
+  conclusions and Markdown design material without requiring a code repository.
+- Four visible basis types: user confirmation, design document, code fact, and
+  agent inference, with file and discussion sources represented separately.
+- Compact semantic architecture responses for coding agents so stable IDs,
+  responsibilities, relationships, and boundaries can be reused without layout
+  coordinates or repeated full-context explanation.
+
+### Compatibility and governance
+
+- Exchange protocol `1.1.0` remains compatible with stored `1.0.0` artifacts;
+  analysis schema `2.1.0` migrates v0.2 sources and evidence in place.
+- Discussion and design intent may support target proposals but are rejected as
+  evidence of current implementation. Current snapshots and implementation
+  reports must reference code facts.
+- Agent submissions still cannot approve or publish. Human acceptance creates
+  only a draft, and publication remains a separate human-confirmed action.
+
 ## [0.2.0] - 2026-07-14
 
 ### Changed

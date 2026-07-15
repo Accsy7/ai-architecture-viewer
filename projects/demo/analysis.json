@@ -1,10 +1,11 @@
 {
-  "schemaVersion": "2.0.0",
+  "schemaVersion": "2.1.0",
   "baseRevision": 0,
   "lastUpdated": "2026-07-14T00:00:00.000Z",
   "sources": [
     {
       "id": "system-brief",
+      "sourceKind": "workspace-file",
       "path": "documents/system-brief.md",
       "label": "Synthetic system brief",
       "type": "markdown",
@@ -15,6 +16,7 @@
     },
     {
       "id": "evaluation-proposal",
+      "sourceKind": "workspace-file",
       "path": "documents/evaluation-proposal.md",
       "label": "Candidate evaluation gate",
       "type": "markdown",
@@ -28,6 +30,8 @@
     {
       "id": "human-review-boundary",
       "sourceId": "system-brief",
+      "sourceKind": "workspace-file",
+      "basis": "design-document",
       "path": "documents/system-brief.md",
       "lineStart": 7,
       "lineEnd": 10,
@@ -38,6 +42,8 @@
     {
       "id": "evaluation-gate-behavior",
       "sourceId": "evaluation-proposal",
+      "sourceKind": "workspace-file",
+      "basis": "design-document",
       "path": "documents/evaluation-proposal.md",
       "lineStart": 5,
       "lineEnd": 7,

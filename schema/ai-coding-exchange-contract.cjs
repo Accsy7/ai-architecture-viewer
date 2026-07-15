@@ -2,7 +2,8 @@
 
 const path = require('path');
 
-const AI_CODING_PROTOCOL_VERSION = '1.0.0';
+const AI_CODING_PROTOCOL_VERSION = '1.1.0';
+const SUPPORTED_PROTOCOL_VERSIONS = new Set(['1.0.0', AI_CODING_PROTOCOL_VERSION]);
 const ARTIFACT_TYPES = new Set([
   'task-request',
   'evidence-manifest',
@@ -14,6 +15,13 @@ const RELATION_TYPES = new Set(['flow', 'support', 'reference', 'governance', 'h
 const REVISION_KINDS = new Set(['git-commit', 'workspace', 'release']);
 const STABLE_ID = /^[a-z0-9][a-z0-9._-]{0,79}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
+const EVIDENCE_SOURCE_KINDS = new Set(['workspace-file', 'discussion']);
+const EVIDENCE_BASES = new Set([
+  'user-confirmed',
+  'design-document',
+  'code-fact',
+  'agent-inference',
+]);
 
 class AiCodingExchangeError extends Error {
   constructor(message, code = 'AI_CODING_ARTIFACT_INVALID', details) {
@@ -106,8 +114,8 @@ function evidenceIds(value, valuePath, { min = 1 } = {}) {
 
 function common(value, type) {
   object(value, 'artifact');
-  if (value.schemaVersion !== AI_CODING_PROTOCOL_VERSION) {
-    fail(`artifact.schemaVersion must be ${AI_CODING_PROTOCOL_VERSION}`);
+  if (!SUPPORTED_PROTOCOL_VERSIONS.has(value.schemaVersion)) {
+    fail(`artifact.schemaVersion must be one of ${[...SUPPORTED_PROTOCOL_VERSIONS].join(', ')}`);
   }
   if (value.artifactType !== type) fail(`artifact.artifactType must be ${type}`);
   stableId(value.artifactId, 'artifact.artifactId');
@@ -137,20 +145,55 @@ function validateEvidenceManifest(value) {
   list(value.entries, 'artifact.entries', { min: 1, max: 5000 }).forEach((entry, index) => {
     const entryPath = `artifact.entries[${index}]`;
     object(entry, entryPath);
-    keys(entry, new Set(['id', 'path', 'lineStart', 'lineEnd', 'summary', 'excerpt', 'contentHash', 'basis']), entryPath);
     stableId(entry.id, `${entryPath}.id`);
     if (ids.has(entry.id)) fail(`artifact.entries contains duplicate ID ${entry.id}`);
     ids.add(entry.id);
-    relativePath(entry.path, `${entryPath}.path`);
-    if (!Number.isSafeInteger(entry.lineStart) || entry.lineStart < 1) fail(`${entryPath}.lineStart must be at least 1`);
-    if (!Number.isSafeInteger(entry.lineEnd) || entry.lineEnd < entry.lineStart) fail(`${entryPath}.lineEnd must not precede lineStart`);
-    text(entry.summary, `${entryPath}.summary`, { max: 1000 });
-    if (entry.excerpt !== undefined && (typeof entry.excerpt !== 'string' || entry.excerpt.length > 4000)) {
-      fail(`${entryPath}.excerpt must be at most 4000 characters`);
+    if (value.schemaVersion === '1.0.0') {
+      keys(entry, new Set(['id', 'path', 'lineStart', 'lineEnd', 'summary', 'excerpt', 'contentHash', 'basis']), entryPath);
+      validateFileEvidenceFields(entry, entryPath);
+      if (!['fact', 'inference'].includes(entry.basis)) fail(`${entryPath}.basis must be fact or inference`);
+      return;
     }
-    if (typeof entry.contentHash !== 'string' || !SHA256.test(entry.contentHash)) fail(`${entryPath}.contentHash must be SHA-256`);
-    if (!['fact', 'inference'].includes(entry.basis)) fail(`${entryPath}.basis must be fact or inference`);
+
+    keys(entry, new Set([
+      'id', 'sourceKind', 'basis', 'path', 'lineStart', 'lineEnd', 'sourceLabel',
+      'recordedAt', 'summary', 'excerpt', 'contentHash',
+    ]), entryPath);
+    if (!EVIDENCE_SOURCE_KINDS.has(entry.sourceKind)) fail(`${entryPath}.sourceKind is not supported`);
+    if (!EVIDENCE_BASES.has(entry.basis)) fail(`${entryPath}.basis is not supported`);
+    text(entry.summary, `${entryPath}.summary`, { max: 1000 });
+    validateOptionalExcerpt(entry.excerpt, `${entryPath}.excerpt`);
+
+    if (entry.sourceKind === 'workspace-file') {
+      validateFileEvidenceFields(entry, entryPath);
+      return;
+    }
+
+    if (!['user-confirmed', 'agent-inference'].includes(entry.basis)) {
+      fail(`${entryPath}.basis must be user-confirmed or agent-inference for discussion evidence`);
+    }
+    if (entry.path !== undefined || entry.lineStart !== undefined || entry.lineEnd !== undefined || entry.contentHash !== undefined) {
+      fail(`${entryPath} discussion evidence must not claim a workspace file location or submitted hash`);
+    }
+    text(entry.sourceLabel, `${entryPath}.sourceLabel`, { max: 200 });
+    timestamp(entry.recordedAt, `${entryPath}.recordedAt`);
+    if (entry.excerpt === undefined || !entry.excerpt.trim()) fail(`${entryPath}.excerpt must capture the reviewed discussion text`);
   });
+}
+
+function validateOptionalExcerpt(value, valuePath) {
+  if (value !== undefined && (typeof value !== 'string' || value.length > 4000)) {
+    fail(`${valuePath} must be at most 4000 characters`);
+  }
+}
+
+function validateFileEvidenceFields(entry, entryPath) {
+  relativePath(entry.path, `${entryPath}.path`);
+  if (!Number.isSafeInteger(entry.lineStart) || entry.lineStart < 1) fail(`${entryPath}.lineStart must be at least 1`);
+  if (!Number.isSafeInteger(entry.lineEnd) || entry.lineEnd < entry.lineStart) fail(`${entryPath}.lineEnd must not precede lineStart`);
+  text(entry.summary, `${entryPath}.summary`, { max: 1000 });
+  validateOptionalExcerpt(entry.excerpt, `${entryPath}.excerpt`);
+  if (typeof entry.contentHash !== 'string' || !SHA256.test(entry.contentHash)) fail(`${entryPath}.contentHash must be SHA-256`);
 }
 
 function validateArchitectureSnapshot(value) {
@@ -324,6 +367,9 @@ function validateExchangeArtifact(value) {
 module.exports = {
   AI_CODING_PROTOCOL_VERSION,
   ARTIFACT_TYPES,
+  EVIDENCE_BASES,
+  EVIDENCE_SOURCE_KINDS,
+  SUPPORTED_PROTOCOL_VERSIONS,
   AiCodingExchangeError,
   validateExchangeArtifact,
 };

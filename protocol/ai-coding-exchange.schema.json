@@ -33,7 +33,7 @@
         "value": { "type": "string", "minLength": 1, "maxLength": 160 }
       }
     },
-    "evidenceEntry": {
+    "legacyEvidenceEntry": {
       "type": "object",
       "additionalProperties": false,
       "required": ["id", "path", "lineStart", "lineEnd", "summary", "contentHash", "basis"],
@@ -47,6 +47,42 @@
         "contentHash": { "$ref": "#/$defs/hash" },
         "basis": { "enum": ["fact", "inference"] }
       }
+    },
+    "fileEvidenceEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "sourceKind", "basis", "path", "lineStart", "lineEnd", "summary", "contentHash"],
+      "properties": {
+        "id": { "$ref": "#/$defs/stableId" },
+        "sourceKind": { "const": "workspace-file" },
+        "basis": { "enum": ["user-confirmed", "design-document", "code-fact", "agent-inference"] },
+        "path": { "$ref": "#/$defs/relativePath" },
+        "lineStart": { "type": "integer", "minimum": 1 },
+        "lineEnd": { "type": "integer", "minimum": 1 },
+        "summary": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "excerpt": { "type": "string", "maxLength": 4000 },
+        "contentHash": { "$ref": "#/$defs/hash" }
+      }
+    },
+    "discussionEvidenceEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "sourceKind", "basis", "sourceLabel", "recordedAt", "summary", "excerpt"],
+      "properties": {
+        "id": { "$ref": "#/$defs/stableId" },
+        "sourceKind": { "const": "discussion" },
+        "basis": { "enum": ["user-confirmed", "agent-inference"] },
+        "sourceLabel": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "recordedAt": { "type": "string", "format": "date-time" },
+        "summary": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "excerpt": { "type": "string", "minLength": 1, "maxLength": 4000 }
+      }
+    },
+    "evidenceEntry": {
+      "oneOf": [
+        { "$ref": "#/$defs/fileEvidenceEntry" },
+        { "$ref": "#/$defs/discussionEvidenceEntry" }
+      ]
     },
     "architectureNode": {
       "type": "object",
@@ -137,7 +173,7 @@
       "additionalProperties": false,
       "required": ["schemaVersion", "artifactType", "artifactId", "createdAt", "goal", "constraints", "nonGoals", "acceptanceCriteria", "decisionsRequired"],
       "properties": {
-        "schemaVersion": { "const": "1.0.0" },
+        "schemaVersion": { "enum": ["1.0.0", "1.1.0"] },
         "artifactType": { "const": "task-request" },
         "artifactId": { "$ref": "#/$defs/stableId" },
         "createdAt": { "type": "string", "format": "date-time" },
@@ -149,11 +185,30 @@
       }
     },
     "evidenceManifest": {
+      "oneOf": [
+        { "$ref": "#/$defs/evidenceManifestV1" },
+        { "$ref": "#/$defs/evidenceManifestV11" }
+      ]
+    },
+    "evidenceManifestV1": {
       "type": "object",
       "additionalProperties": false,
       "required": ["schemaVersion", "artifactType", "artifactId", "createdAt", "projectRevision", "entries"],
       "properties": {
         "schemaVersion": { "const": "1.0.0" },
+        "artifactType": { "const": "evidence-manifest" },
+        "artifactId": { "$ref": "#/$defs/stableId" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "projectRevision": { "$ref": "#/$defs/revision" },
+        "entries": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/legacyEvidenceEntry" } }
+      }
+    },
+    "evidenceManifestV11": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "artifactType", "artifactId", "createdAt", "projectRevision", "entries"],
+      "properties": {
+        "schemaVersion": { "const": "1.1.0" },
         "artifactType": { "const": "evidence-manifest" },
         "artifactId": { "$ref": "#/$defs/stableId" },
         "createdAt": { "type": "string", "format": "date-time" },
@@ -166,7 +221,7 @@
       "additionalProperties": false,
       "required": ["schemaVersion", "artifactType", "artifactId", "createdAt", "project", "scope", "nodes", "edges", "assumptions", "unknowns", "evidenceManifest"],
       "properties": {
-        "schemaVersion": { "const": "1.0.0" },
+        "schemaVersion": { "enum": ["1.0.0", "1.1.0"] },
         "artifactType": { "const": "architecture-snapshot" },
         "artifactId": { "$ref": "#/$defs/stableId" },
         "createdAt": { "type": "string", "format": "date-time" },
@@ -200,7 +255,7 @@
       "additionalProperties": false,
       "required": ["schemaVersion", "artifactType", "artifactId", "createdAt", "requestId", "baseSnapshotId", "title", "summary", "options", "recommendedOptionId", "changes", "acceptanceCriteria", "risks", "decisionsRequired", "evidenceManifest"],
       "properties": {
-        "schemaVersion": { "const": "1.0.0" },
+        "schemaVersion": { "enum": ["1.0.0", "1.1.0"] },
         "artifactType": { "const": "architecture-proposal" },
         "artifactId": { "$ref": "#/$defs/stableId" },
         "createdAt": { "type": "string", "format": "date-time" },
@@ -222,7 +277,7 @@
       "additionalProperties": false,
       "required": ["schemaVersion", "artifactType", "artifactId", "createdAt", "requestId", "approvedProposalId", "status", "resultingRevision", "changedFiles", "tests", "acceptanceResults", "drift", "unresolved", "evidenceManifest", "resultingSnapshot"],
       "properties": {
-        "schemaVersion": { "const": "1.0.0" },
+        "schemaVersion": { "enum": ["1.0.0", "1.1.0"] },
         "artifactType": { "const": "implementation-report" },
         "artifactId": { "$ref": "#/$defs/stableId" },
         "createdAt": { "type": "string", "format": "date-time" },

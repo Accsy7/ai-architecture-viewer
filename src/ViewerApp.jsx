@@ -89,7 +89,7 @@ const EMPTY_REGISTRY = {
 };
 
 const EMPTY_ANALYSIS = {
-  schemaVersion: '2.0.0',
+  schemaVersion: '2.1.0',
   baseRevision: 0,
   lastUpdated: null,
   sources: [],
@@ -109,7 +109,7 @@ const EMPTY_ANALYSIS = {
 
 const EMPTY_SKILL_CATALOG = {
   schemaVersion: '1.0.0',
-  protocolVersion: '1.0.0',
+  protocolVersion: '1.1.0',
   skills: [],
 };
 
@@ -858,7 +858,9 @@ function Viewer() {
       '请连接本项目的 AI Architecture Viewer MCP 服务。',
       `启动命令：${analysisRef.current.integration?.mcpCommand || 'npm run mcp'}`,
       '先调用 get_project_context，再调用 create_agent_run。',
-      '证据路径必须相对于查看器配置的代码仓库根目录。',
+      '概念项目可从用户确认的讨论结论或 Markdown 设计材料提交目标提案，无需代码仓库。',
+      '文件依据路径必须相对于查看器配置的工作区根目录。',
+      '每条依据标明 user-confirmed、design-document、code-fact 或 agent-inference；当前架构只能引用 code-fact。',
       '根据任务提交 architecture snapshot、change proposal 或 implementation report，并附带 evidence manifest。',
       '不要接受提案或发布架构；这两步必须由用户在查看器中完成。',
     ].join('\n');
@@ -913,12 +915,13 @@ function Viewer() {
 
   const openEvidenceExcerpt = useCallback((evidence) => {
     if (!evidence) return;
+    const isDiscussion = evidence.sourceKind === 'discussion';
     const range = evidence.lineEnd && evidence.lineEnd !== evidence.lineStart
       ? `${evidence.lineStart}–${evidence.lineEnd}`
       : evidence.lineStart;
     setPreview({
-      title: '资料证据摘录',
-      path: `${evidence.path}:${range}`,
+      title: isDiscussion ? '用户讨论依据摘录' : '资料依据摘录',
+      path: isDiscussion ? (evidence.sourceLabel || '用户与智能体讨论') : `${evidence.path}:${range}`,
       content: evidence.excerpt || '',
     });
     setPreviewLoading(false);

@@ -3,12 +3,12 @@
 [简体中文](README.md)
 
 [![CI](https://github.com/Accsy7/ai-architecture-viewer/actions/workflows/ci.yml/badge.svg)](https://github.com/Accsy7/ai-architecture-viewer/actions/workflows/ci.yml)
-![Version: v0.2.0](https://img.shields.io/badge/version-v0.2.0-2f6f5e)
+![Version: v0.3.0](https://img.shields.io/badge/version-v0.3.0-2f6f5e)
 [![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-7c6f64)](LICENSE)
 
 > **License:** Source code is available only for the noncommercial purposes defined by the [PolyForm Noncommercial License 1.0.0](LICENSE). Derivative versions must retain the attribution in [NOTICE](NOTICE) and follow the [Project Name and Brand Usage Policy](TRADEMARKS.en.md).
 
-AI Architecture Viewer is a local-first architecture collaboration surface between coding agents and people. Agents such as Codex and Claude Code inspect a repository with their existing tools, then submit architecture snapshots, change proposals, and implementation reports through standard MCP or JSON artifacts. The viewer turns those results into verifiable diagrams, evidence, and diffs; the user decides what to accept, revise, and publish.
+AI Architecture Viewer is a local-first architecture collaboration surface between coding agents and people. For a concept project, a user and an agent such as Codex or Claude Code can form a target architecture from confirmed discussion conclusions or Markdown design material. For a code project, the agent can use its existing repository tools to submit current snapshots and implementation reports. The viewer renders these results as verifiable diagrams, basis records, and diffs; the user decides what to accept, revise, and publish.
 
 It does not embed a model, require a model API key, or scan a repository on an agent's behalf.
 
@@ -16,11 +16,14 @@ It does not embed a model, require a model API key, or scan a repository on an a
 
 All bundled screens and data are fictional. No customer, production, or personal data is included.
 
-## What the v0.2.0 MVP does
+## What the v0.3.0 MVP does
 
-- Lets external agents read the published architecture, diagram catalog, and project document index.
+- Lets external agents read published stable IDs, responsibilities, relationships, and boundaries as a compact semantic graph without retransmitting layout data.
+- Supports concept projects without a code repository by accepting target proposals from user-confirmed discussion or Markdown design material.
 - Creates a traceable run for each discovery, planning, or reconciliation task and locks the architecture baseline used by that run.
-- Accepts evidence manifests with repository-relative paths, line ranges, and content hashes; rejects escaped, sensitive, or stale evidence.
+- Distinguishes four visible basis types: user confirmation, design document, code fact, and agent inference.
+- Verifies file-based paths, line ranges, and content hashes; rejects escaped, sensitive, or stale material.
+- Allows discussion and design material to support target design, but never as proof of current implementation.
 - Converts agent architecture snapshots into semantic diffs. Existing nodes omitted from a snapshot are never removed automatically.
 - Places architecture proposals in a human inbox with per-change evidence and submitter provenance.
 - Reserves acceptance and rejection for the user. Acceptance writes only a draft; publication requires a second explicit human action.
@@ -31,17 +34,28 @@ All bundled screens and data are fictional. No customer, production, or personal
 
 ```mermaid
 flowchart LR
-    U["User defines the goal"] --> A["Codex / Claude Code inspects the repository"]
-    A --> M["Submit snapshots, proposals, and evidence through MCP"]
-    M --> V["Viewer renders architecture diffs"]
+    U["User and agent confirm the goal"] --> C["Discussion / Markdown design"]
+    C --> T["Submit target proposal"]
+    R["Repository code facts"] --> S["Submit current snapshot or implementation report"]
+    T --> V["Viewer labels the basis and renders diffs"]
+    S --> V
     V --> H{"Human review"}
-    H -->|Reject| A
+    H -->|Reject| U
     H -->|Accept| D["Write architecture draft"]
     D --> P{"Human publication"}
-    P --> R["Formal revision and history"]
+    P --> G["Published target and history"]
+    G --> A["Agent reads compact target and implements"]
+    A --> R
 ```
 
 The capability boundary is explicit: the MCP server exposes no `approve` or `publish` tool. Agents investigate, reason, and submit; people decide and publish.
+
+| Basis type | Meaning | Proves current implementation? |
+| --- | --- | --- |
+| User confirmation | A target or boundary explicitly confirmed by the user | No |
+| Design document | Intended design described by Markdown or similar material | No |
+| Code fact | Implementation directly verified from repository files | Yes |
+| Agent inference | A conclusion not yet confirmed by the user or code | No |
 
 ## Quick start
 
@@ -109,13 +123,13 @@ The client asks you to trust a new local MCP server on first use. See the [offic
 | Tool | Purpose | Changes formal architecture? |
 | --- | --- | --- |
 | `get_project_context` | Read the project, diagrams, baseline, and collaboration boundaries | No |
-| `get_current_architecture` | Read the current published architecture | No |
+| `get_current_architecture` | Read the current published architecture as a compact semantic graph | No |
 | `create_agent_run` | Create a traceable run and lock its baseline | No |
 | `submit_architecture_snapshot` | Submit current-state understanding and evidence | No; creates candidate diffs only |
 | `submit_change_proposal` | Submit a target architecture change | No; enters the inbox only |
 | `submit_implementation_report` | Submit implementation results, checks, and drift | No |
 | `get_review_status` | Read human review outcomes | No |
-| `get_approved_target` | Read the accepted target draft or published target | No |
+| `get_approved_target` | Read the accepted target draft or published target as a compact semantic graph | No |
 
 ## CLI and file fallback
 
@@ -146,7 +160,7 @@ npm run protocol:validate -- ai-coding/path/to/artifact.json
 [`skills/`](skills/) contains three vendor-neutral workflows:
 
 - `architecture-discovery`: inspect a user-authorized repository scope and submit a current architecture snapshot with evidence.
-- `architecture-change-plan`: turn user intent into options, a recommendation, target architecture changes, and acceptance criteria.
+- `architecture-change-plan`: form options, target changes, and acceptance criteria from confirmed discussion, design documents, or code facts; concept projects require no code repository.
 - `implementation-reconcile`: compare actual code with the human-approved architecture and submit checks, completion status, and all drift.
 
 Skills prefer MCP and fall back to JSON files plus the CLI. They cannot accept their own proposals, alter published architecture, or approve implementation for the user.
@@ -171,7 +185,7 @@ $env:VIEWER_WORKSPACE_ROOT = 'D:\work\my-code-repository'
 npm start
 ```
 
-Every evidence path submitted by an agent is relative to `VIEWER_WORKSPACE_ROOT`; the viewer rereads that file inside the configured repository and verifies its content hash. When the setting is omitted, it defaults to `VIEWER_PROJECT_DIR`, preserving the simple layout where the data package lives at the repository root. Keep real project data outside the public repository or in a private workspace.
+Every file-based basis path submitted by an agent is relative to `VIEWER_WORKSPACE_ROOT`; the viewer rereads the file and verifies its content hash. Discussion basis records have no invented file path: they retain a source label, confirmation time, and excerpt for human review. A concept project may provide only design material, while a code project's current architecture and implementation results must be supported by code facts. When the workspace setting is omitted, it defaults to `VIEWER_PROJECT_DIR`. Keep real project data outside the public repository or in a private workspace.
 
 ## Development and verification
 
@@ -187,7 +201,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development conventions, [SECURITY.md
 - Default examples and documents must be fictional or explicitly authorized for public release.
 - Never commit credentials, access tokens, customer material, internal paths, or architecture data that has not been de-identified.
 - Agents may submit structured candidates only. Acceptance and publication require human actions.
-- v0.2.0 binds to `127.0.0.1` only. Mutation APIs do not yet provide authentication, CSRF protection, or multi-user authorization; do not proxy the service to a LAN or the public internet.
+- v0.3.0 binds to `127.0.0.1` only. Mutation APIs do not yet provide authentication, CSRF protection, or multi-user authorization; do not proxy the service to a LAN or the public internet.
 - Source code uses the [PolyForm Noncommercial License 1.0.0](LICENSE). It is source-available, not OSI open source. Commercial use requires separate written authorization; see [COMMERCIAL_LICENSE.en.md](COMMERCIAL_LICENSE.en.md).
 - Derivative works are allowed, but public modified versions must retain [NOTICE](NOTICE) attribution and follow [TRADEMARKS.en.md](TRADEMARKS.en.md): use a different name and logo and do not imply official status or endorsement.
 - Third-party dependencies remain subject to their own licenses.

@@ -16,7 +16,7 @@ function readJson(relativePath) {
 test('bundled AI coding skills have a safe public catalog and existing instructions', () => {
   const catalog = readSkillCatalog(path.join(ROOT, 'skills'));
   assert.equal(catalog.schemaVersion, '1.0.0');
-  assert.equal(catalog.protocolVersion, '1.0.0');
+  assert.equal(catalog.protocolVersion, '1.1.0');
   assert.deepEqual(catalog.skills.map((skill) => skill.id), [
     'architecture-discovery',
     'architecture-change-plan',
@@ -32,7 +32,8 @@ test('bundled AI coding skills have a safe public catalog and existing instructi
 test('canonical exchange manifest and JSON Schema are parseable and cover all artifact types', () => {
   const manifest = readJson('protocol/manifest.json');
   const schema = readJson('protocol/ai-coding-exchange.schema.json');
-  assert.equal(manifest.schemaVersion, '1.0.0');
+  assert.equal(manifest.schemaVersion, '1.1.0');
+  assert.equal(manifest.protocolVersion, '1.1.0');
   assert.equal(schema.$schema, 'https://json-schema.org/draft/2020-12/schema');
   assert.deepEqual(manifest.artifacts.map((artifact) => artifact.type).sort(), [
     'architecture-proposal',
@@ -66,6 +67,33 @@ test('exchange contract rejects absolute evidence paths and unsupported artifact
   evidence.entries[0].path = 'C:\\private\\source.js';
   assert.throws(() => validateExchangeArtifact(evidence), /repository-relative path/);
   assert.throws(() => validateExchangeArtifact({ artifactType: 'automatic-publish' }), /not supported/);
+});
+
+test('exchange protocol distinguishes discussion decisions from file facts and remains v1 compatible', () => {
+  const discussion = readJson('skills/architecture-change-plan/assets/evidence-manifest.template.json');
+  assert.equal(validateExchangeArtifact(discussion).entries[0].basis, 'user-confirmed');
+
+  const falseCodeFact = structuredClone(discussion);
+  falseCodeFact.entries[0].basis = 'code-fact';
+  assert.throws(() => validateExchangeArtifact(falseCodeFact), /user-confirmed or agent-inference/);
+
+  const legacy = {
+    schemaVersion: '1.0.0',
+    artifactType: 'evidence-manifest',
+    artifactId: 'legacy-evidence',
+    createdAt: '2026-07-14T00:00:00.000Z',
+    projectRevision: { kind: 'workspace', value: 'legacy' },
+    entries: [{
+      id: 'legacy-readme',
+      path: 'README.md',
+      lineStart: 1,
+      lineEnd: 1,
+      summary: 'Legacy evidence stays valid.',
+      contentHash: 'a'.repeat(64),
+      basis: 'fact',
+    }],
+  };
+  assert.deepEqual(validateExchangeArtifact(legacy), legacy);
 });
 
 test('complete implementation reports require observed passing checks and satisfied criteria', () => {

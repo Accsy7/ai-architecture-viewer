@@ -60,6 +60,8 @@ test('MCP stdio server exposes the governed external-agent tool surface', async 
     const payload = JSON.parse(result.content[0].text);
     assert.equal(payload.diagram.id, 'system-overview');
     assert.ok(payload.published.graph.nodes.length > 0);
+    assert.equal(payload.published.representation, 'semantic-graph-v1');
+    assert.equal(JSON.stringify(payload.published).includes('position'), false);
   } finally {
     await client.close();
   }

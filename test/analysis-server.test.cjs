@@ -19,7 +19,7 @@ function hash(content) {
   return crypto.createHash('sha256').update(content, 'utf8').digest('hex');
 }
 
-function createFixture({ separateWorkspace = false } = {}) {
+function createFixture({ separateWorkspace = false, withoutCodeRepository = false, clearTargetDraft = false } = {}) {
   const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'architecture-agent-server-'));
   const workspaceRoot = separateWorkspace
     ? fs.mkdtempSync(path.join(os.tmpdir(), 'architecture-agent-workspace-'))
@@ -30,19 +30,34 @@ function createFixture({ separateWorkspace = false } = {}) {
   const documentsFile = path.join(projectRoot, 'document-registry.json');
   const staticRoot = path.join(projectRoot, 'dist');
   const sourceFile = path.join(workspaceRoot, 'src', 'service.js');
+  const designFile = path.join(workspaceRoot, 'docs', 'target-design.md');
   const sourceContent = [
     'export function evaluateEvidence(candidate) {',
     '  return candidate.citations.length > 0;',
     '}',
   ].join('\n');
-  fs.mkdirSync(path.dirname(sourceFile), { recursive: true });
+  if (!withoutCodeRepository) fs.mkdirSync(path.dirname(sourceFile), { recursive: true });
+  fs.mkdirSync(path.dirname(designFile), { recursive: true });
   fs.mkdirSync(staticRoot, { recursive: true });
   fs.copyFileSync(V2_STATE, stateFile);
+  if (clearTargetDraft) {
+    const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+    state.target.draft = null;
+    fs.writeFileSync(stateFile, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+  }
   fs.copyFileSync(DEMO_CONFIG, configFile);
   fs.copyFileSync(DEMO_DOCUMENTS, documentsFile);
-  fs.writeFileSync(sourceFile, sourceContent, 'utf8');
+  if (!withoutCodeRepository) fs.writeFileSync(sourceFile, sourceContent, 'utf8');
+  const designContent = '# Target design\n\nThe target needs a human-governed architecture decision boundary.\n';
+  fs.writeFileSync(designFile, designContent, 'utf8');
   fs.writeFileSync(path.join(staticRoot, 'index.html'), '<!doctype html><div id="root"></div>', 'utf8');
-  return { projectRoot, workspaceRoot, stateFile, analysisFile, configFile, documentsFile, staticRoot, sourceFile, sourceContent };
+  return {
+    projectRoot, workspaceRoot, stateFile, analysisFile, configFile, documentsFile, staticRoot,
+    sourceFile: withoutCodeRepository ? null : sourceFile,
+    sourceContent,
+    designFile,
+    designContent,
+  };
 }
 
 async function startFixture(t, options = {}) {
@@ -128,6 +143,91 @@ function changeProposal() {
   };
 }
 
+function conceptProposal({
+  artifactId = 'proposal-concept-governance',
+  evidenceId = 'evidence-user-target-decision',
+} = {}) {
+  return {
+    schemaVersion: '1.1.0',
+    artifactType: 'architecture-proposal',
+    artifactId,
+    createdAt: NOW,
+    requestId: 'request-concept-governance',
+    baseSnapshotId: 'target-baseline-r0',
+    title: 'Add a human-governed decision boundary',
+    summary: 'Turn the confirmed product direction into a reviewable target architecture node.',
+    options: [{
+      id: 'option-governed-boundary',
+      title: 'Explicit decision boundary',
+      summary: 'Represent the human-controlled target boundary as a stable architecture responsibility.',
+      advantages: ['Keeps user intent visible to coding agents.'],
+      disadvantages: ['Still requires human review and publication.'],
+    }],
+    recommendedOptionId: 'option-governed-boundary',
+    changes: [{
+      id: 'change-add-governed-boundary',
+      kind: 'add',
+      targetType: 'node',
+      targetId: 'human-decision-boundary',
+      summary: 'Add the confirmed target responsibility.',
+      evidenceIds: [evidenceId],
+      patch: {
+        data: {
+          name: 'Human decision boundary',
+          purpose: 'Keeps target architecture approval under explicit user control.',
+          technical: 'External-agent handoff boundary',
+          product: 'Architecture review gate',
+          authorization: 'Only the user may approve and publish.',
+          horizon: '近期',
+        },
+      },
+    }],
+    acceptanceCriteria: ['The target shows a human-controlled decision boundary.'],
+    risks: ['The target remains a design until implementation is verified.'],
+    decisionsRequired: [],
+    evidenceManifest: 'evidence-manifest.json',
+  };
+}
+
+function discussionEvidenceManifest() {
+  return {
+    schemaVersion: '1.1.0',
+    artifactType: 'evidence-manifest',
+    artifactId: 'evidence-concept-discussion',
+    createdAt: NOW,
+    projectRevision: { kind: 'workspace', value: 'concept-only' },
+    entries: [{
+      id: 'evidence-user-target-decision',
+      sourceKind: 'discussion',
+      basis: 'user-confirmed',
+      sourceLabel: 'User and Codex target-design discussion',
+      recordedAt: NOW,
+      summary: 'The user confirmed that architecture approval and publication remain human controlled.',
+      excerpt: 'The target architecture must remain under user review; the agent cannot approve or publish it.',
+    }],
+  };
+}
+
+function designEvidenceManifest(designContent) {
+  return {
+    schemaVersion: '1.1.0',
+    artifactType: 'evidence-manifest',
+    artifactId: 'evidence-concept-design',
+    createdAt: NOW,
+    projectRevision: { kind: 'workspace', value: 'concept-design' },
+    entries: [{
+      id: 'evidence-design-target-boundary',
+      sourceKind: 'workspace-file',
+      basis: 'design-document',
+      path: 'docs/target-design.md',
+      lineStart: 1,
+      lineEnd: 3,
+      summary: 'The Markdown design defines the intended human-governed boundary.',
+      contentHash: hash(designContent),
+    }],
+  };
+}
+
 function implementationReport() {
   return {
     schemaVersion: '1.0.0',
@@ -181,6 +281,12 @@ test('agent APIs expose local context without a model provider or approval capab
   assert.equal(context.payload.workflow.agentCanApprove, false);
   assert.equal(context.payload.workflow.agentCanPublish, false);
   assert.equal(context.payload.selected.published.revision, 1);
+  assert.equal(context.payload.selected.published.representation, 'semantic-graph-v1');
+  assert.equal(context.payload.selected.published.graph.nodes[0].position, undefined);
+  assert.equal(context.payload.selected.published.graph.nodes[0].width, undefined);
+  assert.deepEqual(context.payload.workflow.supportedEvidenceBases, [
+    'user-confirmed', 'design-document', 'code-fact', 'agent-inference',
+  ]);
 
   const analysis = await request(fixture.baseUrl, '/api/analysis');
   assert.equal(analysis.payload.schemaVersion, ANALYSIS_SCHEMA_VERSION);
@@ -247,6 +353,182 @@ test('an external proposal is evidence-verified, human-reviewed, and applied onl
   const status = await request(fixture.baseUrl, `/api/agent/runs/${run.id}`);
   assert.equal(status.payload.run.status, 'reviewed');
   assert.equal(status.payload.permissions.canPublish, false);
+});
+
+test('a concept project can complete the target-proposal loop from user-confirmed discussion without code', async (t) => {
+  const fixture = await startFixture(t, { withoutCodeRepository: true, clearTargetDraft: true });
+  assert.equal(fixture.sourceFile, null);
+  assert.equal(fs.existsSync(path.join(fixture.workspaceRoot, 'src')), false);
+
+  const run = await createRun(fixture.baseUrl, {
+    view: 'target',
+    summary: 'Turn the confirmed discussion into a concept-project target proposal.',
+  });
+  const submitted = await request(fixture.baseUrl, `/api/agent/runs/${run.id}/artifacts`, {
+    method: 'POST',
+    body: body({ artifact: conceptProposal(), evidenceManifest: discussionEvidenceManifest() }),
+  });
+  assert.equal(submitted.response.status, 201, JSON.stringify(submitted.payload));
+  assert.equal(submitted.payload.permissions.canApprove, false);
+  assert.equal(submitted.payload.permissions.canPublish, false);
+
+  const analysis = await request(fixture.baseUrl, '/api/analysis');
+  const proposal = analysis.payload.proposals.find((item) => item.id === 'proposal-concept-governance');
+  assert.equal(proposal.view, 'target');
+  assert.deepEqual({
+    sourceKind: proposal.evidence[0].sourceKind,
+    basis: proposal.evidence[0].basis,
+    sourceLabel: proposal.evidence[0].sourceLabel,
+    path: proposal.evidence[0].path,
+  }, {
+    sourceKind: 'discussion',
+    basis: 'user-confirmed',
+    sourceLabel: 'User and Codex target-design discussion',
+    path: null,
+  });
+
+  const accepted = await request(fixture.baseUrl, `/api/analysis/proposals/${proposal.id}/accept`, {
+    method: 'POST',
+    body: body({
+      schemaVersion: ANALYSIS_SCHEMA_VERSION,
+      baseRevision: analysis.payload.baseRevision,
+      userConfirmed: true,
+    }),
+  });
+  assert.equal(accepted.response.status, 200, JSON.stringify(accepted.payload));
+  assert.equal(accepted.payload.lane.published.graph.nodes.length, 0, 'acceptance must not alter the published target');
+  assert.equal(accepted.payload.lane.draft.graph.nodes[0].id, 'human-decision-boundary');
+
+  const approvedDraft = await request(fixture.baseUrl, '/api/agent/approved-target');
+  assert.equal(approvedDraft.payload.approvalStatus, 'human-approved-draft');
+  assert.equal(approvedDraft.payload.architecture.representation, 'semantic-graph-v1');
+  assert.equal(approvedDraft.payload.architecture.graph.nodes[0].position, undefined);
+
+  const lane = accepted.payload.lane;
+  const published = await request(fixture.baseUrl, '/api/publish?view=target', {
+    method: 'POST',
+    body: body({
+      schemaVersion: lane.schemaVersion,
+      expectedHeadRevision: lane.published.revision,
+      expectedHeadRevisionId: lane.published.revisionId,
+      expectedDraftId: lane.draft.draftId,
+      expectedDraftRevision: lane.draft.draftRevision,
+      message: 'User publishes the confirmed concept target',
+      userConfirmed: true,
+    }),
+  });
+  assert.equal(published.response.status, 200, JSON.stringify(published.payload));
+
+  const approvedTarget = await request(fixture.baseUrl, '/api/agent/approved-target');
+  assert.equal(approvedTarget.payload.approvalStatus, 'published-target');
+  assert.equal(approvedTarget.payload.architecture.graph.nodes[0].id, 'human-decision-boundary');
+  assert.equal(approvedTarget.payload.architecture.graph.nodes[0].data.authorization, 'Only the user may approve and publish.');
+  assert.equal(JSON.stringify(approvedTarget.payload.architecture).includes('position'), false);
+  assert.equal(JSON.stringify(approvedTarget.payload.architecture).includes('documentRefs'), false);
+});
+
+test('a Markdown design can support a target proposal without any code repository', async (t) => {
+  const fixture = await startFixture(t, { withoutCodeRepository: true, clearTargetDraft: true });
+  const run = await createRun(fixture.baseUrl, { view: 'target' });
+  const submitted = await request(fixture.baseUrl, `/api/agent/runs/${run.id}/artifacts`, {
+    method: 'POST',
+    body: body({
+      artifact: conceptProposal({
+        artifactId: 'proposal-markdown-target',
+        evidenceId: 'evidence-design-target-boundary',
+      }),
+      evidenceManifest: designEvidenceManifest(fixture.designContent),
+    }),
+  });
+  assert.equal(submitted.response.status, 201, JSON.stringify(submitted.payload));
+  const analysis = await request(fixture.baseUrl, '/api/analysis');
+  const proposal = analysis.payload.proposals.find((item) => item.id === 'proposal-markdown-target');
+  assert.equal(proposal.evidence[0].basis, 'design-document');
+  assert.equal(proposal.evidence[0].sourceKind, 'workspace-file');
+  assert.equal(proposal.evidence[0].path, 'docs/target-design.md');
+});
+
+test('discussion and design intent cannot be submitted as current implementation facts', async (t) => {
+  const fixture = await startFixture(t, { withoutCodeRepository: true });
+  const run = await createRun(fixture.baseUrl, { view: 'current' });
+  const discussion = await request(fixture.baseUrl, `/api/agent/runs/${run.id}/artifacts`, {
+    method: 'POST',
+    body: body({ artifact: conceptProposal(), evidenceManifest: discussionEvidenceManifest() }),
+  });
+  assert.equal(discussion.response.status, 422);
+  assert.equal(discussion.payload.code, 'AGENT_EVIDENCE_BASIS_FORBIDDEN');
+
+  const design = await request(fixture.baseUrl, `/api/agent/runs/${run.id}/artifacts`, {
+    method: 'POST',
+    body: body({
+      artifact: conceptProposal({
+        artifactId: 'proposal-false-current-design',
+        evidenceId: 'evidence-design-target-boundary',
+      }),
+      evidenceManifest: designEvidenceManifest(fixture.designContent),
+    }),
+  });
+  assert.equal(design.response.status, 422);
+  assert.equal(design.payload.code, 'AGENT_EVIDENCE_BASIS_FORBIDDEN');
+
+  const mislabeledManifest = designEvidenceManifest(fixture.designContent);
+  mislabeledManifest.artifactId = 'evidence-mislabeled-markdown';
+  mislabeledManifest.entries[0].basis = 'code-fact';
+  const mislabeled = await request(fixture.baseUrl, `/api/agent/runs/${run.id}/artifacts`, {
+    method: 'POST',
+    body: body({
+      artifact: conceptProposal({
+        artifactId: 'proposal-mislabeled-markdown',
+        evidenceId: 'evidence-design-target-boundary',
+      }),
+      evidenceManifest: mislabeledManifest,
+    }),
+  });
+  assert.equal(mislabeled.response.status, 422);
+  assert.equal(mislabeled.payload.code, 'AGENT_EVIDENCE_BASIS_INVALID');
+  const after = await request(fixture.baseUrl, '/api/analysis');
+  assert.equal(after.payload.proposals.length, 0);
+  assert.equal(after.payload.evidence.length, 0);
+});
+
+test('a migrated current proposal backed by design intent stays readable but cannot be accepted', async (t) => {
+  const fixture = await startFixture(t, { withoutCodeRepository: true, clearTargetDraft: true });
+  const run = await createRun(fixture.baseUrl, { view: 'target' });
+  const submitted = await request(fixture.baseUrl, `/api/agent/runs/${run.id}/artifacts`, {
+    method: 'POST',
+    body: body({
+      artifact: conceptProposal({
+        artifactId: 'proposal-legacy-design-current',
+        evidenceId: 'evidence-design-target-boundary',
+      }),
+      evidenceManifest: designEvidenceManifest(fixture.designContent),
+    }),
+  });
+  assert.equal(submitted.response.status, 201, JSON.stringify(submitted.payload));
+
+  const stored = JSON.parse(fs.readFileSync(fixture.analysisFile, 'utf8'));
+  const currentState = JSON.parse(fs.readFileSync(fixture.stateFile, 'utf8')).current;
+  stored.proposals[0].view = 'current';
+  stored.proposals[0].baseRevision = currentState.published.revision;
+  stored.proposals[0].baseRevisionId = currentState.published.revisionId;
+  stored.agentRuns[0].view = 'current';
+  stored.agentRuns[0].baseRevision = currentState.published.revision;
+  stored.agentRuns[0].baseRevisionId = currentState.published.revisionId;
+  fs.writeFileSync(fixture.analysisFile, `${JSON.stringify(stored, null, 2)}\n`, 'utf8');
+
+  const readable = await request(fixture.baseUrl, '/api/analysis');
+  assert.equal(readable.response.status, 200);
+  assert.equal(readable.payload.proposals[0].evidence[0].basis, 'design-document');
+  const accepted = await request(fixture.baseUrl, '/api/analysis/proposals/proposal-legacy-design-current/accept', {
+    method: 'POST',
+    body: body({
+      schemaVersion: ANALYSIS_SCHEMA_VERSION,
+      baseRevision: readable.payload.baseRevision,
+      userConfirmed: true,
+    }),
+  });
+  assert.equal(accepted.response.status, 422);
+  assert.equal(accepted.payload.code, 'PROPOSAL_EVIDENCE_BASIS_FORBIDDEN');
 });
 
 test('agent submissions reject stale evidence before entering the review inbox', async (t) => {
@@ -389,7 +671,12 @@ test('approved target never exposes an unrelated unapproved draft', async (t) =>
   assert.equal(approved.response.status, 200);
   assert.equal(approved.payload.approvalStatus, 'published-target');
   assert.equal(approved.payload.architecture.revisionId, target.payload.published.revisionId);
-  assert.deepEqual(approved.payload.architecture.graph, target.payload.published.graph);
+  assert.deepEqual(
+    approved.payload.architecture.graph.nodes.map((node) => node.id),
+    target.payload.published.graph.nodes.map((node) => node.id),
+  );
+  assert.equal(approved.payload.architecture.representation, 'semantic-graph-v1');
+  assert.equal(JSON.stringify(approved.payload.architecture).includes('position'), false);
 });
 
 test('agent evidence paths stay inside the repository and avoid sensitive directories', async (t) => {
@@ -410,7 +697,7 @@ test('skill catalog API exposes the three bundled workflows without absolute pat
   const fixture = await startFixture(t);
   const result = await request(fixture.baseUrl, '/api/skills');
   assert.equal(result.response.status, 200);
-  assert.equal(result.payload.protocolVersion, '1.0.0');
+  assert.equal(result.payload.protocolVersion, '1.1.0');
   assert.deepEqual(result.payload.skills.map((skill) => skill.id), [
     'architecture-discovery',
     'architecture-change-plan',

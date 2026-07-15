@@ -1,6 +1,6 @@
 # Reconciliation output contract
 
-Produce artifacts compatible with protocol version `1.0.0`.
+Produce artifacts compatible with protocol version `1.1.0`.
 
 ## implementation-report.json
 
@@ -14,6 +14,6 @@ Describe the actual post-implementation architecture, not the intended design. E
 
 ## evidence-manifest.json
 
-Use repository-relative paths, line ranges, SHA-256 hashes, and short summaries. Do not include secrets or unrelated customer data.
+Use `sourceKind: workspace-file`, `basis: code-fact`, repository-relative paths, line ranges, SHA-256 hashes, and short summaries. Do not include secrets or unrelated customer data. Design documents and discussion conclusions cannot be used as proof of the implemented current state.
 
 Use the canonical schema at `protocol/ai-coding-exchange.schema.json` when available.
