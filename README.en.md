@@ -8,101 +8,144 @@
 
 > **License:** Source code is available only for the noncommercial purposes defined by the [PolyForm Noncommercial License 1.0.0](LICENSE). Derivative versions must retain the attribution in [NOTICE](NOTICE) and follow the [Project Name and Brand Usage Policy](TRADEMARKS.en.md).
 
-AI Architecture Viewer is a local-first architecture collaboration surface between coding agents and people. For a concept project, a user and an agent such as Codex or Claude Code can form a target architecture from confirmed discussion conclusions or Markdown design material. For a code project, the agent can use its existing repository tools to submit current snapshots and implementation reports. The viewer renders these results as verifiable diagrams, basis records, and diffs. An agent may write only a validated semantic patch to a locked draft; a user creates the formal architecture by publishing the complete draft.
+**Turn a coding agent's understanding of a project into architecture diagrams you can inspect.**
 
-It does not embed a model, require a model API key, or scan a repository on an agent's behalf.
+AI Architecture Viewer is a local-first workspace for architecture collaboration between people and coding agents — turning project understanding into structured, inspectable architecture.
 
-![Current architecture overview in the fictional demo](docs/assets/architecture-overview.png)
+You discuss goals with external agents such as Codex or Claude Code. After analyzing the conversation, design documents, or code, the agent writes structured results to a version-locked draft. The viewer presents current and target architecture, evidence, documents, and implementation drift — and only you can publish the formal version or accept the final result.
 
-All bundled screens and data are fictional. No customer, production, or personal data is included.
+## Try the synthetic demo first
 
-## What the v0.6.1 MVP does
+The repository includes a fully fictional **Synthetic Support Assistant**. It demonstrates the viewer without customer, production, or personal data.
 
-- Lets external agents read published stable IDs, responsibilities, relationships, and boundaries as a compact semantic graph without retransmitting layout data.
-- Supports concept projects without a code repository by accepting target-architecture semantic patches backed by user-confirmed discussion or Markdown design material.
-- Creates a traceable run for each discovery, planning, or reconciliation task. An implementation run locks the published target graph, revision, development contract, and bound-document hashes—never a draft.
-- Distinguishes four visible basis types: user confirmation, design document, code fact, and agent inference.
-- Verifies file-based paths, line ranges, and content hashes; rejects escaped, sensitive, or stale material.
-- Allows discussion and design material to support target design, but never as proof of current implementation.
-- Freezes a versioned development contract when a target is published: source proposal, target semantic hash, stable acceptance-criterion IDs, involved nodes and relationships, permission boundaries, and bound-document hashes travel with the formal revision. Runtime checks recompute the graph, target index, and boundary index, so editing JSON outside publication invalidates the contract. Older revisions do not receive invented criteria; they are explicitly `legacy-unbound` and non-executable.
-- Requires implementation reports to reference every frozen criterion ID exactly once; omitted, extra, or rewritten criteria are rejected.
-- Joins each formal criterion statement and target reference with the report status and evidence in a separate server-computed contract gate. Architecture alignment is not enough: `partial / blocked`, unsatisfied, unverified, or legacy runs without a contract gate can only request revision or be rejected.
-- Preserves generic `interactionModes` (human UI and/or system service) and `architectureLayer` values through proposals, compact reads, and implementation drift checks.
-- Converts agent architecture snapshots into semantic diffs. Existing nodes omitted from a snapshot are never removed automatically.
-- Requires an implementation run to submit a complete `code-fact`-backed resulting snapshot before a report that references both that snapshot and the formal-target lock.
-- Computes `missing / extra / changed / unverified` drift on the server by stable ID, including responsibilities, authorization boundaries, relationship endpoints and types, and controlled boundary posture instead of trusting agent self-report alone.
-- Separates the agent claim, automatic architecture gate, formal-contract gate, and human review into four independent states. An agent claiming `complete` does not complete the project, and both automatic gates must pass before acceptance is available.
-- Cross-checks every server result against the implementation report. Unexplained, unreported, or unverified drift blocks human acceptance, while an agent-provided explanation is always labeled as awaiting human judgment.
-- Requires every implementation report to be accepted, rejected, or sent back for revision in the local UI. The reviewer, time, decision, and note are recorded without rewriting the formal target.
-- Returns a low-context agent claim, architecture-gate summary, and human-review state from `get_review_status` by default, loading per-item target, actual, evidence, and explanation detail only when requested.
-- Locks both the published baseline and active draft ID/revision for discovery and change-planning runs. A validated stable-ID semantic patch writes directly to that exact draft; a changed draft or formal baseline returns an explicit stale result and never overwrites concurrent work.
-- Protocol 1.4 node updates may use explicit `null` to withdraw supported optional semantic fields. Required fields, edge fields, and target horizons cannot be cleared, while drill-down diagram/node references clear as a pair. Exact no-effect patches are rejected atomically; withdrawing the final net change clears the zero-difference draft while retaining the run and provenance record.
-- Keeps the draft's net difference in a one-line canvas summary. Opening it temporarily reuses the existing right inspector and groups modules, relationships/permission boundaries, and acceptance criteria; fields, provenance, and evidence no longer overlay the canvas. Layout moves never count as semantic changes.
-- Retains v0.2–v0.5 proposal decisions as read-only history. They are no longer a normal action surface and are never auto-applied to a draft or formal version.
-- Shows all structural changes, sensitive boundaries, relationship rewires, criteria, target references, and bound documents before publication. If a reviewed document changes, publication is rejected until a local user refreshes the document lock and reviews again.
-- Shows one quiet alternate-language button: Chinese mode displays `English`, and English mode displays `中文`. The choice persists locally and translates only the viewer shell, never project names, diagrams, modules, relationships, documents, evidence, or user-authored text.
-- Uses a fixed 880px non-fullscreen desktop workspace shared by the canvas and inspector. Projects that only have legacy `meta.capabilityDomains` expose those definitions losslessly as regions, while stable node `group` values continue to control membership.
-- Keeps current architecture, target architecture, diffs, drafts, and immutable revision history.
-- Bundles three portable skills for a consistent understand–plan–verify handoff.
-
-## Workflow
-
-```mermaid
-flowchart LR
-    U["User and agent confirm the goal"] --> C["Discussion / Markdown design"]
-    C --> T["Submit target semantic patch"]
-    R["Repository code facts"] --> S["Submit current snapshot"]
-    T --> D["Server validates and writes the locked target draft"]
-    S -->|Discovery| E["Server validates and writes the locked current draft"]
-    D --> V["Canvas renders net draft-versus-formal changes"]
-    E --> V
-    V --> P{"User inspects the complete draft and publishes"}
-    P --> G["Formal target + contract + document versions"]
-    G --> A["Implementation run locks the complete contract"]
-    A --> R
-    S -->|Implementation| X["Server computes drift by stable ID"]
-    G --> X
-    X --> I["Submit agent claim and cross-check it"]
-    I --> J{"Human reviews implementation result"}
-    J -->|Accept / request revision / reject| V
-```
-
-The capability boundary is explicit: the MCP server exposes no draft-review, implementation-review, or `publish` tool. Agents investigate, reason, and write locked drafts; people decide direction in their external conversation and publish formal versions in the viewer.
-
-“Explained drift” only means the agent's explanation maps to a server-computed drift item. It does not prove the explanation is reasonable, record user acceptance, or change the architecture target. Even when the automatic gate finds no architecture drift, the user must still validate the page and product experience. Making the code the new target requires a new locked target-draft patch and explicit publication of the complete draft.
-
-| Basis type | Meaning | Proves current implementation? |
-| --- | --- | --- |
-| User confirmation | A target or boundary explicitly confirmed by the user | No |
-| Design document | Intended design described by Markdown or similar material | No |
-| Code fact | Implementation directly verified from repository files | Yes |
-| Agent inference | A conclusion not yet confirmed by the user or code | No |
-
-## Quick start
-
-Requires [Node.js](https://nodejs.org/) 20 or later.
+Install [Node.js](https://nodejs.org/) 20 or later, then run:
 
 ```powershell
 npm install
 npm start
 ```
 
-Open `http://127.0.0.1:8800`. To use a different port:
+Open `http://127.0.0.1:8800`. A suggested walkthrough:
+
+1. Switch between Current architecture and Target architecture to see what exists versus what is planned.
+2. Select any module to focus its one-hop relationships — unrelated modules and edges fade back.
+3. Enter the Retrieval service drill-down to see the same product at a different architecture level.
+4. Inspect bound documents, the draft's net changes against the formal version, and the full pre-publication review.
+5. Use `English` / "中文" to switch the viewer shell. Project names, module names, relationship descriptions, documents, and user-authored text stay unchanged.
+
+To use another port:
 
 ```powershell
 $env:PORT = '8891'
 npm start
 ```
 
-The MCP server can be started separately. It starts the local viewer automatically when necessary:
+## Problems it solves
+
+| Common problem | How the viewer responds |
+| --- | --- |
+| What you describe and what the agent understands don't match | The agent writes a visual draft that exposes modules, relationships, responsibilities, and boundaries for direct inspection |
+| Every new task requires the project to be explained again | Formal architecture uses stable IDs and a compact semantic graph, so agents read only the context they need |
+| Current implementation, target design, and future ideas become mixed | Current, target, draft, and formal versions remain separate, with immutable history |
+| An agent quietly shifts the target to match its implementation | Agents can change drafts only; a local user alone can publish a formal version |
+| Missing, extra, or changed work is found only after development | The server compares actual implementation with the formal target by stable ID and sends drift to human review |
+| Large diagrams make relationships hard to follow | Selecting a module focuses one-hop relationships; projects may also register read-only business flows and drill-down diagrams |
+
+## Four states
+
+| State | What it means | Who can change it |
+| --- | --- | --- |
+| Current architecture | The actual structure supported by code facts or other explicit evidence | An agent may write a current draft; a user publishes the formal version |
+| Target architecture | The product and system structure the user wants to reach | An agent may write a target draft; a user publishes the formal version |
+| Draft | Unpublished net change against the formal version | An agent may update it incrementally under an exact version lock |
+| Formal version | The stable baseline used for future development and reconciliation | Only a local user may publish or restore it |
+
+Publishing a target freezes a versioned development contract — acceptance criteria, target modules and relationships, permission boundaries, and bound documents are all captured. An unpublished draft is never returned by `get_approved_target` and cannot serve as the baseline for an implementation run.
+
+## Human-agent collaboration loop
+
+```mermaid
+flowchart LR
+    U["User and external agent discuss"] --> A["Agent checks conversation, documents, or code"]
+    A --> D["Write a version-locked architecture draft"]
+    D --> V["Viewer presents architecture, evidence, and net changes"]
+    V --> P{"User inspects and publishes"}
+    P --> T["Formal target and development contract"]
+    T --> I["Agent implements the change"]
+    I --> R["Submit resulting snapshot and report"]
+    R --> C["Server checks drift and acceptance criteria"]
+    C --> H{"User performs final review"}
+    H -->|Request revision| I
+```
+
+The loop has only two true human decisions:
+
+- publishing formal architecture;
+- accepting, rejecting, or requesting revision of an implementation result.
+
+An agent reporting `complete` means only "the agent claims completion." It does not complete the project. Even when automatic checks pass, a human must still validate the real interface and business path.
+
+## Current core capabilities
+
+### 1. Make project understanding inspectable
+
+- Supports code repositories as well as concept projects that have only discussion or Markdown design material.
+- Models modules, relationships, responsibilities, product state, technical state, and authorization boundaries with stable IDs.
+- Distinguishes four evidence types: user confirmation, design document, code fact, and agent inference.
+- File evidence is verified against relative paths, line ranges, and content hashes; sensitive, escaped, or stale evidence is rejected.
+- Discussion and design material may inform the target design but can never serve as current implementation facts.
+
+### 2. Make complex architecture easier to read
+
+- Group regions represent capability or product domains. Card positions and region geometry are stored separately and do not affect architecture semantics.
+- Selecting a module focuses its one-hop relationships and fades unrelated content.
+- Supports drill-down between a product overview and internal architecture.
+- Projects can register read-only business flows and walk through them step by step using explicit node and relationship mappings.
+- The inspector prioritizes what a module does, how far it has progressed, what it cannot do, and its related documents; governance details expand on demand.
+
+### 3. Let agents update drafts safely
+
+- Agent writes require both a published baseline lock and the exact active-draft revision.
+- Concurrent edits, stale baselines, no-op patches, invalid relationship endpoints, and forbidden fields fail atomically.
+- Agents may update supported semantic fields only. They cannot write canvas positions, edge routing, human confirmation, or publication state.
+- The canvas shows the draft's net difference from the formal version rather than accumulating every historical operation.
+- Legacy proposals and review records remain readable history but are never auto-accepted or fabricated into a new draft.
+
+### 4. Publish an executable formal target
+
+- Pre-publication review displays every module, relationship, permission boundary, acceptance criterion, and bound-document change.
+- Target publication freezes a development contract and document hashes; a document changed after review blocks the publication.
+- Older targets without a complete contract are explicitly marked `legacy-unbound` or non-executable rather than receiving fabricated criteria.
+- MCP exposes no publication, approval, or implementation-review tools, so an agent cannot bypass the human gate.
+
+### 5. Reconcile implementation with the target
+
+- Implementation runs lock a published formal target only; they never read a target draft as their baseline.
+- The agent must submit a complete resulting snapshot backed by `code-fact` evidence before the implementation report.
+- The server computes `missing / extra / changed / unverified` by stable ID and compares responsibilities, authorization boundaries, relationship endpoints and types, and controlled-boundary posture.
+- Implementation reports must reference every formal-contract criterion exactly. Missing, extra, or rewritten criteria are rejected.
+- Explained drift means only that the agent supplied a matching explanation. It does not make the explanation acceptable, change the target, or imply user acceptance.
+
+## What it does not do or require
+
+- Does not embed or purchase additional model capability.
+- Does not replace Codex, Claude Code, or another agent for reading, searching, or modifying code.
+- Does not make the viewer a second chat product.
+- Does not let an agent publish formal architecture, accept implementation results, or fabricate user confirmation.
+- Does not treat layout movement as a semantic architecture change.
+- Does not present inference, discussion, or design documents as implemented code facts.
+
+## How to connect an agent
+
+The MCP service can run independently. If the viewer is not running, it starts the local server automatically:
 
 ```powershell
 npm run mcp
 ```
 
-### Connect Codex
+### Codex
 
-Configure the local STDIO server in `.codex/config.toml` for a trusted project. Replace the paths with absolute paths on your machine:
+Configure the local STDIO server in a trusted project's `.codex/config.toml`, replacing the sample paths with absolute local paths:
 
 ```toml
 [mcp_servers.ai_architecture_viewer]
@@ -115,11 +158,11 @@ VIEWER_PROJECT_DIR = "D:/architecture-data/my-project"
 VIEWER_WORKSPACE_ROOT = "D:/work/my-project"
 ```
 
-The Codex desktop app, CLI, and IDE extension share MCP configuration. See the [official Codex MCP documentation](https://developers.openai.com/codex/mcp/).
+Codex desktop, CLI, and IDE extensions share the MCP configuration. See the [official Codex MCP documentation](https://developers.openai.com/codex/mcp/).
 
-### Connect Claude Code
+### Claude Code
 
-Configure the server in the project's `.mcp.json`:
+Configure the project `.mcp.json`:
 
 ```json
 {
@@ -137,27 +180,50 @@ Configure the server in the project's `.mcp.json`:
 }
 ```
 
-The client asks you to trust a new local MCP server on first use. See the [official Claude Code MCP documentation](https://code.claude.com/docs/en/mcp).
+The client asks you to trust the local MCP service on first use. See the [official Claude Code MCP documentation](https://code.claude.com/docs/en/mcp).
 
 ## MCP tools
 
-| Tool | Purpose | Changes formal architecture? |
+These tools are available for agents to call. All of them only read or write drafts; none can modify the formal version.
+
+| Tool | Purpose | Can it change formal architecture? |
 | --- | --- | --- |
-| `get_project_context` | Read project, diagrams, formal-baseline status, contract invalidation reason, and collaboration boundaries | No |
-| `read_project_document` | Read bounded Markdown by registered `documentId` and optional heading | No |
-| `get_current_architecture` | Read the current published architecture as a compact semantic graph | No |
-| `create_agent_run` | Create a traceable run; implementation runs lock the target, development contract, and document hashes | No |
-| `submit_architecture_snapshot` | In discovery, incrementally update the locked current draft; in implementation, submit evidence only for reconciliation | No; stale writes fail and it never publishes |
-| `submit_change_proposal` | Submit a stable-ID target architecture/contract semantic patch to the locked target draft | No; it never publishes or fabricates human approval |
-| `submit_implementation_report` | Submit the agent's implementation claim, checks, and drift | No; it cannot replace human review |
-| `get_review_status` | Read agent claim, architecture/contract-gate summaries, and human-review state; request drift or criterion details only when needed | No |
-| `get_approved_target` | Read the latest human-published target, execution status, compact graph, and frozen contract | No |
+| `get_project_context` | Read the project, formal baselines, and collaboration boundaries | No |
+| `read_project_document` | Read a bounded Markdown section by registered `documentId` | No |
+| `get_current_architecture` | Read the published current architecture as a compact semantic graph | No |
+| `create_agent_run` | Create a traceable run and lock the required baselines | No |
+| `submit_architecture_snapshot` | Write a locked current draft during discovery, or submit reconciliation evidence during implementation | No |
+| `submit_change_proposal` | Write a stable-ID semantic patch to the locked target draft | No |
+| `submit_implementation_report` | Submit the agent's implementation claim, checks, and drift explanations | No |
+| `get_review_status` | Read publication waiting state, automatic gates, and human-review state | No |
+| `get_approved_target` | Read the latest user-published target and frozen contract | No |
 
-A draft write does not authorize an agent to implement it. `get_review_status` marks this state as `awaiting-publication`. `get_approved_target` switches to the new revision and frozen contract only after explicit human publication. Legacy or manual targets without acceptance criteria are honestly non-executable, and unpublished drafts are never returned as executable target graphs.
+## Project data package
 
-## CLI and file fallback
+The viewer, architecture package, and inspected code repository can each live in a different directory. A package normally includes:
 
-Agents without MCP support can produce the JSON artifacts defined under [`protocol/`](protocol/) and submit them with the local CLI:
+- `project.json`: project-instance inventory;
+- `viewer.config.json`: bilingual shell, views, and detail fields;
+- `architecture-catalog.json`: diagram catalog and hierarchy;
+- `state.json` and `diagrams/`: semantic architecture, drafts, and revision history;
+- `viewer-layout.json`: presentation-only local layout;
+- `registered-business-flows.json`: optional read-only business-flow registry;
+- `document-registry.json` and `documents/`: citable project material;
+- `analysis.json`: agent runs, evidence, automatic gates, and human-review records.
+
+To load a package from outside the repository and bind code-evidence verification to the actual workspace:
+
+```powershell
+$env:VIEWER_PROJECT_DIR = 'D:\work\my-architecture-package'
+$env:VIEWER_WORKSPACE_ROOT = 'D:\work\my-code-repository'
+npm start
+```
+
+Code-evidence file paths are always relative to `VIEWER_WORKSPACE_ROOT`. Registered design documents live under `VIEWER_PROJECT_DIR` and can be read only by document ID and an optional Markdown heading. They cannot serve as evidence that current code already implements something.
+
+## CLI and collaboration skills
+
+Agents without MCP support can also generate the JSON artifacts defined under [`protocol/`](protocol/) and submit them through the local CLI:
 
 ```powershell
 npm run agent -- context
@@ -173,43 +239,11 @@ npm run agent -- submit `
   --evidence ai-coding/discovery/run-id/evidence-manifest.json
 ```
 
-Validate one exchange artifact with:
+[`skills/`](skills/) includes three vendor-neutral workflows:
 
-```powershell
-npm run protocol:validate -- ai-coding/path/to/artifact.json
-```
-
-## Collaboration skills
-
-[`skills/`](skills/) contains three vendor-neutral workflows:
-
-- `architecture-discovery`: inspect a user-authorized repository scope and submit a current architecture snapshot with evidence.
-- `architecture-change-plan`: form options, target changes, and acceptance criteria from confirmed discussion, design documents, or code facts; concept projects require no code repository.
-- `implementation-reconcile`: compare actual code with the run-locked published formal target, submit the resulting snapshot first, then submit checks, the agent's completion claim, and all drift; the user still decides the final outcome.
-
-Skills prefer MCP and fall back to JSON files plus the CLI. Each discovery or change-planning run submits one architecture patch; the next edit starts a new run locked to the latest draft. Skills cannot publish formal architecture, alter published versions, or review implementation for the user.
-
-## Project data package
-
-The viewer, its project data package, and the inspected code repository can all live in separate directories. A package normally contains:
-
-- `project.json`: instance inventory and default-project marker.
-- `viewer.config.json`: titles, views, and detail fields.
-- `architecture-catalog.json`: diagram catalog and hierarchy.
-- `state.json` and `diagrams/`: semantic architecture, drafts, and revision history.
-- `viewer-layout.json`: presentation-only local layout.
-- `document-registry.json` and `documents/`: citable project material.
-- `analysis.json`: agent runs, exchange artifacts, evidence, automatic architecture/contract gates, and human-review state.
-
-Load a package from outside this repository and bind evidence verification to the actual code workspace:
-
-```powershell
-$env:VIEWER_PROJECT_DIR = 'D:\work\my-architecture-package'
-$env:VIEWER_WORKSPACE_ROOT = 'D:\work\my-code-repository'
-npm start
-```
-
-Code-fact paths are always relative to `VIEWER_WORKSPACE_ROOT`; the viewer rereads those files and verifies their hashes. Project design documents use a separate bounded route: an agent can read only Markdown registered in `document-registry.json`, by `documentId` and optional heading, under `VIEWER_PROJECT_DIR`. It cannot submit an arbitrary disk path, and registered documents can support target design but never current implementation. Discussion records retain a source label, confirmation time, and review excerpt. This keeps an architecture package and its code repository safely separate without opening an arbitrary multi-root scanner. When the workspace setting is omitted, it defaults to `VIEWER_PROJECT_DIR`.
+- `architecture-discovery`: understand current architecture and submit code evidence;
+- `architecture-change-plan`: form a target draft and acceptance criteria from discussion, design documents, or code facts;
+- `implementation-reconcile`: compare actual implementation with the formal target while leaving the final decision to the user.
 
 ## Development and verification
 
@@ -220,12 +254,10 @@ npm run build
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development conventions, [SECURITY.md](SECURITY.md) for security reporting, [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for community standards, and [CHANGELOG.md](CHANGELOG.md) for release history.
 
-## Public-release and security boundaries
+## Security and licensing boundaries
 
-- Default examples and documents must be fictional or explicitly authorized for public release.
-- Never commit credentials, access tokens, customer material, internal paths, or architecture data that has not been de-identified.
-- Agents may submit structured semantic patches to locked drafts and implementation claims only. Architecture publication and implementation review are local-user actions.
-- v0.6.1 binds to `127.0.0.1` only. Mutation APIs do not yet provide authentication, CSRF protection, or multi-user authorization; do not proxy the service to a LAN or the public internet.
-- Source code uses the [PolyForm Noncommercial License 1.0.0](LICENSE). It is source-available, not OSI open source. Commercial use requires separate written authorization; see [COMMERCIAL_LICENSE.en.md](COMMERCIAL_LICENSE.en.md).
-- Derivative works are allowed, but public modified versions must retain [NOTICE](NOTICE) attribution and follow [TRADEMARKS.en.md](TRADEMARKS.en.md): use a different name and logo and do not imply official status or endorsement.
+- v0.6.1 listens on `127.0.0.1` only. Mutation APIs do not yet provide authentication, CSRF protection, or multi-user authorization; do not proxy the service to a LAN or the public internet.
+- Project source code uses the [PolyForm Noncommercial License 1.0.0](LICENSE). It is source-available, not OSI open source.
+- Commercial use requires separate written authorization; see [COMMERCIAL_LICENSE.en.md](COMMERCIAL_LICENSE.en.md).
+- Public modified versions must retain [NOTICE](NOTICE) attribution and follow [TRADEMARKS.en.md](TRADEMARKS.en.md): use a different project name and logo and do not imply official status or endorsement.
 - Third-party dependencies remain subject to their own licenses.
