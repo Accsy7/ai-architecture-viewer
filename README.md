@@ -3,7 +3,7 @@
 [English](README.en.md)
 
 [![CI](https://github.com/Accsy7/ai-architecture-viewer/actions/workflows/ci.yml/badge.svg)](https://github.com/Accsy7/ai-architecture-viewer/actions/workflows/ci.yml)
-![Version: v0.5.0](https://img.shields.io/badge/version-v0.5.0-2f6f5e)
+![Version: v0.5.1](https://img.shields.io/badge/version-v0.5.1-2f6f5e)
 [![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-7c6f64)](LICENSE)
 
 > **许可说明：** 本项目源码仅针对 [PolyForm Noncommercial License 1.0.0](LICENSE) 定义的非商业用途开放。二次开发必须保留 [NOTICE](NOTICE) 中的署名，并遵守 [项目名称与标识使用政策](TRADEMARKS.md)。
@@ -16,7 +16,7 @@ AI 架构查看器是一个本地优先的“编码智能体 ↔ 用户”架构
 
 仓库内置的所有画面和数据均为虚构 Demo，不包含客户、生产或个人数据。
 
-## v0.5.0 MVP 能做什么
+## v0.5.1 MVP 能做什么
 
 - 让外部智能体以精简语义结构读取已发布架构、稳定 ID、职责、关系和边界，无需重复传输布局数据。
 - 支持无代码仓库的概念项目：从用户确认的讨论结论或 Markdown 设计材料提交目标架构提案。
@@ -36,6 +36,7 @@ AI 架构查看器是一个本地优先的“编码智能体 ↔ 用户”架构
 - 所有实施报告都必须由用户在本地界面接受、拒绝或要求修订；结论记录验收人、时间和备注，但不会改写正式目标。
 - `get_review_status` 默认只返回低成本的智能体声明、架构/合同门禁摘要和人工验收状态，需要时才读取逐项偏离或逐条合同条件、证据与解释。
 - 将架构提案放入人工收件箱，逐项显示变更、证据和提交来源。
+- 新运行会同时锁定已发布基线与当时的活动草案 ID/修订号。用户接受提案时，如果草案未变化，变更会安全合并进原草案并保留已有图形、关系和开发合同；如果草案或正式基线已经变化，则明确要求重新分析，不会覆盖并发修改。旧提案没有这份锁时只能查看或拒绝，必须重建后才能接受。
 - 只有用户可以接受或拒绝提案；接受只会写入草案，发布仍需再次人工确认。
 - 保存当前架构、目标架构、差异、草案和不可变版本历史。
 - 通过三套可移植 Skill 统一“理解项目—规划变更—核验实施”的交接格式。
@@ -221,7 +222,7 @@ npm run build
 - 默认示例和文档必须为虚构内容或已获准公开发布。
 - 不得提交密钥、访问令牌、客户材料、内部路径或未经脱敏的架构数据。
 - 智能体只能提交结构化候选和实施声明；实施验收、提案接受和架构发布均需人工操作。
-- v0.5.0 仅监听 `127.0.0.1`，变更 API 尚无身份验证、CSRF 防护或多用户授权。不要将其反向代理到局域网或互联网。
+- v0.5.1 仅监听 `127.0.0.1`，变更 API 尚无身份验证、CSRF 防护或多用户授权。不要将其反向代理到局域网或互联网。
 - 源码采用 [PolyForm Noncommercial License 1.0.0](LICENSE)，属于 source-available 而非 OSI 开源许可。商业使用需另行书面授权，见 [COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md)。
 - 允许衍生作品，但公开发布的修改版本必须保留 [NOTICE](NOTICE) 署名，并遵守 [TRADEMARKS.md](TRADEMARKS.md)：使用不同项目名称和 Logo，不得暗示为官方版本或获得原作者背书。
 - 第三方依赖仍受其自身许可证约束。

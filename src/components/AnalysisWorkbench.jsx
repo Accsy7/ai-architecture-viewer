@@ -429,6 +429,15 @@ function RunList({ runs, integration, busy, onRefresh, onCopyConnection, onRevie
                   <code title={run.approvedTarget.semanticHash}>{run.approvedTarget.semanticHash.slice(0, 12)}…</code>
                 </div>
               )}
+              {run.laneLock?.draftId && (
+                <div className="analysis-target-lock">
+                  <div>
+                    <span>已锁定活动草案</span>
+                    <strong>{run.view === 'target' ? '目标架构' : '当前架构'} · {run.laneLock.draftId}</strong>
+                  </div>
+                  <code>draft r{run.laneLock.draftRevision}</code>
+                </div>
+              )}
               <div className="analysis-meta-row">
                 <span>{TASK_TYPE[run.taskType] || run.taskType}</span>
                 <span>{run.agentClient || '未知客户端'}</span>
@@ -500,6 +509,8 @@ function ProposalList({ proposals, busy, onRefresh, onOpenProposal }) {
                 <span>{evidenceCount} 条依据</span>
                 {proposal.origin?.agentName && <span>{proposal.origin.agentName}</span>}
                 {proposal.origin?.agentClient && <span>{proposal.origin.agentClient}</span>}
+                {proposal.laneLock?.draftId && <span>活动草案 r{proposal.laneLock.draftRevision}</span>}
+                {proposal.laneLock === undefined && <span>旧提案 · 接受前需重建</span>}
                 {confidence && <span>置信度 {confidence}</span>}
               </div>
               {onOpenProposal && (

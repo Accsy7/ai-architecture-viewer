@@ -99,12 +99,13 @@ function registerTool(server, name, config, handler) {
 }
 
 const server = new McpServer(
-  { name: 'ai-architecture-viewer', version: '0.5.0' },
+  { name: 'ai-architecture-viewer', version: '0.5.1' },
   {
     instructions: [
       'Use this server as an external visual architecture handoff for coding agents.',
       'Call get_project_context before creating a run.',
       'Create a run before submitting evidence-backed artifacts.',
+      'Architecture-change runs lock both the published baseline and any active draft ID/revision so a later human acceptance cannot overwrite newer draft work.',
       'Evidence paths must be relative to the configured code workspace root.',
       'Registered project documents are read only by documentId and optional Markdown section; they may support target design but never implementation facts.',
       'Only a published target is an executable architecture baseline; an accepted draft still awaits human publication.',
@@ -161,7 +162,7 @@ registerTool(server, 'get_current_architecture', {
 
 registerTool(server, 'create_agent_run', {
   title: 'Create agent architecture run',
-  description: 'Create a traceable run and lock its architecture baseline. Implementation runs require and lock the exact executable published target, development contract, and bound-document hashes.',
+  description: 'Create a traceable run and lock its published baseline plus any active draft ID/revision. Implementation runs additionally require and lock the exact executable published target, development contract, and bound-document hashes.',
   inputSchema: z.object({
     agentName: z.string().min(1).max(120),
     agentClient: z.string().min(1).max(80).describe('Client identity such as codex or claude-code.'),

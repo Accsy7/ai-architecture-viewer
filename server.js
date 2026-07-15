@@ -673,6 +673,47 @@ function agentDiagram(catalog, diagramId) {
   return diagram;
 }
 
+function laneLockDescriptor(lane) {
+  return {
+    publishedRevision: lane.published.revision,
+    publishedRevisionId: lane.published.revisionId,
+    draftId: lane.draft?.draftId || null,
+    draftRevision: lane.draft?.draftRevision || 0,
+  };
+}
+
+function sameLaneLock(left, right) {
+  return Boolean(left && right) && [
+    'publishedRevision', 'publishedRevisionId', 'draftId', 'draftRevision',
+  ].every((field) => left[field] === right[field]);
+}
+
+function assertAgentRunLaneLock(run, lane) {
+  const actual = laneLockDescriptor(lane);
+  if (!run.laneLock) {
+    throw new ContractError(
+      '该旧智能体运行没有视图状态锁，不能安全继续提交；请基于当前正式基线和草案创建新的运行',
+      'AGENT_LANE_LOCK_REQUIRED',
+      409,
+      { actual },
+    );
+  }
+  if (!sameLaneLock(run.laneLock, actual)) {
+    throw new ContractError(
+      '智能体运行锁定的正式基线或活动草案已经变化，请创建新的运行后重新提交',
+      'AGENT_RUN_STALE',
+      409,
+      {
+        headRevision: lane.published.revision,
+        headRevisionId: lane.published.revisionId,
+        expectedLaneLock: clone(run.laneLock),
+        actualLaneLock: actual,
+      },
+    );
+  }
+  return lane.draft ? lane.draft.graph : lane.published.graph;
+}
+
 function createAgentRun(incoming, catalog, { registry, projectRoot }) {
   assertAgentRequest(incoming, new Set(['agentName', 'agentClient', 'taskType', 'diagramId', 'view', 'summary']));
   const agentName = requiredAgentText(incoming.agentName, 'agentName');
@@ -705,6 +746,7 @@ function createAgentRun(incoming, catalog, { registry, projectRoot }) {
     view,
     baseRevision: lane.published.revision,
     baseRevisionId: lane.published.revisionId,
+    laneLock: laneLockDescriptor(lane),
     createdAt: now,
     updatedAt: now,
     submittedAt: null,
@@ -1065,6 +1107,7 @@ function proposalFromExchangeArtifact(artifact, run) {
     diagramId: run.diagramId,
     baseRevision: run.baseRevision,
     baseRevisionId: run.baseRevisionId,
+    laneLock: clone(run.laneLock),
     title: artifact.title,
     summary: artifact.summary,
     requestId: artifact.requestId,
@@ -1186,6 +1229,7 @@ function snapshotProposal(artifact, run, graph) {
     diagramId: run.diagramId,
     baseRevision: run.baseRevision,
     baseRevisionId: run.baseRevisionId,
+    laneLock: clone(run.laneLock),
     title: `审阅 ${run.agentName} 对当前架构的理解`,
     summary: `智能体基于仓库证据提交了 ${changes.length} 项架构差异${notes ? `；${notes}` : ''}。未在快照中出现的现有节点不会被自动移除。`,
     requestId: null,
@@ -1677,12 +1721,7 @@ function submitAgentArtifact(analysis, runId, incoming, {
   assertEvidenceBasisAllowed(run, artifact, manifest);
   const state = readState(diagram.statePath);
   const lane = state[run.view];
-  if (lane.published.revision !== run.baseRevision || lane.published.revisionId !== run.baseRevisionId) {
-    throw new ContractError('架构基线已经变化，请创建新的智能体运行后重新提交', 'AGENT_RUN_STALE', 409, {
-      headRevision: lane.published.revision,
-      headRevisionId: lane.published.revisionId,
-    });
-  }
+  const baselineGraph = assertAgentRunLaneLock(run, lane);
   assertImplementationTarget(run, state, artifact, { registry, projectRoot });
   if (run.taskType === 'implementation-reconcile' && run.approvedTarget) {
     assertImplementationAcceptanceResults(artifact, state.target.published.developmentContract);
@@ -1706,7 +1745,7 @@ function submitAgentArtifact(analysis, runId, incoming, {
   if (artifact.artifactType === 'architecture-proposal') {
     proposal = proposalFromExchangeArtifact(artifact, targetRun);
   } else if (artifact.artifactType === 'architecture-snapshot') {
-    proposal = snapshotProposal(artifact, targetRun, lane.published.graph);
+    proposal = snapshotProposal(artifact, targetRun, baselineGraph);
   }
   if (proposal) {
     const existingProposal = next.proposals.find((item) => item.id === proposal.id);
@@ -1714,7 +1753,7 @@ function submitAgentArtifact(analysis, runId, incoming, {
       throw new ContractError('提案 ID 已被其他提交使用', 'AGENT_PROPOSAL_ID_CONFLICT', 409, { proposalId: proposal.id });
     }
     if (!existingProposal) {
-      applyProposalChanges(lane.published.graph, proposal, state);
+      applyProposalChanges(baselineGraph, proposal, state);
       next.proposals.push(proposal);
     } else {
       proposal = existingProposal;
@@ -2442,8 +2481,24 @@ function proposalContractSource(proposal) {
 }
 
 function draftDevelopmentContract(graph, { draftId, proposal = null, prior = null, registry, projectRoot }) {
-  const acceptanceCriteria = clone(proposal?.acceptanceCriteria || prior?.acceptanceCriteria || []);
-  const source = proposal ? proposalContractSource(proposal) : clone(prior?.source || null);
+  const acceptanceCriteriaById = new Map();
+  for (const criterion of prior?.acceptanceCriteria || []) {
+    acceptanceCriteriaById.set(criterion.id, clone(criterion));
+  }
+  for (const criterion of proposal?.acceptanceCriteria || []) {
+    const existing = acceptanceCriteriaById.get(criterion.id);
+    if (existing && !sameJson(existing, criterion)) {
+      throw new ContractError(
+        '提案试图用同一验收条件 ID 改写活动草案合同，请使用新的稳定 ID',
+        'PROPOSAL_CONTRACT_CRITERION_CONFLICT',
+        409,
+        { criterionId: criterion.id },
+      );
+    }
+    if (!existing) acceptanceCriteriaById.set(criterion.id, clone(criterion));
+  }
+  const acceptanceCriteria = [...acceptanceCriteriaById.values()];
+  const source = clone(prior?.source || (proposal ? proposalContractSource(proposal) : null));
   return {
     schemaVersion: DEVELOPMENT_CONTRACT_SCHEMA_VERSION,
     status: 'draft',
@@ -3064,40 +3119,61 @@ function createServer(options = {}) {
         if (!diagram) throw new ContractError('提案对应的架构图已不存在', 'DIAGRAM_NOT_FOUND', 404, { diagramId: proposal.diagramId });
         const state = readState(diagram.statePath);
         const lane = state[proposal.view];
-        if (lane.draft) {
-          throw new ContractError('请先处理当前草案，再接受新的智能体提案', 'ACTIVE_DRAFT', 409);
+        if (!proposal.laneLock) {
+          throw new ContractError(
+            '该旧提案没有活动草案锁，不能安全合并；请基于当前视图重新创建智能体运行和提案',
+            'PROPOSAL_LANE_LOCK_REQUIRED',
+            409,
+          );
         }
-        if (lane.published.revision !== proposal.baseRevision || lane.published.revisionId !== proposal.baseRevisionId) {
-          throw new ContractError('提案的架构基线已过期，请重新分析后再审阅', 'PROPOSAL_STALE', 409, {
-            headRevision: lane.published.revision,
-            headRevisionId: lane.published.revisionId,
-          });
+        const actualLaneLock = laneLockDescriptor(lane);
+        if (!sameLaneLock(proposal.laneLock, actualLaneLock)) {
+          throw new ContractError(
+            '提案锁定的正式基线或活动草案已经变化，请重新分析后再审阅',
+            'PROPOSAL_STALE',
+            409,
+            {
+              headRevision: lane.published.revision,
+              headRevisionId: lane.published.revisionId,
+              expectedLaneLock: clone(proposal.laneLock),
+              actualLaneLock,
+            },
+          );
         }
         assertProposalEvidenceBasisAllowed(proposal, analysis);
         const registry = readRegistry(documentsFile);
         assertProposalEvidenceCurrent(proposal, analysis, { workspaceRoot, projectRoot, registry });
-        const graph = applyProposalChanges(lane.published.graph, proposal, state);
-        assertHumanConfirmedSemantics(state.meta, proposal.view, lane.published.graph, graph, {
+        const priorDraft = lane.draft;
+        const priorGraph = priorDraft ? priorDraft.graph : lane.published.graph;
+        const graph = applyProposalChanges(priorGraph, proposal, state);
+        assertHumanConfirmedSemantics(state.meta, proposal.view, priorGraph, graph, {
           userConfirmedSemanticOverride: true,
         });
-        validateNewDocumentBindings(lane.published.graph, graph, registry, projectRoot);
-        const draftId = newDraftId(proposal.view);
+        validateNewDocumentBindings(priorGraph, graph, registry, projectRoot);
+        const draftId = priorDraft?.draftId || newDraftId(proposal.view);
+        const draftRevision = priorDraft ? priorDraft.draftRevision + 1 : 1;
         lane.draft = {
           draftId,
-          draftRevision: 1,
+          draftRevision,
           baseRevision: lane.published.revision,
           baseRevisionId: lane.published.revisionId,
           savedAt: now,
           graph,
           developmentContract: proposal.view === 'target'
-            ? draftDevelopmentContract(graph, { draftId, proposal, registry, projectRoot })
+            ? draftDevelopmentContract(graph, {
+              draftId,
+              proposal,
+              prior: priorDraft?.developmentContract || null,
+              registry,
+              projectRoot,
+            })
             : null,
         };
         const next = clone(analysis);
         const target = next.proposals.find((item) => item.id === proposal.id);
         target.status = 'accepted';
         target.reviewedAt = now;
-        target.application = { draftId, draftRevision: 1, appliedAt: now };
+        target.application = { draftId, draftRevision, appliedAt: now };
         updateReviewedRun(next, target, now);
         validateAnalysis(next);
         const savedState = writeState(state, diagram.statePath);

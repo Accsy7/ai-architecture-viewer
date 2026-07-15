@@ -479,6 +479,39 @@ function validateApplication(application, applicationPath = 'proposal.applicatio
   return application;
 }
 
+function validateLaneLock(lock, lockPath, { baseRevision, baseRevisionId }) {
+  if (lock === undefined) return lock;
+  assertObject(lock, lockPath);
+  assertKeys(lock, new Set([
+    'publishedRevision',
+    'publishedRevisionId',
+    'draftId',
+    'draftRevision',
+  ]), lockPath);
+  assertBaseRevision(lock.publishedRevision, `${lockPath}.publishedRevision`);
+  assertBaseRevisionId(
+    lock.publishedRevisionId,
+    `${lockPath}.publishedRevisionId`,
+    lock.publishedRevision,
+  );
+  if (lock.publishedRevision !== baseRevision || lock.publishedRevisionId !== baseRevisionId) {
+    fail(`${lockPath} 的正式基线必须与外层 baseRevision/baseRevisionId 一致`);
+  }
+  if (lock.draftId === null) {
+    if (lock.draftRevision !== 0) fail(`${lockPath}.draftRevision 在没有草案时必须为 0`);
+  } else {
+    assertStableId(lock.draftId, `${lockPath}.draftId`);
+    assertPositiveRevision(lock.draftRevision, `${lockPath}.draftRevision`);
+  }
+  return lock;
+}
+
+function sameLaneLock(left, right) {
+  if (!left || !right) return left === right;
+  return ['publishedRevision', 'publishedRevisionId', 'draftId', 'draftRevision']
+    .every((field) => left[field] === right[field]);
+}
+
 function validateProposalOrigin(origin, originPath = 'proposal.origin') {
   if (origin === null) return origin;
   assertObject(origin, originPath);
@@ -855,6 +888,7 @@ function validateAgentRun(run, runPath = 'agentRun') {
     'view',
     'baseRevision',
     'baseRevisionId',
+    'laneLock',
     'createdAt',
     'updatedAt',
     'submittedAt',
@@ -875,6 +909,10 @@ function validateAgentRun(run, runPath = 'agentRun') {
   if (!['current', 'target'].includes(run.view)) fail(`${runPath}.view 必须是 current 或 target`);
   assertBaseRevision(run.baseRevision, `${runPath}.baseRevision`);
   assertBaseRevisionId(run.baseRevisionId, `${runPath}.baseRevisionId`, run.baseRevision);
+  validateLaneLock(run.laneLock, `${runPath}.laneLock`, {
+    baseRevision: run.baseRevision,
+    baseRevisionId: run.baseRevisionId,
+  });
   assertTimestamp(run.createdAt, `${runPath}.createdAt`);
   assertTimestamp(run.updatedAt, `${runPath}.updatedAt`);
   assertTimestamp(run.submittedAt, `${runPath}.submittedAt`, { nullable: true });
@@ -990,6 +1028,7 @@ function validateProposal(proposal, proposalPath = 'proposal', { knownEvidenceId
     'diagramId',
     'baseRevision',
     'baseRevisionId',
+    'laneLock',
     'title',
     'summary',
     'confidence',
@@ -1008,6 +1047,10 @@ function validateProposal(proposal, proposalPath = 'proposal', { knownEvidenceId
   assertStableId(proposal.diagramId, `${proposalPath}.diagramId`);
   assertBaseRevision(proposal.baseRevision, `${proposalPath}.baseRevision`);
   assertBaseRevisionId(proposal.baseRevisionId, `${proposalPath}.baseRevisionId`, proposal.baseRevision);
+  validateLaneLock(proposal.laneLock, `${proposalPath}.laneLock`, {
+    baseRevision: proposal.baseRevision,
+    baseRevisionId: proposal.baseRevisionId,
+  });
   assertText(proposal.title, `${proposalPath}.title`, { max: 160 });
   assertText(proposal.summary, `${proposalPath}.summary`, { max: 2000 });
   if (proposal.requestId !== null && proposal.requestId !== undefined) {
@@ -1181,6 +1224,9 @@ function validateAnalysis(analysis) {
       if (!run) fail(`${proposalPath}.origin.runId 引用了未知运行 ${proposal.origin.runId}`);
       if (!artifact || artifact.runId !== run.id) {
         fail(`${proposalPath}.origin.artifactId 引用了不属于该运行的工件 ${proposal.origin.artifactId}`);
+      }
+      if (proposal.laneLock !== undefined && !sameLaneLock(proposal.laneLock, run.laneLock)) {
+        fail(`${proposalPath}.laneLock 必须与来源运行锁定的视图状态一致`);
       }
     }
   });

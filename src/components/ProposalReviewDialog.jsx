@@ -270,7 +270,8 @@ export default function ProposalReviewDialog({
   const currentEvidenceIsCodeFact = proposal.view !== 'current' || changes.every((change) => (
     changeEvidence(change, evidenceRegistry).every((item) => item.basis === 'code-fact')
   ));
-  const canAccept = proposalPending && evidenceComplete && currentEvidenceIsCodeFact && !isAccepted(status) && status !== 'rejected';
+  const hasLaneLock = proposal.laneLock !== undefined;
+  const canAccept = proposalPending && evidenceComplete && currentEvidenceIsCodeFact && hasLaneLock && !isAccepted(status) && status !== 'rejected';
   const canReject = proposalPending && Boolean(selectedChange) && !isAccepted(status) && status !== 'rejected';
 
   return (
@@ -327,6 +328,7 @@ export default function ProposalReviewDialog({
           <div>
             {!evidenceComplete && !allowEvidenceFreeAccept && <small>提案中的每项变更都需要至少一条可审阅依据。</small>}
             {evidenceComplete && !currentEvidenceIsCodeFact && <small>当前架构只能由“代码事实”支持；讨论、设计文档或推断只能用于目标提案。</small>}
+            {!hasLaneLock && <small>该旧提案没有草案基线锁；可以拒绝或回看，但必须基于当前草案重建后才能接受。</small>}
           </div>
           <div className="dialog-actions">
             <button className="quiet" type="button" disabled={!canReject || busy || Boolean(actionInFlight)} onClick={() => invokeAction(onRejectProposal, 'reject')}>

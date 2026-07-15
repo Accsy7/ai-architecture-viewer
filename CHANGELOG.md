@@ -2,6 +2,24 @@
 
 All notable changes to AI Architecture Viewer are documented in this file.
 
+## [0.5.1] - 2026-07-15
+
+### Fixed
+
+- Agent runs and their proposals now lock the published lane baseline together
+  with the active draft ID and revision observed at run creation.
+- A user-confirmed proposal can merge into that exact unchanged draft instead
+  of forcing the user to publish or discard unrelated draft work first. The
+  merge preserves existing graph/layout semantics and increments the draft
+  revision; target merges rebuild the draft contract and bound-document index
+  while retaining existing criteria and contract identity.
+- Concurrent draft edits, draft replacement, or publication of a newer formal
+  baseline make the run or proposal explicitly stale rather than silently
+  overwriting newer work.
+- Stored runs and proposals without a lane lock remain readable. They cannot be
+  continued or accepted by guessing a baseline and must be recreated; rejection
+  remains available. MCP still has no review, acceptance, or publication tool.
+
 ## [0.5.0] - 2026-07-15
 
 ### Added

@@ -393,6 +393,47 @@ function registeredDocumentProposal() {
   return proposal;
 }
 
+function registeredDocumentBindingProposal({
+  artifactId = 'proposal-bind-registered-document',
+  targetId = 'processing-module',
+} = {}) {
+  return {
+    schemaVersion: '1.3.0',
+    artifactType: 'architecture-proposal',
+    artifactId,
+    createdAt: NOW,
+    requestId: 'request-bind-registered-document',
+    baseSnapshotId: 'target-active-draft',
+    title: 'Bind the registered design to an existing target responsibility',
+    summary: 'Add a stable document reference without replacing the existing target draft.',
+    options: [{
+      id: 'option-bind-registered-document',
+      title: 'Bind registered design',
+      summary: 'Keep the target semantics and attach its governing design document.',
+      advantages: ['Lets coding agents read the relevant design on demand.'],
+      disadvantages: ['Still requires human review and publication.'],
+    }],
+    recommendedOptionId: 'option-bind-registered-document',
+    changes: [{
+      id: `change-bind-document-${targetId}`,
+      kind: 'update',
+      targetType: 'node',
+      targetId,
+      summary: 'Bind the registered target design to this responsibility.',
+      evidenceIds: ['evidence-registered-target-boundary'],
+      patch: { data: { documentRefs: ['registered-target-design'] } },
+    }],
+    acceptanceCriteria: [{
+      id: 'criterion-registered-design-bound',
+      statement: 'The target responsibility is bound to its registered governing design.',
+      targetRefs: [{ targetType: 'node', targetId }],
+    }],
+    risks: [],
+    decisionsRequired: [],
+    evidenceManifest: 'evidence-manifest.json',
+  };
+}
+
 function implementationReport() {
   return {
     schemaVersion: '1.0.0',
@@ -573,6 +614,29 @@ async function reviewImplementation(baseUrl, runId, decision, note) {
   });
 }
 
+function draftRequest(lane, graph) {
+  return {
+    schemaVersion: lane.schemaVersion,
+    expectedHeadRevision: lane.published.revision,
+    expectedHeadRevisionId: lane.published.revisionId,
+    expectedDraftId: lane.draft?.draftId || null,
+    expectedDraftRevision: lane.draft?.draftRevision || 0,
+    graph,
+  };
+}
+
+function publishRequest(lane, message) {
+  return {
+    schemaVersion: lane.schemaVersion,
+    expectedHeadRevision: lane.published.revision,
+    expectedHeadRevisionId: lane.published.revisionId,
+    expectedDraftId: lane.draft?.draftId || null,
+    expectedDraftRevision: lane.draft?.draftRevision || 0,
+    message,
+    userConfirmed: true,
+  };
+}
+
 test('agent APIs expose local context without a model provider or approval capability', async (t) => {
   const fixture = await startFixture(t);
   const context = await request(fixture.baseUrl, '/api/agent/context?view=current');
@@ -641,6 +705,13 @@ test('an external proposal is evidence-verified, human-reviewed, and applied onl
   assert.equal(proposal.origin.agentName, 'Codex');
   assert.equal(proposal.evidence.length, 1);
   assert.equal(proposal.changes[0].patch.position, undefined);
+  assert.deepEqual(run.laneLock, {
+    publishedRevision: 1,
+    publishedRevisionId: 'current-r1',
+    draftId: null,
+    draftRevision: 0,
+  });
+  assert.deepEqual(proposal.laneLock, run.laneLock);
 
   const accepted = await request(fixture.baseUrl, `/api/analysis/proposals/${proposal.id}/accept`, {
     method: 'POST',
@@ -660,6 +731,77 @@ test('an external proposal is evidence-verified, human-reviewed, and applied onl
   const status = await request(fixture.baseUrl, `/api/agent/runs/${run.id}`);
   assert.equal(status.payload.run.status, 'reviewed');
   assert.equal(status.payload.permissions.canPublish, false);
+});
+
+test('the current lane safely merges a proposal into the exact active draft and still requires user confirmation', async (t) => {
+  const fixture = await startFixture(t);
+  const current = await request(fixture.baseUrl, '/api/state?view=current');
+  const draftGraph = structuredClone(current.payload.published.graph);
+  draftGraph.nodes.find((node) => node.id === 'processing-module').position.x += 37;
+  const saved = await request(fixture.baseUrl, '/api/draft?view=current', {
+    method: 'PUT',
+    body: body(draftRequest(current.payload, draftGraph)),
+  });
+  assert.equal(saved.response.status, 200, JSON.stringify(saved.payload));
+
+  const run = await createRun(fixture.baseUrl, {
+    view: 'current',
+    summary: 'Update one code-backed responsibility in the exact current draft.',
+  });
+  assert.equal(run.laneLock.draftId, saved.payload.draft.draftId);
+  assert.equal(run.laneLock.draftRevision, saved.payload.draft.draftRevision);
+  const submitted = await request(fixture.baseUrl, `/api/agent/runs/${run.id}/artifacts`, {
+    method: 'POST',
+    body: body({
+      artifact: changeProposal(),
+      evidenceManifest: evidenceManifest(fixture.sourceContent),
+    }),
+  });
+  assert.equal(submitted.response.status, 201, JSON.stringify(submitted.payload));
+  const analysis = await request(fixture.baseUrl, '/api/analysis');
+
+  const unconfirmed = await request(
+    fixture.baseUrl,
+    '/api/analysis/proposals/proposal-evaluation-purpose/accept',
+    {
+      method: 'POST',
+      body: body({
+        schemaVersion: ANALYSIS_SCHEMA_VERSION,
+        baseRevision: analysis.payload.baseRevision,
+        userConfirmed: false,
+      }),
+    },
+  );
+  assert.equal(unconfirmed.response.status, 403);
+  assert.equal(unconfirmed.payload.code, 'USER_CONFIRMATION_REQUIRED');
+
+  const accepted = await request(
+    fixture.baseUrl,
+    '/api/analysis/proposals/proposal-evaluation-purpose/accept',
+    {
+      method: 'POST',
+      body: body({
+        schemaVersion: ANALYSIS_SCHEMA_VERSION,
+        baseRevision: analysis.payload.baseRevision,
+        userConfirmed: true,
+      }),
+    },
+  );
+  assert.equal(accepted.response.status, 200, JSON.stringify(accepted.payload));
+  assert.equal(accepted.payload.lane.draft.draftId, saved.payload.draft.draftId);
+  assert.equal(accepted.payload.lane.draft.draftRevision, saved.payload.draft.draftRevision + 1);
+  assert.equal(
+    accepted.payload.lane.draft.graph.nodes.find((node) => node.id === 'processing-module').position.x,
+    draftGraph.nodes.find((node) => node.id === 'processing-module').position.x,
+  );
+  assert.equal(
+    accepted.payload.lane.draft.graph.nodes.find((node) => node.id === 'processing-module').data.purpose,
+    'Evaluates cited evidence before producing a controlled output.',
+  );
+  assert.equal(
+    accepted.payload.lane.published.graph.nodes.find((node) => node.id === 'processing-module').data.purpose,
+    '执行通用处理。',
+  );
 });
 
 test('a concept project can complete the target-proposal loop from user-confirmed discussion without code', async (t) => {
@@ -900,6 +1042,163 @@ test('registered project documents bind a published contract by ID and hash with
   fs.writeFileSync(fixture.documentsFile, `${JSON.stringify(originalRegistry, null, 2)}\n`, 'utf8');
 });
 
+test('a human can merge a document-binding proposal into the unchanged active target draft', async (t) => {
+  const fixture = await startFixture(t, { separateWorkspace: true });
+  const before = await request(fixture.baseUrl, '/api/state?view=target');
+  assert.ok(before.payload.draft);
+  const processingBefore = structuredClone(
+    before.payload.draft.graph.nodes.find((node) => node.id === 'processing-module'),
+  );
+  const edgesBefore = structuredClone(before.payload.draft.graph.edges);
+  const contractBefore = structuredClone(before.payload.draft.developmentContract);
+
+  const preview = await request(
+    fixture.baseUrl,
+    '/api/documents/registered-target-design/preview?section=Human%20boundary',
+  );
+  const run = await createRun(fixture.baseUrl, {
+    view: 'target',
+    summary: 'Bind one registered document to the unchanged active target draft.',
+  });
+  const submitted = await request(fixture.baseUrl, `/api/agent/runs/${run.id}/artifacts`, {
+    method: 'POST',
+    body: body({
+      artifact: registeredDocumentBindingProposal(),
+      evidenceManifest: registeredDocumentEvidenceManifest(preview.payload.contentHash),
+    }),
+  });
+  assert.equal(submitted.response.status, 201, JSON.stringify(submitted.payload));
+
+  const analysis = await request(fixture.baseUrl, '/api/analysis');
+  const accepted = await request(
+    fixture.baseUrl,
+    '/api/analysis/proposals/proposal-bind-registered-document/accept',
+    {
+      method: 'POST',
+      body: body({
+        schemaVersion: ANALYSIS_SCHEMA_VERSION,
+        baseRevision: analysis.payload.baseRevision,
+        userConfirmed: true,
+      }),
+    },
+  );
+  assert.equal(accepted.response.status, 200, JSON.stringify(accepted.payload));
+  assert.equal(accepted.payload.lane.draft.draftId, before.payload.draft.draftId);
+  assert.equal(accepted.payload.lane.draft.draftRevision, before.payload.draft.draftRevision + 1);
+  assert.deepEqual(accepted.payload.lane.draft.graph.edges, edgesBefore);
+  const processingAfter = accepted.payload.lane.draft.graph.nodes.find((node) => node.id === 'processing-module');
+  assert.deepEqual(processingAfter.position, processingBefore.position);
+  assert.equal(processingAfter.width, processingBefore.width);
+  assert.deepEqual(processingAfter.data.documentRefs, ['registered-target-design']);
+  assert.equal(accepted.payload.lane.draft.developmentContract.contractId, contractBefore.contractId);
+  assert.equal(accepted.payload.lane.draft.developmentContract.documents[0].id, 'registered-target-design');
+  assert.equal(
+    accepted.payload.lane.draft.developmentContract.acceptanceCriteria.some(
+      (criterion) => criterion.id === 'criterion-registered-design-bound',
+    ),
+    true,
+  );
+  assert.deepEqual(accepted.payload.lane.published, before.payload.published);
+});
+
+test('an accepted proposal becomes stale after a concurrent active-draft edit', async (t) => {
+  const fixture = await startFixture(t, { separateWorkspace: true });
+  const preview = await request(
+    fixture.baseUrl,
+    '/api/documents/registered-target-design/preview?section=Human%20boundary',
+  );
+  const run = await createRun(fixture.baseUrl, { view: 'target' });
+  const submitted = await request(fixture.baseUrl, `/api/agent/runs/${run.id}/artifacts`, {
+    method: 'POST',
+    body: body({
+      artifact: registeredDocumentBindingProposal({ artifactId: 'proposal-stale-draft-binding' }),
+      evidenceManifest: registeredDocumentEvidenceManifest(preview.payload.contentHash),
+    }),
+  });
+  assert.equal(submitted.response.status, 201, JSON.stringify(submitted.payload));
+
+  const target = await request(fixture.baseUrl, '/api/state?view=target');
+  const concurrentGraph = structuredClone(target.payload.draft.graph);
+  concurrentGraph.nodes.find((node) => node.id === 'processing-module').position.y += 11;
+  const concurrent = await request(fixture.baseUrl, '/api/draft?view=target', {
+    method: 'PUT',
+    body: body(draftRequest(target.payload, concurrentGraph)),
+  });
+  assert.equal(concurrent.response.status, 200, JSON.stringify(concurrent.payload));
+
+  const analysis = await request(fixture.baseUrl, '/api/analysis');
+  const stale = await request(fixture.baseUrl, '/api/analysis/proposals/proposal-stale-draft-binding/accept', {
+    method: 'POST',
+    body: body({
+      schemaVersion: ANALYSIS_SCHEMA_VERSION,
+      baseRevision: analysis.payload.baseRevision,
+      userConfirmed: true,
+    }),
+  });
+  assert.equal(stale.response.status, 409, JSON.stringify(stale.payload));
+  assert.equal(stale.payload.code, 'PROPOSAL_STALE');
+  assert.equal(stale.payload.details.expectedLaneLock.draftRevision, target.payload.draft.draftRevision);
+  assert.equal(stale.payload.details.actualLaneLock.draftRevision, concurrent.payload.draft.draftRevision);
+
+  const afterState = await request(fixture.baseUrl, '/api/state?view=target');
+  assert.equal(afterState.payload.draft.draftRevision, concurrent.payload.draft.draftRevision);
+  assert.equal(
+    afterState.payload.draft.graph.nodes.find((node) => node.id === 'processing-module').data.documentRefs,
+    undefined,
+  );
+  const afterAnalysis = await request(fixture.baseUrl, '/api/analysis');
+  assert.equal(
+    afterAnalysis.payload.proposals.find((proposal) => proposal.id === 'proposal-stale-draft-binding').status,
+    'pending',
+  );
+});
+
+test('an accepted proposal becomes stale after its draft is published as a new formal baseline', async (t) => {
+  const fixture = await startFixture(t, { separateWorkspace: true });
+  const preview = await request(
+    fixture.baseUrl,
+    '/api/documents/registered-target-design/preview?section=Human%20boundary',
+  );
+  const run = await createRun(fixture.baseUrl, { view: 'target' });
+  const submitted = await request(fixture.baseUrl, `/api/agent/runs/${run.id}/artifacts`, {
+    method: 'POST',
+    body: body({
+      artifact: registeredDocumentBindingProposal({ artifactId: 'proposal-stale-published-binding' }),
+      evidenceManifest: registeredDocumentEvidenceManifest(preview.payload.contentHash),
+    }),
+  });
+  assert.equal(submitted.response.status, 201, JSON.stringify(submitted.payload));
+
+  const target = await request(fixture.baseUrl, '/api/state?view=target');
+  const published = await request(fixture.baseUrl, '/api/publish?view=target', {
+    method: 'POST',
+    body: body(publishRequest(target.payload, 'Publish the pre-existing target draft first')),
+  });
+  assert.equal(published.response.status, 200, JSON.stringify(published.payload));
+  const publishedSnapshot = structuredClone(published.payload.published);
+
+  const analysis = await request(fixture.baseUrl, '/api/analysis');
+  const stale = await request(
+    fixture.baseUrl,
+    '/api/analysis/proposals/proposal-stale-published-binding/accept',
+    {
+      method: 'POST',
+      body: body({
+        schemaVersion: ANALYSIS_SCHEMA_VERSION,
+        baseRevision: analysis.payload.baseRevision,
+        userConfirmed: true,
+      }),
+    },
+  );
+  assert.equal(stale.response.status, 409, JSON.stringify(stale.payload));
+  assert.equal(stale.payload.code, 'PROPOSAL_STALE');
+  assert.equal(stale.payload.details.expectedLaneLock.publishedRevision, 0);
+  assert.equal(stale.payload.details.actualLaneLock.publishedRevision, 1);
+  const after = await request(fixture.baseUrl, '/api/state?view=target');
+  assert.deepEqual(after.payload.published, publishedSnapshot);
+  assert.equal(after.payload.draft, null);
+});
+
 test('directly tampering with a published target graph invalidates its frozen contract and old run', async (t) => {
   const fixture = await startFixture(t, { targetFromCurrent: true });
   const approved = await request(fixture.baseUrl, '/api/agent/approved-target');
@@ -1002,7 +1301,7 @@ test('discussion and design intent cannot be submitted as current implementation
   assert.equal(after.payload.evidence.length, 0);
 });
 
-test('a migrated current proposal backed by design intent stays readable but cannot be accepted', async (t) => {
+test('a migrated proposal without a lane lock stays readable but must be rebuilt before acceptance', async (t) => {
   const fixture = await startFixture(t, { withoutCodeRepository: true, clearTargetDraft: true });
   const run = await createRun(fixture.baseUrl, { view: 'target' });
   const submitted = await request(fixture.baseUrl, `/api/agent/runs/${run.id}/artifacts`, {
@@ -1025,6 +1324,8 @@ test('a migrated current proposal backed by design intent stays readable but can
   stored.agentRuns[0].view = 'current';
   stored.agentRuns[0].baseRevision = currentState.published.revision;
   stored.agentRuns[0].baseRevisionId = currentState.published.revisionId;
+  delete stored.proposals[0].laneLock;
+  delete stored.agentRuns[0].laneLock;
   fs.writeFileSync(fixture.analysisFile, `${JSON.stringify(stored, null, 2)}\n`, 'utf8');
 
   const readable = await request(fixture.baseUrl, '/api/analysis');
@@ -1038,8 +1339,33 @@ test('a migrated current proposal backed by design intent stays readable but can
       userConfirmed: true,
     }),
   });
-  assert.equal(accepted.response.status, 422);
-  assert.equal(accepted.payload.code, 'PROPOSAL_EVIDENCE_BASIS_FORBIDDEN');
+  assert.equal(accepted.response.status, 409);
+  assert.equal(accepted.payload.code, 'PROPOSAL_LANE_LOCK_REQUIRED');
+  const targetAfter = await request(fixture.baseUrl, '/api/state?view=current');
+  assert.equal(targetAfter.payload.draft, null);
+});
+
+test('a legacy agent run without a lane lock remains readable but cannot create a new proposal', async (t) => {
+  const fixture = await startFixture(t);
+  const run = await createRun(fixture.baseUrl);
+  const stored = JSON.parse(fs.readFileSync(fixture.analysisFile, 'utf8'));
+  delete stored.agentRuns[0].laneLock;
+  fs.writeFileSync(fixture.analysisFile, `${JSON.stringify(stored, null, 2)}\n`, 'utf8');
+
+  const readable = await request(fixture.baseUrl, `/api/agent/runs/${run.id}`);
+  assert.equal(readable.response.status, 200, JSON.stringify(readable.payload));
+  assert.equal(readable.payload.run.laneLock, undefined);
+  const rejected = await request(fixture.baseUrl, `/api/agent/runs/${run.id}/artifacts`, {
+    method: 'POST',
+    body: body({
+      artifact: changeProposal(),
+      evidenceManifest: evidenceManifest(fixture.sourceContent),
+    }),
+  });
+  assert.equal(rejected.response.status, 409, JSON.stringify(rejected.payload));
+  assert.equal(rejected.payload.code, 'AGENT_LANE_LOCK_REQUIRED');
+  const after = await request(fixture.baseUrl, '/api/analysis');
+  assert.equal(after.payload.proposals.length, 0);
 });
 
 test('agent submissions reject stale evidence before entering the review inbox', async (t) => {

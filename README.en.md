@@ -3,7 +3,7 @@
 [简体中文](README.md)
 
 [![CI](https://github.com/Accsy7/ai-architecture-viewer/actions/workflows/ci.yml/badge.svg)](https://github.com/Accsy7/ai-architecture-viewer/actions/workflows/ci.yml)
-![Version: v0.5.0](https://img.shields.io/badge/version-v0.5.0-2f6f5e)
+![Version: v0.5.1](https://img.shields.io/badge/version-v0.5.1-2f6f5e)
 [![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-7c6f64)](LICENSE)
 
 > **License:** Source code is available only for the noncommercial purposes defined by the [PolyForm Noncommercial License 1.0.0](LICENSE). Derivative versions must retain the attribution in [NOTICE](NOTICE) and follow the [Project Name and Brand Usage Policy](TRADEMARKS.en.md).
@@ -16,7 +16,7 @@ It does not embed a model, require a model API key, or scan a repository on an a
 
 All bundled screens and data are fictional. No customer, production, or personal data is included.
 
-## What the v0.5.0 MVP does
+## What the v0.5.1 MVP does
 
 - Lets external agents read published stable IDs, responsibilities, relationships, and boundaries as a compact semantic graph without retransmitting layout data.
 - Supports concept projects without a code repository by accepting target proposals from user-confirmed discussion or Markdown design material.
@@ -37,6 +37,7 @@ All bundled screens and data are fictional. No customer, production, or personal
 - Returns a low-context agent claim, architecture-gate summary, and human-review state from `get_review_status` by default, loading per-item target, actual, evidence, and explanation detail only when requested.
 - Places architecture proposals in a human inbox with per-change evidence and submitter provenance.
 - Reserves acceptance and rejection for the user. Acceptance writes only a draft; publication requires a second explicit human action.
+- Locks both the published baseline and the active draft ID/revision when a run starts. Human acceptance safely merges into that exact unchanged draft while preserving its graph, relationships, layout semantics, and development contract; a changed draft or published baseline returns an explicit stale result. Older proposals without this lock remain readable or rejectable but must be rebuilt before acceptance.
 - Keeps current architecture, target architecture, diffs, drafts, and immutable revision history.
 - Bundles three portable skills for a consistent understand–plan–verify handoff.
 
@@ -221,7 +222,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development conventions, [SECURITY.md
 - Default examples and documents must be fictional or explicitly authorized for public release.
 - Never commit credentials, access tokens, customer material, internal paths, or architecture data that has not been de-identified.
 - Agents may submit structured candidates and implementation claims only. Implementation review, proposal acceptance, and architecture publication require human actions.
-- v0.5.0 binds to `127.0.0.1` only. Mutation APIs do not yet provide authentication, CSRF protection, or multi-user authorization; do not proxy the service to a LAN or the public internet.
+- v0.5.1 binds to `127.0.0.1` only. Mutation APIs do not yet provide authentication, CSRF protection, or multi-user authorization; do not proxy the service to a LAN or the public internet.
 - Source code uses the [PolyForm Noncommercial License 1.0.0](LICENSE). It is source-available, not OSI open source. Commercial use requires separate written authorization; see [COMMERCIAL_LICENSE.en.md](COMMERCIAL_LICENSE.en.md).
 - Derivative works are allowed, but public modified versions must retain [NOTICE](NOTICE) attribution and follow [TRADEMARKS.en.md](TRADEMARKS.en.md): use a different name and logo and do not imply official status or endorsement.
 - Third-party dependencies remain subject to their own licenses.
