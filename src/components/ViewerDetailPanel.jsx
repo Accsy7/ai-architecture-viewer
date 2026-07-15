@@ -5,32 +5,24 @@ import {
   documentTypeLabel,
   documentWarnings,
 } from '../document-model.js';
+import { partitionInspectorFields, understandingEvidence } from '../inspector-presentation.mjs';
+import { useI18n } from '../i18n.jsx';
 
-const RELATION_LABELS = {
-  flow: '主流程',
-  support: '支持',
-  reference: '引用',
-  governance: '治理',
-  handoff: '交接',
-};
-
-const POSTURE_LABELS = {
-  none: '一般关系',
-  controlled: '受控边界',
-  blocked: '当前阻断',
-};
-
-function ViewerField({ label, value, multiline, tone }) {
-  const text = value === null || value === undefined || value === '' ? '未说明' : String(value);
+function ViewerField({ label, value, multiline, tone, format = 'text', variant }) {
+  const { t } = useI18n();
+  const text = value === null || value === undefined || value === '' ? t('details.unspecified') : String(value);
   return (
-    <div className={`viewer-field ${multiline ? 'is-multiline' : ''} ${tone ? `tone-${tone}` : ''}`}>
+    <div className={`viewer-field ${multiline ? 'is-multiline' : ''} ${tone ? `tone-${tone}` : ''} ${variant ? `is-${variant}` : ''}`}>
       <span>{label}</span>
-      <p>{text}</p>
+      {format === 'tags' && Array.isArray(value)
+        ? <p className="viewer-field-tags">{value.map((item) => <em key={item}>{item}</em>)}</p>
+        : <p>{text}</p>}
     </div>
   );
 }
 
 function RelatedDocuments({ node, documents, onPreviewDocument }) {
+  const { t } = useI18n();
   const refs = Array.isArray(node.data?.documentRefs) ? node.data.documentRefs : [];
   const index = useMemo(() => new Map(documents.map((document) => [document.id, document])), [documents]);
   const warnings = documentWarnings(refs, documents);
@@ -38,24 +30,24 @@ function RelatedDocuments({ node, documents, onPreviewDocument }) {
   return (
     <section className="related-documents">
       <div className="related-documents-summary">
-        <strong>相关文档 {refs.length}</strong>
-        <span>文档关系由 AI 随架构内容维护；你可以直接在这里阅读。</span>
+        <strong>{t('details.relatedDocuments', { count: refs.length })}</strong>
+        <span>{t('details.documentBoundary')}</span>
       </div>
       {warnings.length > 0 && (
         <div className="module-document-warning">
-          <strong>发现 {warnings.length} 项引用提示</strong>
+          <strong>{t('details.referenceWarnings', { count: warnings.length })}</strong>
           <ul>{warnings.map((warning, indexValue) => <li key={`${warning.documentId}-${warning.code}-${indexValue}`}>{warning.message}</li>)}</ul>
         </div>
       )}
       <div className="bound-document-list">
-        {!refs.length && <p className="inspector-placeholder">这个模块暂未关联文档。</p>}
+        {!refs.length && <p className="inspector-placeholder">{t('details.noDocuments')}</p>}
         {refs.map((ref) => {
           const document = index.get(ref);
           if (!document) {
             return (
               <article className="bound-document missing" key={ref}>
-                <div className="bound-document-heading"><strong>{ref}</strong><span>引用失效</span></div>
-                <p>登记册中没有找到这份文档。</p>
+                <div className="bound-document-heading"><strong>{ref}</strong><span>{t('details.invalidReference')}</span></div>
+                <p>{t('details.documentMissing')}</p>
               </article>
             );
           }
@@ -63,13 +55,13 @@ function RelatedDocuments({ node, documents, onPreviewDocument }) {
             <article className={`bound-document status-${document.status}`} key={document.id}>
               <div className="bound-document-heading">
                 <strong>{document.title}</strong>
-                <span>{documentStatusLabel(document.status)}</span>
+                <span>{t(`documents.status.${document.status}`, {}, documentStatusLabel(document.status))}</span>
               </div>
               <code>{document.path}</code>
-              <p>{documentTypeLabel(document.type)} · {documentAuthorityLabel(document.authority)}</p>
+              <p>{t(`documents.type.${document.type}`, {}, documentTypeLabel(document.type))} · {t(`documents.authority.${document.authority}`, {}, documentAuthorityLabel(document.authority))}</p>
               {document.summary && <p>{document.summary}</p>}
               <div className="bound-document-actions">
-                <button type="button" onClick={() => onPreviewDocument(document)}>打开文档</button>
+                <button type="button" onClick={() => onPreviewDocument(document)}>{t('documents.open')}</button>
               </div>
             </article>
           );
@@ -94,27 +86,31 @@ export default function ViewerDetailPanel({
   onOpenRelated,
   canCorrect,
   onCorrectNode,
+  relationshipFocused = false,
+  availableFlows = [],
+  onStartFlow,
 }) {
+  const { t, formatDateTime } = useI18n();
   const [activeTab, setActiveTab] = useState('module');
   const nodeNames = useMemo(() => new Map(nodes.map((node) => [node.id, node.data?.name || node.id])), [nodes]);
   useEffect(() => { setActiveTab('module'); }, [selectedNode?.id]);
 
   if (selectedEdge) {
     return (
-      <aside className="inspector" aria-label="关系详情">
+      <aside className="inspector" aria-label={t('details.relationshipAria')}>
         <div className="inspector-heading">
           <span className="aside-mark">↗</span>
-          <div><p className="kicker">关系</p><h2>连接详情</h2></div>
+          <div><p className="kicker">{t('details.relationship')}</p><h2>{t('details.connectionDetails')}</h2></div>
         </div>
         <p className="relation-route">
           {nodeNames.get(selectedEdge.source) || selectedEdge.source}
           <span>→</span>
           {nodeNames.get(selectedEdge.target) || selectedEdge.target}
         </p>
-        <ViewerField label="关系说明" value={selectedEdge.data?.label} multiline />
-        <ViewerField label="关系类型" value={RELATION_LABELS[selectedEdge.data?.relationType] || selectedEdge.data?.relationType} />
-        <ViewerField label="边界状态" value={POSTURE_LABELS[selectedEdge.data?.controlledBoundaryPosture] || selectedEdge.data?.controlledBoundaryPosture} />
-        <p className="viewer-routing-note">连接端口和直角路径由查看器根据卡片位置自动计算。</p>
+        <ViewerField label={t('fields.label')} value={selectedEdge.data?.label} multiline />
+        <ViewerField label={t('fields.relationType')} value={t(`relation.${selectedEdge.data?.relationType}`, {}, selectedEdge.data?.relationType)} />
+        <ViewerField label={t('details.boundaryState')} value={t(`posture.${selectedEdge.data?.controlledBoundaryPosture}`, {}, selectedEdge.data?.controlledBoundaryPosture)} />
+        <p className="viewer-routing-note">{t('details.routingNote')}</p>
       </aside>
     );
   }
@@ -122,31 +118,67 @@ export default function ViewerDetailPanel({
   if (selectedNode) {
     const relatedEdges = edges.filter((edge) => edge.source === selectedNode.id || edge.target === selectedNode.id);
     const fields = Array.isArray(nodeFields) ? nodeFields : [];
+    const presentation = partitionInspectorFields(fields, selectedNode.data);
+    const evidence = understandingEvidence(selectedNode.data);
+    const documentCount = selectedNode.data?.documentRefs?.length || 0;
+    const renderConfiguredField = (field, label, variant) => field && (
+      <ViewerField
+        key={field.key}
+        label={label || field.label}
+        value={selectedNode.data?.[field.key]}
+        multiline={field.multiline}
+        tone={field.tone}
+        format={field.format}
+        variant={variant}
+      />
+    );
     return (
-      <aside className="inspector" aria-label="模块详情">
+      <aside className="inspector" aria-label={t('details.moduleAria')}>
         <div className="inspector-heading">
           <span className="aside-mark">◎</span>
-          <div><p className="kicker">模块</p><h2>{selectedNode.data?.name || selectedNode.id}</h2></div>
+          <div>
+            <p className="kicker">{t('details.module')}</p>
+            <h2>{selectedNode.data?.name || selectedNode.id}</h2>
+            {presentation.group && <p className="inspector-group">{selectedNode.data?.group || t('details.unspecified')}</p>}
+          </div>
         </div>
+        {renderConfiguredField(presentation.purpose, t('details.whatItDoes'), 'core')}
         {(childDiagram || relatedDiagram || canCorrect) && (
           <div className="viewer-node-actions">
             {childDiagram && (
               <button className="primary" type="button" onClick={() => onOpenChild(childDiagram.id)}>
-                打开{childDiagram.title} <span aria-hidden="true">→</span>
+                {t('details.openDiagram', { title: childDiagram.title })} <span aria-hidden="true">→</span>
               </button>
             )}
             {relatedDiagram && (
               <button className={childDiagram ? '' : 'primary'} type="button" onClick={() => onOpenRelated(relatedDiagram.id, selectedNode.data?.relatedNodeId)}>
-                查看{relatedDiagram.title} <span aria-hidden="true">→</span>
+                {t('details.viewDiagram', { title: relatedDiagram.title })} <span aria-hidden="true">→</span>
               </button>
             )}
-            {canCorrect && <button type="button" onClick={onCorrectNode}>纠正 AI 理解</button>}
+            {canCorrect && <button type="button" onClick={onCorrectNode}>{t('details.correctAi')}</button>}
           </div>
         )}
-        <div className="inspector-tabs" role="tablist" aria-label="模块信息">
-          <button type="button" role="tab" aria-selected={activeTab === 'module'} className={activeTab === 'module' ? 'active' : ''} onClick={() => setActiveTab('module')}>模块说明</button>
+        {relationshipFocused && (
+          <p className="relationship-focus-summary">
+            {t('focus.oneHopSummary', { count: relatedEdges.length })}
+          </p>
+        )}
+        {relationshipFocused && availableFlows.length > 0 && (
+          <section className="registered-flow-entry" aria-label={t('flow.available')}>
+            <h3>{t('flow.available')} <span>{availableFlows.length}</span></h3>
+            <p>{t('flow.entryHelp')}</p>
+            {availableFlows.map((flow) => (
+              <button type="button" key={flow.id} onClick={() => onStartFlow(flow.id)}>
+                <strong>{flow.title}</strong>
+                <small>{t('flow.enter')}</small>
+              </button>
+            ))}
+          </section>
+        )}
+        <div className="inspector-tabs" role="tablist" aria-label={t('details.moduleInfo')}>
+          <button type="button" role="tab" aria-selected={activeTab === 'module'} className={activeTab === 'module' ? 'active' : ''} onClick={() => setActiveTab('module')}>{t('details.overview')}</button>
           <button type="button" role="tab" aria-selected={activeTab === 'documents'} className={activeTab === 'documents' ? 'active' : ''} onClick={() => setActiveTab('documents')}>
-            相关文档 <span>{selectedNode.data?.documentRefs?.length || 0}</span>
+            {t('details.documentsTab')} <span>{documentCount}</span>
           </button>
         </div>
 
@@ -154,39 +186,62 @@ export default function ViewerDetailPanel({
           <RelatedDocuments node={selectedNode} documents={documents} onPreviewDocument={onPreviewDocument} />
         ) : (
           <>
-            {selectedNode.data?.compareStatus && <ViewerField label="对比状态" value={selectedNode.data.compareStatus} />}
-            {selectedNode.data?.humanConfirmed && (
-              <section className="human-confirmation-card">
-                <strong>人工已确认</strong>
-                <p>{selectedNode.data.confirmationNote}</p>
-                {selectedNode.data.confirmedAt && <time dateTime={selectedNode.data.confirmedAt}>{new Date(selectedNode.data.confirmedAt).toLocaleString('zh-CN')}</time>}
+            <details className="inspector-disclosure relationship-disclosure">
+              <summary><span>{t('details.directRelationships')}</span><strong>{relatedEdges.length}</strong></summary>
+              <section className="relations-list">
+                {!relatedEdges.length && <p className="inspector-placeholder">{t('details.noRelationships')}</p>}
+                {relatedEdges.map((edge) => {
+                  const outgoing = edge.source === selectedNode.id;
+                  const otherId = outgoing ? edge.target : edge.source;
+                  return (
+                    <button className="relation-row" type="button" key={edge.id} onClick={() => onSelectEdge(edge.id)}>
+                      <span>{outgoing ? '→' : '←'} {nodeNames.get(otherId) || otherId}</span>
+                      <small>{edge.data?.label || t(`relation.${edge.data?.relationType}`, {}, t('details.related'))}</small>
+                    </button>
+                  );
+                })}
               </section>
-            )}
-            {fields
-              .filter((field) => !field.optional || ![null, undefined, ''].includes(selectedNode.data?.[field.key]))
-              .map((field) => (
-              <ViewerField
-                key={field.key}
-                label={field.label}
-                value={selectedNode.data?.[field.key]}
-                multiline={field.multiline}
-                tone={field.tone}
-              />
-              ))}
-            <section className="relations-list">
-              <h3>关联关系 <span>{relatedEdges.length}</span></h3>
-              {!relatedEdges.length && <p className="inspector-placeholder">这个模块暂未连接其他模块。</p>}
-              {relatedEdges.map((edge) => {
-                const outgoing = edge.source === selectedNode.id;
-                const otherId = outgoing ? edge.target : edge.source;
-                return (
-                  <button className="relation-row" type="button" key={edge.id} onClick={() => onSelectEdge(edge.id)}>
-                    <span>{outgoing ? '→' : '←'} {nodeNames.get(otherId) || otherId}</span>
-                    <small>{edge.data?.label || RELATION_LABELS[edge.data?.relationType] || '关联'}</small>
-                  </button>
-                );
-              })}
+            </details>
+
+            <section className="inspector-core-status">
+              {renderConfiguredField(presentation.progress, t('details.currentProgress'), 'core')}
+              {renderConfiguredField(presentation.boundary, t('details.cannotDo'), 'core')}
             </section>
+
+            {(presentation.secondary.length > 0 || selectedNode.data?.compareStatus) && (
+              <details className="inspector-disclosure inspector-more">
+                <summary><span>{t('details.moreInformation')}</span><strong>{presentation.secondary.length + (selectedNode.data?.compareStatus ? 1 : 0)}</strong></summary>
+                <div className="inspector-disclosure-content">
+                  {selectedNode.data?.compareStatus && <ViewerField label={t('details.compareStatus')} value={t(`compare.${selectedNode.data.compareStatus}`, {}, selectedNode.data.compareStatus)} />}
+                  {presentation.secondary.map((field) => renderConfiguredField(field))}
+                </div>
+              </details>
+            )}
+
+            {evidence.length > 0 && (
+              <details className="inspector-disclosure understanding-evidence">
+                <summary><span>{t('details.understandingEvidence')}</span><strong>{evidence.length}</strong></summary>
+                <div className="understanding-evidence-list">
+                  {evidence.map((record, index) => (
+                    <article key={`${record.recordedAt || 'undated'}-${index}`}>
+                      <div className="understanding-evidence-source">
+                        <strong>{t('details.historicalMigrationRecord')}</strong>
+                        <span>{t('details.sourceNotRecorded')}</span>
+                      </div>
+                      <dl>
+                        <div><dt>{t('details.retainedConclusion')}</dt><dd>{record.retainedConclusion || t('details.unspecified')}</dd></div>
+                        <div><dt>{t('details.affectedUnderstanding')}</dt><dd>{t('details.moduleUnderstanding', { name: record.affectedModuleName || selectedNode.id })}</dd></div>
+                        <div>
+                          <dt>{t('details.recordedAt')}</dt>
+                          <dd>{record.recordedAt ? <time dateTime={record.recordedAt}>{formatDateTime(record.recordedAt)}</time> : t('details.recordedAtUnknown')}</dd>
+                        </div>
+                      </dl>
+                      <small>{t('node.correctionNotPublication')}</small>
+                    </article>
+                  ))}
+                </div>
+              </details>
+            )}
           </>
         )}
       </aside>
@@ -194,10 +249,10 @@ export default function ViewerDetailPanel({
   }
 
   return (
-    <aside className="inspector inspector-empty" aria-label="架构说明">
+    <aside className="inspector inspector-empty" aria-label={t('details.architectureAria')}>
       <span className="aside-mark">◎</span>
-      <h2>选择一个模块</h2>
-      <p>查看它在架构中的职责、状态、相关关系和绑定文档。</p>
+      <h2>{t('details.selectModule')}</h2>
+      <p>{t('details.selectModuleHelp')}</p>
     </aside>
   );
 }

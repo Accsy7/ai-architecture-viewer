@@ -8,7 +8,15 @@ const MAX_ANALYSIS_SOURCE_BYTES = 256 * 1024;
 const MAX_ANALYSIS_SOURCE_COUNT = 80;
 const MAX_EVIDENCE_PER_SOURCE = 8;
 const MAX_EVIDENCE_EXCERPT_CHARS = 1800;
-const ALLOWED_EXTENSIONS = new Set(['.json', '.md', '.markdown', '.toml', '.txt', '.yaml', '.yml']);
+const SOURCE_CODE_EXTENSIONS = new Set([
+  '.c', '.cc', '.cjs', '.cpp', '.cs', '.css', '.go', '.graphql', '.gql', '.h', '.hpp',
+  '.html', '.java', '.js', '.jsx', '.kt', '.kts', '.mjs', '.php', '.py', '.rb', '.rs',
+  '.sh', '.sql', '.svelte', '.swift', '.ts', '.tsx', '.vue', '.xml',
+]);
+const ALLOWED_EXTENSIONS = new Set([
+  '.json', '.md', '.markdown', '.toml', '.txt', '.yaml', '.yml',
+  ...SOURCE_CODE_EXTENSIONS,
+]);
 const SKIPPED_DIRECTORIES = new Set(['.git', '.next', '.turbo', 'build', 'coverage', 'dist', 'node_modules']);
 const SENSITIVE_SOURCE_DIRECTORIES = new Set(['.env', '.ssh', 'credential', 'credentials', 'key', 'keys', 'private', 'secret', 'secrets']);
 const RESERVED_SOURCE_FILES = new Set([
@@ -100,6 +108,7 @@ function sourceTypeForPath(sourcePath) {
   if (extension === '.json') return 'json';
   if (extension === '.yaml' || extension === '.yml') return 'yaml';
   if (extension === '.toml') return 'toml';
+  if (SOURCE_CODE_EXTENSIONS.has(extension)) return 'source-code';
   return 'text';
 }
 
@@ -110,7 +119,7 @@ function sourceLabelForPath(sourcePath) {
 function resolveSafeAnalysisSource(sourcePath, projectRoot) {
   const relativePath = normalizedSourcePath(sourcePath);
   if (!isAllowedAnalysisSourcePath(relativePath)) {
-    throw new AnalysisSourceError('该资料类型不能用于 AI 分析', 'ANALYSIS_SOURCE_NOT_ALLOWED', 422, { path: relativePath });
+    throw new AnalysisSourceError('该文件类型不能作为架构证据', 'ANALYSIS_SOURCE_NOT_ALLOWED', 422, { path: relativePath });
   }
   const root = path.resolve(projectRoot);
   let rootReal;
@@ -151,7 +160,7 @@ function resolveSafeAnalysisSource(sourcePath, projectRoot) {
     throw new AnalysisSourceError('资料路径必须指向普通文件', 'ANALYSIS_SOURCE_NOT_FILE', 422, { path: relativePath });
   }
   if (stats.size > MAX_ANALYSIS_SOURCE_BYTES) {
-    throw new AnalysisSourceError('单个资料文件超过 AI 分析大小限制', 'ANALYSIS_SOURCE_TOO_LARGE', 422, {
+    throw new AnalysisSourceError('单个架构证据文件超过大小限制', 'ANALYSIS_SOURCE_TOO_LARGE', 422, {
       path: relativePath,
       maxBytes: MAX_ANALYSIS_SOURCE_BYTES,
     });
@@ -187,6 +196,7 @@ function listAvailableAnalysisSources(projectRoot) {
         resolveSafeAnalysisSource(relativePath, root);
         sources.push({
           id: sourceIdForPath(relativePath),
+          sourceKind: 'workspace-file',
           path: relativePath,
           label: sourceLabelForPath(relativePath),
           type: sourceTypeForPath(relativePath),
@@ -237,6 +247,8 @@ function collectEvidence(source, collectedAt = new Date().toISOString()) {
     chunks.push({
       id: `evidence-${source.id}-${lineStart}-${stableHash(`${source.contentHash}:${lineStart}:${lineEnd}`, 10)}`,
       sourceId: source.id,
+      sourceKind: 'workspace-file',
+      basis: 'code-fact',
       path: source.path,
       lineStart,
       lineEnd,

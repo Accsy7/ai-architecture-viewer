@@ -11,12 +11,11 @@ import {
   useReactFlow,
 } from '@xyflow/react';
 import {
-  acceptAnalysisProposal,
-  generateAnalysisProposals,
   getAnalysis,
   getDiagramCatalog,
   getDocuments,
   getLane,
+  getRegisteredFlows,
   getRevision,
   getRevisionDiff,
   getRevisions,
@@ -26,10 +25,9 @@ import {
   previewDocument,
   publishDraft,
   putDraft,
-  putAnalysisSources,
   putViewerLayout,
-  rejectAnalysisProposal,
-  scanAnalysisSources,
+  refreshDraftDocuments,
+  reviewImplementationRun,
 } from './api.js';
 import {
   canonicalGraphToFlow,
@@ -40,7 +38,9 @@ import {
 import { resolveEdgePorts } from './routing.mjs';
 import { enrichNodesWithDocuments } from './document-model.js';
 import ArchitectureNode, { CanvasEditContext } from './components/ArchitectureNode.jsx';
+import BusinessFlowPanel from './components/BusinessFlowPanel.jsx';
 import AnalysisWorkbench from './components/AnalysisWorkbench.jsx';
+import PendingChangesLayer, { PendingChangesInspector } from './components/PendingChangesLayer.jsx';
 import GroupRegionNode from './components/GroupRegionNode.jsx';
 import DocumentLibrary from './components/DocumentLibrary.jsx';
 import {
@@ -52,6 +52,27 @@ import RevisionPanel from './components/RevisionPanel.jsx';
 import ProposalReviewDialog from './components/ProposalReviewDialog.jsx';
 import SmartArchitectureEdge from './components/SmartArchitectureEdge.jsx';
 import ViewerDetailPanel from './components/ViewerDetailPanel.jsx';
+import { I18nProvider, LanguageSwitch, useI18n } from './i18n.jsx';
+import { resolveLocalizedConfigText } from './localized-config.mjs';
+import { buildDraftChangeProjection, decorateFlowWithDraftChanges } from './pending-changes.mjs';
+import { buildReviewRecords } from './review-records.mjs';
+import {
+  buildGroupRegionNodes,
+  expandGeometryToContainNode,
+  finiteNumber,
+  groupGeometry,
+  REGION_MIN_HEIGHT,
+  REGION_MIN_WIDTH,
+  REGION_NODE_PREFIX,
+  sameGeometry,
+} from './group-regions.mjs';
+import {
+  availableFlowsForFocus,
+  flowCanvasProjection,
+  oneHopProjection,
+  projectionNodeForSource,
+  sourceNodeForProjection,
+} from './registered-flows.mjs';
 
 const nodeTypes = { architectureNode: ArchitectureNode, groupRegion: GroupRegionNode };
 const edgeTypes = { architectureEdge: SmartArchitectureEdge };
@@ -62,10 +83,14 @@ const clampInspectorWidth = (value) => Math.max(280, Math.min(640, Number(value)
 const DEFAULT_CONFIG = {
   projectId: 'project',
   projectName: 'Project',
-  viewerName: 'AI 架构查看器',
-  eyebrow: 'PROJECT ARCHITECTURE',
-  scopeNote: '用于理解、核对与讨论项目架构。',
+  viewerName: { zh: 'AI 架构查看器', en: 'AI Architecture Viewer' },
+  eyebrow: { zh: '项目架构', en: 'PROJECT ARCHITECTURE' },
+  scopeNote: {
+    zh: '用于理解、核对与讨论项目架构。',
+    en: 'For understanding, verifying, and discussing project architecture.',
+  },
   defaultFocusNodeId: null,
+  defaultLanguage: null,
   views: {
     current: { label: '当前架构', description: '查看当前结构与待确认修订' },
     target: { label: '目标架构', description: '查看规划中的目标结构' },
@@ -77,7 +102,9 @@ const DEFAULT_CONFIG = {
     { key: 'technical', label: '技术成熟度', tone: 'technical' },
     { key: 'product', label: '产品与视觉验收', tone: 'product' },
     { key: 'authorization', label: '授权边界', tone: 'authorization' },
-    { key: 'aiCollaboration', label: 'AI 协作方式', tone: 'ai', optional: true },
+    { key: 'aiCollaboration', label: '智能体协作方式', tone: 'ai', optional: true },
+    { key: 'interactionModes', label: '交互方式', format: 'tags', optional: true },
+    { key: 'architectureLayer', label: '架构层级', optional: true },
     { key: 'buildStrategy', label: '建设方式' },
     { key: 'horizon', label: '目标周期' },
   ],
@@ -92,18 +119,27 @@ const EMPTY_REGISTRY = {
 };
 
 const EMPTY_ANALYSIS = {
-  schemaVersion: '1.0.0',
+  schemaVersion: '2.5.0',
   baseRevision: 0,
   lastUpdated: null,
   sources: [],
   evidence: [],
   proposals: [],
-  provider: { provider: 'deepseek', configured: false, model: null },
+  runs: [],
+  artifacts: [],
+  integration: {
+    mode: 'external-agent',
+    modelProviderRequired: false,
+    agentCanApprove: false,
+    agentCanPublish: false,
+    mcpCommand: 'npm run mcp',
+    cliCommand: 'npm run agent --',
+  },
 };
 
 const EMPTY_SKILL_CATALOG = {
   schemaVersion: '1.0.0',
-  protocolVersion: '1.0.0',
+  protocolVersion: '1.3.0',
   skills: [],
 };
 
@@ -120,48 +156,6 @@ const EMPTY_DIAGRAM_CATALOG = {
   defaultDiagramId: null,
   diagrams: [],
 };
-
-const REGION_NODE_PREFIX = 'group-region-';
-const REGION_MIN_WIDTH = 300;
-const REGION_MIN_HEIGHT = 210;
-const REGION_CARD_PADDING = 28;
-const REGION_HEADER_CLEARANCE = 92;
-
-const finiteNumber = (value, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback;
-const nodeWidth = (node) => finiteNumber(node?.measured?.width, finiteNumber(node?.width, finiteNumber(node?.style?.width, 260)));
-const nodeHeight = (node) => finiteNumber(node?.measured?.height, finiteNumber(node?.height, finiteNumber(node?.style?.height, 150)));
-const regionNodeId = (groupId) => `${REGION_NODE_PREFIX}${groupId}`;
-
-function groupGeometry(group, layout, preview = {}) {
-  const stored = preview[group.id] || layout?.containers?.[group.id] || {};
-  return {
-    x: finiteNumber(stored.x, finiteNumber(group.position?.x, 0)),
-    y: finiteNumber(stored.y, finiteNumber(group.position?.y, 0)),
-    width: Math.max(REGION_MIN_WIDTH, finiteNumber(stored.width, finiteNumber(group.width, 340))),
-    height: Math.max(REGION_MIN_HEIGHT, finiteNumber(stored.height, finiteNumber(group.height, 520))),
-  };
-}
-
-function expandGeometryToContainNode(geometry, node) {
-  const left = finiteNumber(node.position?.x);
-  const top = finiteNumber(node.position?.y);
-  const right = left + nodeWidth(node);
-  const bottom = top + nodeHeight(node);
-  const nextLeft = Math.min(geometry.x, left - REGION_CARD_PADDING);
-  const nextTop = Math.min(geometry.y, top - REGION_HEADER_CLEARANCE);
-  const nextRight = Math.max(geometry.x + geometry.width, right + REGION_CARD_PADDING);
-  const nextBottom = Math.max(geometry.y + geometry.height, bottom + REGION_CARD_PADDING);
-  return {
-    x: nextLeft,
-    y: nextTop,
-    width: Math.max(REGION_MIN_WIDTH, nextRight - nextLeft),
-    height: Math.max(REGION_MIN_HEIGHT, nextBottom - nextTop),
-  };
-}
-
-function sameGeometry(left, right) {
-  return ['x', 'y', 'width', 'height'].every((key) => Math.abs(finiteNumber(left?.[key]) - finiteNumber(right?.[key])) < 0.01);
-}
 
 const laneSignature = (lane) => [
   lane?.meta?.lastUpdated,
@@ -217,7 +211,7 @@ function buildGenericCompareGraph(currentGraph, targetGraph) {
       ...node,
       data: {
         ...node.data,
-        compareStatus: !exists ? '目标新增' : changed ? '当前已有，目标职责或状态将调整' : '当前已有，目标延续',
+        compareStatus: !exists ? 'target-new' : changed ? 'target-changed' : 'target-continued',
         compareClass: !exists ? 'compare-new' : changed ? 'compare-changed' : 'compare-current',
       },
     };
@@ -226,7 +220,7 @@ function buildGenericCompareGraph(currentGraph, targetGraph) {
     if (targetNodes.has(node.id)) continue;
     nodes.push({
       ...node,
-      data: { ...node.data, compareStatus: '仅当前架构', compareClass: 'compare-only' },
+      data: { ...node.data, compareStatus: 'current-only', compareClass: 'compare-only' },
     });
   }
   return { nodes, edges: targetGraph?.edges || [] };
@@ -286,6 +280,7 @@ function resolveNavigationLocation(diagrams = [], selectedDiagram = null) {
 
 function Viewer() {
   const { fitView } = useReactFlow();
+  const { language, t, applyProjectDefault, translateError } = useI18n();
   const [config, setConfig] = useState(DEFAULT_CONFIG);
   const [diagramCatalog, setDiagramCatalog] = useState(EMPTY_DIAGRAM_CATALOG);
   const [diagramId, setDiagramId] = useState(null);
@@ -299,6 +294,11 @@ function Viewer() {
   const [selectedEdgeId, setSelectedEdgeId] = useState(null);
   const [selectedRegionId, setSelectedRegionId] = useState(null);
   const [focusSelection, setFocusSelection] = useState(false);
+  const [registeredFlows, setRegisteredFlows] = useState([]);
+  const [relationshipFocusNodeId, setRelationshipFocusNodeId] = useState(null);
+  const [activeFlowId, setActiveFlowId] = useState(null);
+  const [flowOriginNodeId, setFlowOriginNodeId] = useState(null);
+  const [selectedFlowSourceNodeId, setSelectedFlowSourceNodeId] = useState(null);
   const [regionPreview, setRegionPreview] = useState({});
   const [loading, setLoading] = useState(true);
   const [toastMessage, setToastMessage] = useState('');
@@ -307,7 +307,8 @@ function Viewer() {
   const [skillCatalog, setSkillCatalog] = useState(EMPTY_SKILL_CATALOG);
   const [analysisLoading, setAnalysisLoading] = useState(false);
   const [analysisWorkbenchOpen, setAnalysisWorkbenchOpen] = useState(false);
-  const [analysisTab, setAnalysisTab] = useState('sources');
+  const [analysisTab, setAnalysisTab] = useState('runs');
+  const [pendingLayerOpen, setPendingLayerOpen] = useState(false);
   const [reviewProposalId, setReviewProposalId] = useState(null);
   const [analysisActionBusy, setAnalysisActionBusy] = useState(false);
   const [documentLoading, setDocumentLoading] = useState(false);
@@ -346,6 +347,7 @@ function Viewer() {
   const analysisRef = useRef(EMPTY_ANALYSIS);
   const historicalRef = useRef(null);
   const bundleSignatureRef = useRef('');
+  const initializationStartedRef = useRef(false);
   const fitAfterLoadRef = useRef(false);
   const navigationFocusRef = useRef(null);
   const draggingRef = useRef(false);
@@ -399,11 +401,19 @@ function Viewer() {
     setSelectedEdgeId(null);
     setSelectedRegionId(null);
     setFocusSelection(false);
+    setRelationshipFocusNodeId(null);
+    setActiveFlowId(null);
+    setFlowOriginNodeId(null);
+    setSelectedFlowSourceNodeId(null);
     if (shouldFit) fitAfterLoadRef.current = true;
   }, [replaceEdges, replaceNodes]);
 
   const fetchViewBundle = useCallback(async (nextView, nextDiagramId = diagramRef.current) => {
-    if (!nextDiagramId) throw new Error('尚未选择架构图');
+    if (!nextDiagramId) {
+      const error = new Error('No architecture diagram selected.');
+      error.code = 'ARCHITECTURE_DIAGRAM_NOT_SELECTED';
+      throw error;
+    }
     if (nextView === 'compare') {
       const [current, target, currentLayout, targetLayout] = await Promise.all([
         getLane('current', nextDiagramId),
@@ -418,7 +428,7 @@ function Viewer() {
         meta: current.meta,
         view: 'compare',
         published: {
-          revision: `C${current.published.revision} / T${target.draft ? '草案' : target.published.revision}`,
+          revision: `C${current.published.revision} / T${target.draft ? t('common.draft') : target.published.revision}`,
           revisionId: `compare:${current.published.revisionId}:${target.draft?.draftId || target.published.revisionId}`,
           graph: buildGenericCompareGraph(currentGraph, targetGraph),
         },
@@ -444,7 +454,7 @@ function Viewer() {
       layouts: { [nextView]: nextLayout },
       signature: [nextDiagramId, laneSignature(nextLane), layoutSignature(nextLayout)].join('::'),
     };
-  }, []);
+  }, [t]);
 
   const syncBundle = useCallback((bundle, nextView, shouldFit = true) => {
     historicalRef.current = null;
@@ -470,11 +480,11 @@ function Viewer() {
       setRevisionPanelOpen(false);
       syncBundle(bundle, nextView, !quiet);
     } catch (error) {
-      showToast(error.message);
+      showToast(translateError(error));
     } finally {
       if (!quiet) setLoading(false);
     }
-  }, [fetchViewBundle, showToast, syncBundle]);
+  }, [fetchViewBundle, showToast, syncBundle, translateError]);
 
   const refreshDocuments = useCallback(async (quiet = false) => {
     if (!quiet) setDocumentLoading(true);
@@ -486,12 +496,12 @@ function Viewer() {
       replaceNodes(enrichNodesWithDocuments(nodesRef.current, normalized.documents));
       return normalized;
     } catch (error) {
-      if (!quiet) showToast(error.message);
+      if (!quiet) showToast(translateError(error));
       return registryRef.current;
     } finally {
       if (!quiet) setDocumentLoading(false);
     }
-  }, [replaceNodes, showToast]);
+  }, [replaceNodes, showToast, translateError]);
 
   const replaceAnalysis = useCallback((next) => {
     const normalized = {
@@ -500,7 +510,9 @@ function Viewer() {
       sources: next?.sources || [],
       evidence: next?.evidence || [],
       proposals: next?.proposals || [],
-      provider: { ...EMPTY_ANALYSIS.provider, ...(next?.provider || {}) },
+      runs: next?.runs || [],
+      artifacts: next?.artifacts || [],
+      integration: { ...EMPTY_ANALYSIS.integration, ...(next?.integration || {}) },
     };
     analysisRef.current = normalized;
     setAnalysis(normalized);
@@ -512,12 +524,12 @@ function Viewer() {
     try {
       return replaceAnalysis(await getAnalysis());
     } catch (error) {
-      if (!quiet) showToast(error.message);
+      if (!quiet) showToast(translateError(error));
       return analysisRef.current;
     } finally {
       if (!quiet) setAnalysisLoading(false);
     }
-  }, [replaceAnalysis, showToast]);
+  }, [replaceAnalysis, showToast, translateError]);
 
   const refreshSkills = useCallback(async (quiet = false) => {
     try {
@@ -526,12 +538,14 @@ function Viewer() {
       setSkillCatalog(normalized);
       return normalized;
     } catch (error) {
-      if (!quiet) showToast(error.message);
+      if (!quiet) showToast(translateError(error));
       return EMPTY_SKILL_CATALOG;
     }
-  }, [showToast]);
+  }, [showToast, translateError]);
 
   useEffect(() => {
+    if (initializationStartedRef.current) return;
+    initializationStartedRef.current = true;
     Promise.all([getViewerConfig(), getDiagramCatalog()]).then(([nextConfig, nextCatalog]) => {
       const normalizedConfig = {
         ...DEFAULT_CONFIG,
@@ -544,9 +558,12 @@ function Viewer() {
         diagrams: nextCatalog.diagrams || [],
       };
       if (!normalizedCatalog.defaultDiagramId || !normalizedCatalog.diagrams.length) {
-        throw new Error('项目尚未配置可查看的架构图');
+        const error = new Error('The project has no configured architecture diagram.');
+        error.code = 'ARCHITECTURE_CATALOG_EMPTY';
+        throw error;
       }
       configRef.current = normalizedConfig;
+      applyProjectDefault(normalizedConfig.defaultLanguage);
       diagramCatalogRef.current = normalizedCatalog;
       diagramRef.current = normalizedCatalog.defaultDiagramId;
       setConfig(normalizedConfig);
@@ -555,13 +572,46 @@ function Viewer() {
       setCatalogReady(true);
     }).catch((error) => {
       setLoading(false);
-      showToast(error.message);
+      showToast(translateError(error));
     });
-  }, [showToast]);
+  }, [applyProjectDefault, showToast, translateError]);
 
   useEffect(() => {
-    if (catalogReady) loadView('current', false, diagramRef.current);
+    if (catalogReady && !bundleSignatureRef.current) loadView('current', false, diagramRef.current);
   }, [catalogReady, loadView]);
+  useEffect(() => {
+    if (catalogReady && bundleSignatureRef.current && viewRef.current === 'compare') {
+      loadView('compare', true, diagramRef.current);
+    }
+  }, [catalogReady, loadView]);
+  useEffect(() => {
+    let cancelled = false;
+    if (!catalogReady || !diagramId || !['current', 'target'].includes(view)) {
+      setRegisteredFlows([]);
+      return () => { cancelled = true; };
+    }
+    getRegisteredFlows(view, diagramId).then((response) => {
+      if (cancelled) return;
+      setRegisteredFlows(Array.isArray(response.flows) ? response.flows : []);
+    }).catch((error) => {
+      if (cancelled) return;
+      setRegisteredFlows([]);
+      setActiveFlowId(null);
+      setFlowOriginNodeId(null);
+      setSelectedFlowSourceNodeId(null);
+      showToast(translateError(error));
+    });
+    return () => { cancelled = true; };
+  }, [
+    catalogReady,
+    diagramId,
+    lane?.draft?.draftId,
+    lane?.draft?.draftRevision,
+    lane?.published?.revisionId,
+    showToast,
+    translateError,
+    view,
+  ]);
   useEffect(() => { refreshDocuments(); }, [refreshDocuments]);
   useEffect(() => { refreshAnalysis(); }, [refreshAnalysis]);
   useEffect(() => { refreshSkills(true); }, [refreshSkills]);
@@ -580,14 +630,14 @@ function Viewer() {
         const bundle = await fetchViewBundle(viewRef.current);
         if (bundle.signature !== bundleSignatureRef.current) {
           syncBundle(bundle, viewRef.current, false);
-          showToast('本地架构与排版已同步');
+          showToast(t('shell.localStateSynced'));
         }
       } catch {
         // 保持上一次可读状态，下一轮继续尝试本地同步。
       }
     }, 2000);
     return () => window.clearInterval(timer);
-  }, [fetchViewBundle, showToast, syncBundle]);
+  }, [fetchViewBundle, showToast, syncBundle, t]);
 
   useEffect(() => {
     const timer = window.setInterval(async () => {
@@ -683,7 +733,7 @@ function Viewer() {
     replaceNodes(applyNodeChanges(allowed, nodesRef.current));
   }, [replaceNodes]);
 
-  const saveLayoutChanges = useCallback(async ({ positions = {}, containers, message = '排版已保存；架构内容没有改变' }) => {
+  const saveLayoutChanges = useCallback(async ({ positions = {}, containers, message = null }) => {
     const activeView = viewRef.current;
     const activeDiagram = diagramRef.current;
     if (!['current', 'target'].includes(activeView) || historicalRef.current) return;
@@ -706,14 +756,14 @@ function Viewer() {
         });
       }
       bundleSignatureRef.current = [activeDiagram, laneSignature(laneRef.current), layoutSignature(saved)].join('::');
-      showToast(message);
+      showToast(message || t('shell.layoutSaved'));
       return saved;
     } catch (error) {
-      showToast(error.message);
+      showToast(translateError(error));
       await loadView(activeView, true, activeDiagram);
       return null;
     }
-  }, [loadView, replaceRegionPreview, showToast, updateLayouts]);
+  }, [loadView, replaceRegionPreview, showToast, t, translateError, updateLayouts]);
 
   const saveNodePosition = useCallback(async (node) => {
     const activeView = viewRef.current;
@@ -758,16 +808,16 @@ function Viewer() {
     try {
       await saveLayoutChanges({
         containers: { [groupId]: normalized },
-        message: '分组区域大小已保存；卡片归属没有改变',
+        message: t('shell.groupSizeSaved'),
       });
     } finally {
       draggingRef.current = false;
     }
-  }, [previewRegionResize, saveLayoutChanges]);
+  }, [previewRegionResize, saveLayoutChanges, t]);
 
   const openRevisionPanel = useCallback(async () => {
     if (viewRef.current === 'compare') {
-      showToast('请先选择当前架构或目标架构，再查看对应版本历史');
+      showToast(t('shell.selectLaneForHistory'));
       return;
     }
     setRevisionPanelOpen(true);
@@ -776,11 +826,16 @@ function Viewer() {
       const catalog = await getRevisions(viewRef.current, diagramRef.current);
       setRevisionCatalog({ headRevisionId: catalog.headRevisionId, revisions: catalog.revisions || [] });
     } catch (error) {
-      showToast(error.message);
+      showToast(translateError(error));
     } finally {
       setRevisionLoading(false);
     }
-  }, [showToast]);
+  }, [showToast, t, translateError]);
+
+  const openRevisionPanelFromWorkbench = useCallback(async () => {
+    setAnalysisWorkbenchOpen(false);
+    await openRevisionPanel();
+  }, [openRevisionPanel]);
 
   const inspectRevision = useCallback(async (summary) => {
     setRevisionLoading(true);
@@ -796,13 +851,13 @@ function Viewer() {
       } catch {
         setRevisionDiff({ summary: diffSummary(revision.graph, laneRef.current.published.graph) });
       }
-      showToast(`正在查看 R${revision.revision}；正式架构没有改变`);
+      showToast(t('shell.inspectingRevision', { revision: revision.revision }));
     } catch (error) {
-      showToast(error.message);
+      showToast(translateError(error));
     } finally {
       setRevisionLoading(false);
     }
-  }, [displayGraph, showToast]);
+  }, [displayGraph, showToast, t, translateError]);
 
   const returnFromHistorical = useCallback(() => loadView(viewRef.current), [loadView]);
 
@@ -819,150 +874,216 @@ function Viewer() {
       setPreview({ ...payload, title: document.title, path: payload.path || document.path });
     } catch (error) {
       setPreview(null);
-      showToast(error.message);
+      showToast(translateError(error));
     } finally {
       setPreviewLoading(false);
     }
-  }, [showToast]);
+  }, [showToast, translateError]);
 
   const openAnalysisWorkbench = useCallback(async () => {
     if (historicalRef.current || viewRef.current === 'compare') {
-      showToast('请先回到当前架构或目标架构，再进行 AI 分析');
+      showToast(t('shell.workbenchUnavailable'));
       return;
     }
     setAnalysisWorkbenchOpen(true);
-    await Promise.all([refreshAnalysis(), refreshSkills(true)]);
-  }, [refreshAnalysis, refreshSkills, showToast]);
+    const [, , catalog] = await Promise.all([
+      refreshAnalysis(),
+      refreshSkills(true),
+      getRevisions(viewRef.current, diagramRef.current),
+    ]);
+    setRevisionCatalog({ headRevisionId: catalog.headRevisionId, revisions: catalog.revisions || [] });
+  }, [refreshAnalysis, refreshSkills, showToast, t]);
+
+  const refreshAnalysisWorkbench = useCallback(async () => {
+    const [, catalog] = await Promise.all([
+      refreshAnalysis(),
+      getRevisions(viewRef.current, diagramRef.current),
+    ]);
+    setRevisionCatalog({ headRevisionId: catalog.headRevisionId, revisions: catalog.revisions || [] });
+  }, [refreshAnalysis]);
 
   const copySkillPrompt = useCallback(async (skill) => {
     if (!skill?.defaultPrompt) return;
     try {
       if (!navigator.clipboard?.writeText) throw new Error('Clipboard unavailable');
       await navigator.clipboard.writeText(skill.defaultPrompt);
-      showToast(`已复制“${skill.displayName}”调用提示`);
+      showToast(t('shell.skillPromptCopied', { name: skill.displayName }));
     } catch {
-      showToast(`无法自动复制；请让 Coding AI 读取 ${skill.skillPath}`);
+      showToast(t('shell.skillPromptCopyFailed', { path: skill.skillPath }));
     }
-  }, [showToast]);
+  }, [showToast, t]);
 
-  const toggleAnalysisSource = useCallback(async (source) => {
-    const current = analysisRef.current;
-    if (!source?.path || !current.sources.some((item) => item.path === source.path)) return;
-    setAnalysisLoading(true);
+  const copyAgentConnection = useCallback(async () => {
+    const instructions = (language === 'en' ? [
+      'Connect to this project\'s AI Architecture Viewer MCP service.',
+      `Start command: ${analysisRef.current.integration?.mcpCommand || 'npm run mcp'}`,
+      'Call get_project_context, then create_agent_run.',
+      'Read the compact active draft. Submit one evidence-backed semantic patch per discovery or change-plan run; create a new run for the next patch.',
+      'Current drafts require code-fact evidence. Target drafts may use user-confirmed discussion, registered design documents, code facts, or labelled agent inference.',
+      'The server applies a valid patch only to the exact locked draft. Stale writes are rejected. Never replace the complete project state.',
+      'A draft is not an executable baseline. Only the local user can publish it.',
+      'Implementation complete is only an agent claim; final implementation acceptance stays local and human.',
+    ] : [
+      '请连接本项目的 AI Architecture Viewer MCP 服务。',
+      `启动命令：${analysisRef.current.integration?.mcpCommand || 'npm run mcp'}`,
+      '先调用 get_project_context，再调用 create_agent_run。',
+      '读取精简活动草稿；发现或变更规划运行每次只提交一个有依据的语义补丁，下一次补丁自动创建新运行。',
+      '当前草稿只能引用 code-fact；目标草稿可引用 user-confirmed、design-document、code-fact 或标明的 agent-inference。',
+      '服务端只把验证通过的补丁写入运行锁定的草稿；过期写入会被拒绝，禁止整份状态覆盖。',
+      '草稿不是可执行基线，只有本地用户可以发布。',
+      '实施报告中的 complete 只是智能体声明；最终实施验收仍由本地用户完成。',
+    ]).join('\n');
     try {
-      const nextSources = current.sources
-        .filter((item) => item.status !== 'failed')
-        .map((item) => item.path === source.path ? { ...item, selected: !item.selected } : item);
-      const next = await putAnalysisSources(current.baseRevision, nextSources);
-      replaceAnalysis(next);
-      showToast(source.selected ? '资料已移出本次分析' : '资料已加入本次分析');
-    } catch (error) {
-      showToast(error.message);
-    } finally {
-      setAnalysisLoading(false);
+      if (!navigator.clipboard?.writeText) throw new Error('Clipboard unavailable');
+      await navigator.clipboard.writeText(instructions);
+      showToast(t('shell.connectionCopied'));
+    } catch {
+      showToast(t('shell.connectionCopyFailed'));
     }
-  }, [replaceAnalysis, showToast]);
-
-  const generateAnalysis = useCallback(async () => {
-    const activeView = viewRef.current;
-    const activeDiagram = diagramRef.current;
-    const activeLane = laneRef.current;
-    if (!['current', 'target'].includes(activeView) || historicalRef.current) {
-      showToast('请先回到可编辑的当前或目标架构');
-      return;
-    }
-    if (activeLane?.draft) {
-      showToast('请先发布或丢弃当前草案，再生成新的 AI 提案');
-      return;
-    }
-    if (!analysisRef.current.sources.some((source) => source.selected)) {
-      setAnalysisTab('sources');
-      showToast('请先在资料来源中选择至少一份文件');
-      return;
-    }
-    setAnalysisActionBusy(true);
-    setAnalysisLoading(true);
-    try {
-      const scanned = await scanAnalysisSources(analysisRef.current.baseRevision);
-      replaceAnalysis(scanned);
-      const generated = await generateAnalysisProposals(activeView, scanned.baseRevision, activeDiagram);
-      replaceAnalysis(generated);
-      setAnalysisTab('proposals');
-      const generatedCount = Number(generated.generation?.proposalCount || 0);
-      showToast(generatedCount
-        ? `已生成 ${generatedCount} 项待审阅提案`
-        : '分析完成；未发现有证据支持的架构变更');
-    } catch (error) {
-      showToast(error.message);
-    } finally {
-      setAnalysisActionBusy(false);
-      setAnalysisLoading(false);
-    }
-  }, [replaceAnalysis, showToast]);
+  }, [language, showToast, t]);
 
   const openProposalReview = useCallback((proposal) => {
     if (!proposal?.id) return;
     setReviewProposalId(proposal.id);
   }, []);
 
-  const acceptProposal = useCallback(async (proposal) => {
-    if (!proposal?.id) return;
+  const reviewImplementation = useCallback(async (run, decision, note) => {
+    if (!run?.id) return;
     setAnalysisActionBusy(true);
     try {
-      const result = await acceptAnalysisProposal(proposal.id, analysisRef.current.baseRevision);
-      replaceAnalysis(result.analysis);
-      setReviewProposalId(null);
-      if (proposal.view === viewRef.current && proposal.diagramId === diagramRef.current && !historicalRef.current) {
-        await loadView(viewRef.current, false, diagramRef.current);
-      }
-      showToast('提案已写入草案；正式架构尚未改变');
-    } catch (error) {
-      showToast(error.message);
-      throw error;
-    } finally {
-      setAnalysisActionBusy(false);
-    }
-  }, [loadView, replaceAnalysis, showToast]);
-
-  const rejectProposal = useCallback(async (proposal) => {
-    if (!proposal?.id) return;
-    setAnalysisActionBusy(true);
-    try {
-      const next = await rejectAnalysisProposal(proposal.id, analysisRef.current.baseRevision);
+      const next = await reviewImplementationRun(
+        run.id,
+        analysisRef.current.baseRevision,
+        decision,
+        note,
+      );
       replaceAnalysis(next);
-      setReviewProposalId(null);
-      showToast('提案已拒绝，正式架构没有改变');
+      showToast(t(`shell.implementationReview.${decision}`, {}, t('shell.implementationReview.recorded')));
     } catch (error) {
-      showToast(error.message);
-      throw error;
+      showToast(translateError(error));
     } finally {
       setAnalysisActionBusy(false);
     }
-  }, [replaceAnalysis, showToast]);
+  }, [replaceAnalysis, showToast, t, translateError]);
 
   const openEvidenceExcerpt = useCallback((evidence) => {
     if (!evidence) return;
+    const isDiscussion = evidence.sourceKind === 'discussion';
+    const isProjectDocument = evidence.sourceKind === 'project-document';
     const range = evidence.lineEnd && evidence.lineEnd !== evidence.lineStart
       ? `${evidence.lineStart}–${evidence.lineEnd}`
       : evidence.lineStart;
     setPreview({
-      title: '资料证据摘录',
-      path: `${evidence.path}:${range}`,
+      title: isDiscussion ? t('shell.evidence.discussion') : isProjectDocument ? t('shell.evidence.projectDocument') : t('shell.evidence.material'),
+      path: isDiscussion
+        ? (evidence.sourceLabel || t('shell.evidence.discussionSource'))
+        : isProjectDocument
+          ? `document:${evidence.documentId}${evidence.section ? `#${evidence.section}` : ''}`
+          : `${evidence.path}:${range}`,
       content: evidence.excerpt || '',
     });
     setPreviewLoading(false);
-  }, []);
+  }, [t]);
 
-  const selectedNode = nodes.find((node) => node.id === selectedNodeId) || null;
-  const selectedEdge = edges.find((edge) => edge.id === selectedEdgeId) || null;
   const readOnlyHistorical = Boolean(historicalRevision);
   const draggable = !readOnlyHistorical && view !== 'compare';
+  const draftProjection = useMemo(() => buildDraftChangeProjection({
+    publishedGraph: !readOnlyHistorical && view !== 'compare' ? lane?.published?.graph : null,
+    publishedContract: !readOnlyHistorical && view === 'target' ? lane?.published?.developmentContract : null,
+    draft: !readOnlyHistorical && view !== 'compare' ? lane?.draft : null,
+    proposals: analysis.proposals,
+    evidence: analysis.evidence,
+    diagramId,
+    view,
+  }), [analysis.evidence, analysis.proposals, diagramId, lane?.draft, lane?.published?.developmentContract, lane?.published?.graph, readOnlyHistorical, view]);
+  useEffect(() => {
+    if (!draftProjection.totalCount) setPendingLayerOpen(false);
+  }, [draftProjection.totalCount]);
+  const togglePendingChanges = useCallback(() => {
+    if (pendingLayerOpen) {
+      setPendingLayerOpen(false);
+      return;
+    }
+    setInspectorCollapsed(false);
+    setPendingLayerOpen(true);
+  }, [pendingLayerOpen]);
+  const canvasElements = useMemo(() => {
+    if (!draftProjection.totalCount || readOnlyHistorical || view === 'compare') return { nodes, edges };
+    const activeLayout = layouts[view] || EMPTY_LAYOUT;
+    const publishedFlow = canonicalGraphToFlow(applyPositions(lane.published.graph, activeLayout.positions));
+    const publishedNodes = enrichNodesWithDocuments(publishedFlow.nodes, registry.documents || []);
+    return decorateFlowWithDraftChanges(
+      nodes,
+      edges,
+      publishedNodes,
+      publishedFlow.edges,
+      draftProjection.items,
+    );
+  }, [draftProjection, edges, lane?.published?.graph, layouts, nodes, readOnlyHistorical, registry.documents, view]);
+  const canvasNodes = canvasElements.nodes;
+  const canvasEdges = canvasElements.edges;
+  const selectedNode = canvasNodes.find((node) => node.id === selectedNodeId) || null;
+  const selectedEdge = canvasEdges.find((edge) => edge.id === selectedEdgeId) || null;
+  const activeFlow = registeredFlows.find((flow) => flow.id === activeFlowId) || null;
+  const relationshipProjection = useMemo(
+    () => oneHopProjection(canvasNodes, canvasEdges, relationshipFocusNodeId),
+    [canvasEdges, canvasNodes, relationshipFocusNodeId],
+  );
+  const activeFlowProjection = useMemo(
+    () => flowCanvasProjection(activeFlow),
+    [activeFlow],
+  );
+  const availableFocusedFlows = useMemo(
+    () => availableFlowsForFocus(registeredFlows, relationshipFocusNodeId),
+    [registeredFlows, relationshipFocusNodeId],
+  );
+  const flowOriginNode = canvasNodes.find((node) => node.id === flowOriginNodeId) || null;
+
+  const startRegisteredFlow = useCallback((flowId) => {
+    const flow = registeredFlows.find((entry) => entry.id === flowId);
+    const originId = relationshipFocusNodeId;
+    const originStep = sourceNodeForProjection(flow, originId);
+    if (!flow || !originId || !originStep) return;
+    setActiveFlowId(flow.id);
+    setFlowOriginNodeId(originId);
+    setSelectedFlowSourceNodeId(originStep.sourceNodeId);
+    setSelectedNodeId(originId);
+    setSelectedEdgeId(null);
+    setSelectedRegionId(null);
+    setFocusSelection(true);
+    setPendingLayerOpen(false);
+    setInspectorCollapsed(false);
+  }, [registeredFlows, relationshipFocusNodeId]);
+
+  const selectFlowStep = useCallback((sourceNodeId) => {
+    if (!activeFlow?.nodes.some((node) => node.sourceNodeId === sourceNodeId)) return;
+    setSelectedFlowSourceNodeId(sourceNodeId);
+    const projectionNodeId = projectionNodeForSource(activeFlow, sourceNodeId);
+    if (!projectionNodeId) return;
+    setSelectedNodeId(projectionNodeId);
+    setSelectedEdgeId(null);
+    setSelectedRegionId(null);
+  }, [activeFlow]);
+
+  const exitRegisteredFlow = useCallback(() => {
+    const originId = flowOriginNodeId && canvasNodes.some((node) => node.id === flowOriginNodeId)
+      ? flowOriginNodeId
+      : null;
+    setActiveFlowId(null);
+    setFlowOriginNodeId(null);
+    setSelectedFlowSourceNodeId(null);
+    setSelectedRegionId(null);
+    setSelectedEdgeId(null);
+    setSelectedNodeId(originId);
+    setRelationshipFocusNodeId(originId);
+    setFocusSelection(Boolean(originId));
+  }, [canvasNodes, flowOriginNodeId]);
 
   const displayEdges = useMemo(() => {
-    const routedEdges = edges.map((edge) => {
+    const routedEdges = canvasEdges.map((edge) => {
       const autoEdge = { ...edge, data: { ...edge.data, routingMode: 'auto' } };
       const styled = styleFlowEdge(autoEdge);
-      const ports = resolveEdgePorts(nodes, autoEdge);
+      const ports = resolveEdgePorts(canvasNodes, autoEdge);
       return { edge, styled, ports };
     });
     const sourceBundles = new Map();
@@ -976,10 +1097,31 @@ function Viewer() {
     return routedEdges.map(({ edge, styled, ports }, edgeIndex) => {
       const related = edge.id === selectedEdgeId
         || (selectedNodeId && (edge.source === selectedNodeId || edge.target === selectedNodeId));
-      const emphasized = focusSelection && related;
+      const relationshipEdge = relationshipProjection.edgeIds.has(edge.id);
+      const registeredFlowEdge = activeFlowProjection.edgeIds.has(edge.id);
+      const emphasized = activeFlow
+        ? registeredFlowEdge
+        : relationshipFocusNodeId
+          ? relationshipEdge
+          : focusSelection && related;
+      const muted = activeFlow
+        ? !registeredFlowEdge
+        : relationshipFocusNodeId
+          ? !relationshipEdge
+          : false;
       const sourceBundleCount = sourceBundles.get(`${edge.source}:${ports.sourcePort}`) || 1;
       const targetBundleCount = targetBundles.get(`${edge.target}:${ports.targetPort}`) || 1;
-      const className = [styled.className, emphasized ? 'is-emphasized' : '']
+      const draftClass = edge.data?.__draftRemoval
+        ? 'is-pending-removal'
+        : edge.data?.__draftAddition
+          ? 'is-pending-addition'
+          : edge.data?.__draftChanges?.length ? 'is-pending-change' : '';
+      const className = [
+        styled.className,
+        draftClass,
+        emphasized ? 'is-emphasized' : '',
+        muted ? 'is-muted' : '',
+      ]
         .filter(Boolean)
         .join(' ');
       return {
@@ -997,7 +1139,7 @@ function Viewer() {
         data: {
           ...styled.data,
           routingMode: 'auto',
-          __nodes: nodes,
+          __nodes: canvasNodes,
           __sourcePort: ports.sourcePort,
           __targetPort: ports.targetPort,
           __laneIndex: edgeIndex,
@@ -1007,13 +1149,23 @@ function Viewer() {
         },
       };
     });
-  }, [edges, focusSelection, nodes, selectedEdgeId, selectedNodeId]);
+  }, [
+    activeFlow,
+    activeFlowProjection,
+    canvasEdges,
+    canvasNodes,
+    focusSelection,
+    relationshipFocusNodeId,
+    relationshipProjection,
+    selectedEdgeId,
+    selectedNodeId,
+  ]);
 
   const architectureViews = useMemo(() => ['current', 'target', 'compare'].map((key) => [
     key,
-    config.views[key]?.label || DEFAULT_CONFIG.views[key].label,
-    config.views[key]?.description || DEFAULT_CONFIG.views[key].description,
-  ]), [config.views]);
+    t(`views.${key}.label`, {}, config.views[key]?.label || DEFAULT_CONFIG.views[key].label),
+    t(`views.${key}.description`, {}, config.views[key]?.description || DEFAULT_CONFIG.views[key].description),
+  ]), [config.views, t]);
   const selectedArchitectureView = architectureViews.find(([key]) => key === view) || architectureViews[0];
   const selectedDiagram = diagramCatalog.diagrams.find((entry) => entry.id === diagramId)
     || diagramCatalog.diagrams[0]
@@ -1038,9 +1190,13 @@ function Viewer() {
     if (!nextDiagramId) return;
     if (nextDiagramId === diagramRef.current) {
       if (focusNodeId && nodesRef.current.some((node) => node.id === focusNodeId)) {
+        setActiveFlowId(null);
+        setFlowOriginNodeId(null);
+        setSelectedFlowSourceNodeId(null);
         setSelectedRegionId(null);
         setSelectedEdgeId(null);
         setSelectedNodeId(focusNodeId);
+        setRelationshipFocusNodeId(focusNodeId);
         setFocusSelection(true);
       }
       return;
@@ -1070,32 +1226,28 @@ function Viewer() {
   const activeAnalysisProposals = analysis.proposals.filter((proposal) => (
     proposal.diagramId === diagramId && proposal.view === view
   ));
-  const pendingAnalysisCount = activeAnalysisProposals.filter((proposal) => proposal.status === 'pending').length;
+  const activeAgentRuns = analysis.runs.filter((run) => (
+    run.diagramId === diagramId && run.view === view
+  ));
+  const analysisActivityCount = activeAgentRuns.length;
   const reviewProposal = activeAnalysisProposals.find((proposal) => proposal.id === reviewProposalId) || null;
-  const analysisReviews = activeAnalysisProposals
-    .filter((proposal) => proposal.status !== 'pending')
-    .map((proposal) => ({
-      id: proposal.id,
-      title: proposal.title,
-      summary: proposal.summary,
-      status: proposal.status,
-      reviewedAt: proposal.reviewedAt,
-      acceptedCount: proposal.status === 'accepted' ? proposal.changes.length : 0,
-      rejectedCount: proposal.status === 'rejected' ? proposal.changes.length : 0,
-      proposal,
-    }));
+  const analysisReviews = buildReviewRecords({
+    revisions: revisionCatalog.revisions,
+    runs: activeAgentRuns,
+    proposals: activeAnalysisProposals,
+  });
 
   const displayNodes = useMemo(() => {
     const relatedNodeIds = new Set();
     if (selectedNodeId) {
       relatedNodeIds.add(selectedNodeId);
-      edges.forEach((edge) => {
+      canvasEdges.forEach((edge) => {
         if (edge.source === selectedNodeId) relatedNodeIds.add(edge.target);
         if (edge.target === selectedNodeId) relatedNodeIds.add(edge.source);
       });
     }
     if (selectedEdgeId) {
-      const edge = edges.find((item) => item.id === selectedEdgeId);
+      const edge = canvasEdges.find((item) => item.id === selectedEdgeId);
       if (edge) {
         relatedNodeIds.add(edge.source);
         relatedNodeIds.add(edge.target);
@@ -1104,60 +1256,55 @@ function Viewer() {
     const childOwnerIds = new Set(diagramCatalog.diagrams
       .filter((entry) => entry.parentDiagramId === diagramId && entry.ownerNodeId)
       .map((entry) => entry.ownerNodeId));
-    const semanticNodes = nodes.map((node) => ({
-      ...node,
-      zIndex: 2,
-      data: {
-        ...node.data,
-        __hasChildDiagram: childOwnerIds.has(node.id),
-        __mutedByFocus: false,
-        __relatedByFocus: focusSelection && relatedNodeIds.has(node.id),
-      },
-    }));
+    const selectedFlowProjectionNodeId = activeFlow
+      ? projectionNodeForSource(activeFlow, selectedFlowSourceNodeId)
+      : null;
+    const semanticNodes = canvasNodes.map((node) => {
+      const registeredFlowStep = activeFlowProjection.nodeSteps.get(node.id) || null;
+      const relationshipRelated = relationshipProjection.nodeIds.has(node.id);
+      const muted = activeFlow
+        ? !registeredFlowStep
+        : relationshipFocusNodeId
+          ? !relationshipRelated
+          : false;
+      const related = activeFlow
+        ? Boolean(registeredFlowStep)
+        : relationshipFocusNodeId
+          ? relationshipRelated
+          : focusSelection && relatedNodeIds.has(node.id);
+      return {
+        ...node,
+        zIndex: registeredFlowStep ? 3 : 2,
+        data: {
+          ...node.data,
+          __hasChildDiagram: childOwnerIds.has(node.id),
+          __mutedByFocus: muted,
+          __relatedByFocus: related,
+          __relationshipFocusRoot: !activeFlow && node.id === relationshipFocusNodeId,
+          __flowStep: registeredFlowStep,
+          __flowSelected: node.id === selectedFlowProjectionNodeId,
+        },
+      };
+    });
     const layoutView = view === 'compare' ? 'target' : view;
     const activeLayout = layouts[layoutView] || EMPTY_LAYOUT;
-    const regionNodes = groups.flatMap((group, index) => {
-      const childNodes = semanticNodes.filter((node) => node.data?.group === group.group);
-      if (!childNodes.length) return [];
-      const geometry = groupGeometry(group, activeLayout, regionPreview);
-      const minimumRight = Math.max(...childNodes.map((node) => node.position.x + nodeWidth(node) + REGION_CARD_PADDING));
-      const minimumBottom = Math.max(...childNodes.map((node) => node.position.y + nodeHeight(node) + REGION_CARD_PADDING));
-      const minWidth = Math.max(REGION_MIN_WIDTH, minimumRight - geometry.x);
-      const minHeight = Math.max(REGION_MIN_HEIGHT, minimumBottom - geometry.y);
-      const id = regionNodeId(group.id || String(index));
-      return [{
-        id,
-        type: 'groupRegion',
-        position: { x: geometry.x, y: geometry.y },
-        width: geometry.width,
-        height: geometry.height,
-        style: { width: geometry.width, height: geometry.height },
-        selected: selectedRegionId === id,
-        dragHandle: '.group-region__drag-handle',
-        data: {
-          label: group.label || group.group || `分组 ${index + 1}`,
-          description: group.description || '',
-          color: group.color,
-          accent: group.accent,
-          level: group.level || 'L1',
-          __groupId: group.id,
-          __group: group.group,
-          __resizable: draggable,
-          __minWidth: minWidth,
-          __minHeight: minHeight,
-          __onResize: previewRegionResize,
-          __onResizeEnd: saveRegionResize,
-        },
-        draggable,
-        selectable: true,
-        connectable: false,
-        deletable: false,
-        focusable: true,
-        zIndex: -1,
-      }];
+    const regionNodes = buildGroupRegionNodes({
+      groups,
+      semanticNodes,
+      layout: activeLayout,
+      preview: regionPreview,
+      selectedRegionId,
+      draggable,
+      fallbackLabel: (index) => t('shell.groupFallback', { index: index + 1 }),
+      onResize: previewRegionResize,
+      onResizeEnd: saveRegionResize,
     });
     return [...regionNodes, ...semanticNodes];
   }, [
+    activeFlow,
+    activeFlowProjection,
+    canvasEdges,
+    canvasNodes,
     groups,
     diagramCatalog.diagrams,
     diagramId,
@@ -1168,10 +1315,14 @@ function Viewer() {
     nodes,
     previewRegionResize,
     regionPreview,
+    relationshipFocusNodeId,
+    relationshipProjection,
     saveRegionResize,
     selectedEdgeId,
+    selectedFlowSourceNodeId,
     selectedNodeId,
     selectedRegionId,
+    t,
     view,
   ]);
 
@@ -1254,12 +1405,12 @@ function Viewer() {
       await saveLayoutChanges({
         positions,
         containers: { [interaction.groupId]: geometry },
-        message: '分组区域与内部卡片已整体移动；卡片归属没有改变',
+        message: t('shell.groupMoved'),
       });
     } finally {
       draggingRef.current = false;
     }
-  }, [moveCanvasNode, saveLayoutChanges, saveNodePosition]);
+  }, [moveCanvasNode, saveLayoutChanges, saveNodePosition, t]);
 
   const saveArchitectureCorrection = useCallback(async (correction) => {
     const activeLane = laneRef.current;
@@ -1270,7 +1421,7 @@ function Viewer() {
     const nextGraph = JSON.parse(JSON.stringify(baseGraph));
     const node = nextGraph.nodes.find((entry) => entry.id === correctionNodeId);
     if (!node) {
-      showToast('所选模块已经变化，请刷新后重试');
+      showToast(t('shell.selectedModuleChanged'));
       return;
     }
     node.data = { ...node.data, ...correction };
@@ -1278,12 +1429,12 @@ function Viewer() {
       await putDraft(activeView, activeLane, nextGraph, activeDiagram, { userConfirmedSemanticOverride: true });
       setCorrectionNodeId(null);
       await loadView(activeView, false, activeDiagram);
-      showToast('你的纠正已写入草案，并已标记为人工确认');
+      showToast(t('shell.correctionSaved'));
     } catch (error) {
-      showToast(error.message);
+      showToast(translateError(error));
       throw error;
     }
-  }, [correctionNodeId, loadView, showToast]);
+  }, [correctionNodeId, loadView, showToast, t, translateError]);
 
   const publishCurrentDraft = useCallback(async (message) => {
     const activeLane = laneRef.current;
@@ -1294,22 +1445,45 @@ function Viewer() {
       await publishDraft(activeView, activeLane, message, activeDiagram);
       setPublishDialogOpen(false);
       await loadView(activeView, false, activeDiagram);
-      showToast('修订已发布为新的正式架构版本');
+      showToast(t('shell.published'));
     } catch (error) {
-      showToast(error.message);
+      showToast(translateError(error));
       throw error;
     }
-  }, [loadView, showToast]);
+  }, [loadView, showToast, t, translateError]);
 
-  const modeText = loading || !lane
-    ? '正在加载'
-    : readOnlyHistorical
-      ? `历史 R${historicalRevision.revision} · 只读`
-      : view === 'compare'
-        ? '只读差异对比'
-        : lane.draft
-          ? `AI 待确认${view === 'target' ? '目标' : '当前'}方案 · 正式版 R${lane.published.revision} 未改变`
-          : `${view === 'target' ? '正式目标' : '正式当前'}架构 · R${lane.published.revision}`;
+  const refreshCurrentDraftDocuments = useCallback(async () => {
+    const activeLane = laneRef.current;
+    const activeDiagram = diagramRef.current;
+    if (!activeLane?.draft || viewRef.current !== 'target' || historicalRef.current) return;
+    try {
+      await refreshDraftDocuments(activeLane, activeDiagram);
+      setPublishDialogOpen(false);
+      await loadView('target', false, activeDiagram);
+      showToast(t('publish.documentsRefreshed'));
+    } catch (error) {
+      showToast(translateError(error));
+      throw error;
+    }
+  }, [loadView, showToast, t, translateError]);
+
+  const localizedHeader = useMemo(() => ({
+    eyebrow: resolveLocalizedConfigText(
+      config.eyebrow,
+      language,
+      resolveLocalizedConfigText(DEFAULT_CONFIG.eyebrow, language),
+    ),
+    viewerName: resolveLocalizedConfigText(
+      config.viewerName,
+      language,
+      resolveLocalizedConfigText(DEFAULT_CONFIG.viewerName, language),
+    ),
+    scopeNote: resolveLocalizedConfigText(
+      config.scopeNote,
+      language,
+      resolveLocalizedConfigText(DEFAULT_CONFIG.scopeNote, language),
+    ),
+  }), [config.eyebrow, config.scopeNote, config.viewerName, language]);
 
   const editContext = useMemo(() => ({ editable: false, onResizeEnd: () => {} }), []);
 
@@ -1317,13 +1491,13 @@ function Viewer() {
     <div className="app-shell">
       <header className="topbar">
         <div>
-          <span className="eyebrow">{config.eyebrow}</span>
-          <h1>{config.viewerName}</h1>
-          <p>{config.scopeNote}</p>
+          <span className="eyebrow">{localizedHeader.eyebrow}</span>
+          <h1>{localizedHeader.viewerName}</h1>
+          <p>{localizedHeader.scopeNote}</p>
         </div>
         <div className="top-actions">
-          <span className={`mode-badge ${lane?.draft ? 'is-draft' : ''}`}>{modeText}</span>
-          {readOnlyHistorical && <button type="button" onClick={returnFromHistorical}>返回当前工作视图</button>}
+          <LanguageSwitch />
+          {readOnlyHistorical && <button type="button" onClick={returnFromHistorical}>{t('shell.returnToCurrent')}</button>}
         </div>
       </header>
 
@@ -1352,9 +1526,9 @@ function Viewer() {
                     <span className="architecture-view-name">{selectedArchitectureView[1]}</span>
                     <span className={`architecture-chevron ${architectureSelectorOpen ? 'open' : ''}`} aria-hidden="true">⌄</span>
                   </button>
-                  {readOnlyHistorical && <span className="historical-title-badge">历史 R{historicalRevision.revision} · 只读</span>}
+                  {readOnlyHistorical && <span className="historical-title-badge">{t('shell.mode.history', { revision: historicalRevision.revision })}</span>}
                   {architectureSelectorOpen && (
-                    <div className="architecture-selector-menu" role="menu" aria-label="切换架构状态">
+                    <div className="architecture-selector-menu" role="menu" aria-label={t('shell.switchArchitectureView')}>
                       {architectureViews.map(([key, label, description]) => (
                         <button
                           key={key}
@@ -1390,13 +1564,13 @@ function Viewer() {
                       setLevelSelectorOpen((open) => !open);
                     }}
                   >
-                    <span>{selectedNavigationSection?.label || '观察视角'}</span>
+                    <span>{selectedNavigationSection?.label || t('shell.viewpoint')}</span>
                     {navigationSections.length > 1 && (
                       <span className={`architecture-chevron ${levelSelectorOpen ? 'open' : ''}`} aria-hidden="true">⌄</span>
                     )}
                   </button>
                   {levelSelectorOpen && (
-                    <div className="architecture-selector-menu diagram-level-menu" role="menu" aria-label="选择架构层级">
+                    <div className="architecture-selector-menu diagram-level-menu" role="menu" aria-label={t('shell.selectArchitectureLevel')}>
                       {navigationSections.map((section) => (
                         <button
                           key={section.id}
@@ -1429,13 +1603,13 @@ function Viewer() {
                       setDiagramSelectorOpen((open) => !open);
                     }}
                   >
-                    <span>{selectedNavigationAnchor?.navigation?.label || selectedDiagram?.title || '架构图'}</span>
+                    <span>{selectedNavigationAnchor?.navigation?.label || selectedDiagram?.title || t('shell.architectureDiagram')}</span>
                     {selectedNavigationSection?.diagrams.length > 1 && (
                       <span className={`architecture-chevron ${diagramSelectorOpen ? 'open' : ''}`} aria-hidden="true">⌄</span>
                     )}
                   </button>
                   {diagramSelectorOpen && (
-                    <div className="architecture-selector-menu diagram-selector-menu" role="menu" aria-label="选择当前架构图">
+                    <div className="architecture-selector-menu diagram-selector-menu" role="menu" aria-label={t('shell.selectDiagram')}>
                       {selectedNavigationSection.diagrams.map((diagram) => (
                         <button
                           key={diagram.id}
@@ -1459,53 +1633,59 @@ function Viewer() {
                   </span>
                 ))}
               </div>
-              <div className="graph-heading-actions" aria-label="架构查看工具">
+              <div className="graph-heading-actions" aria-label={t('shell.viewerTools')}>
                 <button
                   className="analysis-entry"
                   type="button"
                   disabled={readOnlyHistorical || view === 'compare'}
                   onClick={openAnalysisWorkbench}
                 >
-                  AI 分析 <span>{pendingAnalysisCount}</span>
+                  {t('shell.agentWorkspace')} <span>{analysisActivityCount}</span>
                 </button>
-                {!readOnlyHistorical && view !== 'compare' && lane?.draft && (
-                  <button className="publish-draft-entry" type="button" onClick={() => setPublishDialogOpen(true)}>
-                    审阅并发布
-                  </button>
-                )}
                 <button type="button" disabled={view === 'compare'} onClick={openRevisionPanel}>
-                  版本历史 <span>{view === 'compare' ? 0 : lane ? (lane.historyCount || 0) + 1 : revisionCatalog.revisions.length}</span>
+                  {t('shell.versionHistory')} <span>{view === 'compare' ? 0 : lane ? (lane.historyCount || 0) + 1 : revisionCatalog.revisions.length}</span>
                 </button>
                 <button className="persistent-document-entry" type="button" onClick={openDocumentLibrary}>
-                  项目文档 <span>{registry.documents.length}</span>
+                  {t('shell.projectDocuments')} <span>{registry.documents.length}</span>
                 </button>
-                <button type="button" onClick={() => setInspectorCollapsed((collapsed) => !collapsed)}>
-                  {inspectorCollapsed ? '展开侧栏' : '收起侧栏'}
+                <button type="button" onClick={() => {
+                  if (!inspectorCollapsed) setPendingLayerOpen(false);
+                  setInspectorCollapsed((collapsed) => !collapsed);
+                }}>
+                  {t(inspectorCollapsed ? 'shell.expandSidebar' : 'shell.collapseSidebar')}
                 </button>
                 <button type="button" onClick={() => setCanvasFullscreen((fullscreen) => !fullscreen)}>
-                  {canvasFullscreen ? '退出全屏' : '全屏画布'}
+                  {t(canvasFullscreen ? 'shell.exitFullscreen' : 'shell.fullscreenCanvas')}
                 </button>
               </div>
             </div>
 
+            <PendingChangesLayer
+              open={pendingLayerOpen}
+              projection={draftProjection}
+              view={view}
+              onToggle={togglePendingChanges}
+              onPublish={!readOnlyHistorical && view !== 'compare' && lane?.draft ? () => setPublishDialogOpen(true) : null}
+            />
+
             {readOnlyHistorical && (
               <div className="notice historical-notice">
-                <span>正在查看 {historicalRevision.revisionId}。历史画布只用于查看和比较。</span>
+                <span>{t('shell.historyNotice', { revisionId: historicalRevision.revisionId })}</span>
                 <div>
-                  <button type="button" onClick={openRevisionPanel}>打开版本历史</button>
-                  <button className="primary" type="button" onClick={returnFromHistorical}>返回当前工作视图</button>
+                  <button type="button" onClick={openRevisionPanel}>{t('shell.openVersionHistory')}</button>
+                  <button className="primary" type="button" onClick={returnFromHistorical}>{t('shell.returnToCurrent')}</button>
                 </div>
               </div>
             )}
             {readOnlyHistorical && revisionDiff && (
-              <div className="historical-diff-bar" aria-label="历史版本与当前正式版差异">
-                <strong>与当前正式版比较</strong>
+              <div className="historical-diff-bar" aria-label={t('shell.historyDiffAria')}>
+                <strong>{t('shell.compareWithFormal')}</strong>
                 {[
-                  ['结构', (revisionDiff.summary || revisionDiff.categories || {}).structural],
-                  ['说明', (revisionDiff.summary || revisionDiff.categories || {}).semantic],
-                  ['布局', (revisionDiff.summary || revisionDiff.categories || {}).layout],
-                  ['文档绑定', (revisionDiff.summary || revisionDiff.categories || {}).document],
-                  ['关系', (revisionDiff.summary || revisionDiff.categories || {}).relationship],
+                  [t('diff.structure'), (revisionDiff.summary || revisionDiff.categories || {}).structural],
+                  [t('diff.semantic'), (revisionDiff.summary || revisionDiff.categories || {}).semantic],
+                  [t('diff.layout'), (revisionDiff.summary || revisionDiff.categories || {}).layout],
+                  [t('diff.documents'), (revisionDiff.summary || revisionDiff.categories || {}).document],
+                  [t('diff.relationships'), (revisionDiff.summary || revisionDiff.categories || {}).relationship],
                 ].map(([label, value]) => <span key={label}>{label} {typeof value === 'number' ? value : 0}</span>)}
               </div>
             )}
@@ -1519,35 +1699,46 @@ function Viewer() {
                   edgeTypes={edgeTypes}
                   onNodesChange={handleNodesChange}
                   onNodeClick={(_, node) => {
+                    if (activeFlow) {
+                      if (node.type === 'groupRegion') return;
+                      const flowNode = sourceNodeForProjection(activeFlow, node.id);
+                      if (flowNode) selectFlowStep(flowNode.sourceNodeId);
+                      return;
+                    }
                     if (node.type === 'groupRegion') {
                       setSelectedRegionId(node.id);
                       setSelectedNodeId(null);
                       setSelectedEdgeId(null);
+                      setRelationshipFocusNodeId(null);
                       setFocusSelection(false);
                       return;
                     }
                     setSelectedRegionId(null);
                     setSelectedEdgeId(null);
                     setSelectedNodeId(node.id);
+                    setRelationshipFocusNodeId(node.id);
                     setFocusSelection(true);
                   }}
                   onNodeDoubleClick={(_, node) => {
-                    if (node.type === 'groupRegion') return;
+                    if (activeFlow || node.type === 'groupRegion') return;
                     const child = diagramCatalog.diagrams.find((entry) => (
                       entry.parentDiagramId === diagramId && entry.ownerNodeId === node.id
                     ));
                     if (child) selectDiagram(child.id);
                   }}
                   onEdgeClick={(_, edge) => {
+                    if (activeFlow) return;
                     setSelectedRegionId(null);
                     setSelectedNodeId(null);
                     setSelectedEdgeId(edge.id);
                     setFocusSelection(true);
                   }}
                   onPaneClick={() => {
+                    if (activeFlow) return;
                     setSelectedRegionId(null);
                     setSelectedNodeId(null);
                     setSelectedEdgeId(null);
+                    setRelationshipFocusNodeId(null);
                     setFocusSelection(false);
                   }}
                   onNodeDragStart={beginCanvasNodeDrag}
@@ -1568,7 +1759,7 @@ function Viewer() {
                   fitView
                   fitViewOptions={{ padding: 0.18 }}
                   proOptions={{ hideAttribution: true }}
-                  aria-label={`${config.projectName} ${selectedDiagram?.title || '架构'}查看画布`}
+                  aria-label={t('shell.canvasAria', { project: config.projectName, diagram: selectedDiagram?.title || t('shell.architectureDiagram') })}
                 >
                   <Background variant={BackgroundVariant.Dots} gap={22} size={1.2} color="#cbd2cb" />
                   <Controls showInteractive={false} />
@@ -1594,7 +1785,7 @@ function Viewer() {
             <div
               className="workspace-resizer"
               role="separator"
-              aria-label="调整右侧面板宽度"
+              aria-label={t('shell.resizeSidebar')}
               aria-orientation="vertical"
               aria-valuemin="280"
               aria-valuemax="640"
@@ -1604,22 +1795,41 @@ function Viewer() {
           )}
 
           {!inspectorCollapsed && (
-            <ViewerDetailPanel
-              selectedNode={selectedNode}
-              selectedEdge={selectedEdge}
-              nodes={nodes}
-              edges={edges}
-              documents={registry.documents}
-              nodeFields={config.nodeFields}
-              onSelectEdge={(id) => { setSelectedNodeId(null); setSelectedEdgeId(id); setFocusSelection(true); }}
-              onPreviewDocument={openDocumentPreview}
-              childDiagram={selectedChildDiagram}
-              relatedDiagram={selectedRelatedDiagram}
-              onOpenChild={selectDiagram}
-              onOpenRelated={selectDiagram}
-              canCorrect={!readOnlyHistorical && view !== 'compare'}
-              onCorrectNode={() => setCorrectionNodeId(selectedNode.id)}
-            />
+            activeFlow ? (
+              <BusinessFlowPanel
+                flow={activeFlow}
+                originNodeName={flowOriginNode?.data?.name || flowOriginNodeId}
+                selectedSourceNodeId={selectedFlowSourceNodeId}
+                onSelectSourceNode={selectFlowStep}
+                onExit={exitRegisteredFlow}
+              />
+            ) : pendingLayerOpen && draftProjection.totalCount ? (
+              <PendingChangesInspector
+                projection={draftProjection}
+                onClose={() => setPendingLayerOpen(false)}
+                onLocateEvidence={openEvidenceExcerpt}
+              />
+            ) : (
+              <ViewerDetailPanel
+                selectedNode={selectedNode}
+                selectedEdge={selectedEdge}
+                nodes={nodes}
+                edges={edges}
+                documents={registry.documents}
+                nodeFields={config.nodeFields}
+                onSelectEdge={(id) => { setSelectedNodeId(null); setSelectedEdgeId(id); setFocusSelection(true); }}
+                onPreviewDocument={openDocumentPreview}
+                childDiagram={selectedChildDiagram}
+                relatedDiagram={selectedRelatedDiagram}
+                onOpenChild={selectDiagram}
+                onOpenRelated={selectDiagram}
+                canCorrect={!readOnlyHistorical && view !== 'compare'}
+                onCorrectNode={() => setCorrectionNodeId(selectedNode.id)}
+                relationshipFocused={relationshipFocusNodeId === selectedNode?.id}
+                availableFlows={availableFocusedFlows}
+                onStartFlow={startRegisteredFlow}
+              />
+            )
           )}
         </section>
       </main>
@@ -1647,27 +1857,27 @@ function Viewer() {
       />
       <AnalysisWorkbench
         open={analysisWorkbenchOpen}
-        sources={analysis.sources}
+        runs={activeAgentRuns}
         proposals={activeAnalysisProposals}
         reviews={analysisReviews}
         skills={skillCatalog.skills}
-        provider={analysis.provider}
+        integration={analysis.integration}
         activeTab={analysisTab}
-        analyzing={analysisLoading || analysisActionBusy}
+        busy={analysisLoading || analysisActionBusy}
         onClose={() => setAnalysisWorkbenchOpen(false)}
         onTabChange={setAnalysisTab}
-        onToggleSource={toggleAnalysisSource}
-        onAnalyze={generateAnalysis}
+        onRefresh={refreshAnalysisWorkbench}
+        onCopyConnection={copyAgentConnection}
         onOpenProposal={openProposalReview}
+        onReviewImplementation={reviewImplementation}
         onCopySkillPrompt={copySkillPrompt}
+        onOpenRevisionHistory={openRevisionPanelFromWorkbench}
       />
       <ProposalReviewDialog
         open={Boolean(reviewProposal)}
         proposal={reviewProposal}
         busy={analysisActionBusy}
         onClose={() => setReviewProposalId(null)}
-        onAcceptProposal={acceptProposal}
-        onRejectProposal={rejectProposal}
         onLocateEvidence={openEvidenceExcerpt}
       />
       <DocumentPreviewDialog preview={preview} loading={previewLoading} onClose={() => { setPreview(null); setPreviewLoading(false); }} />
@@ -1680,11 +1890,15 @@ function Viewer() {
       />
       {publishDialogOpen && lane?.draft && (
         <PublishDraftDialog
-          diagramTitle={selectedDiagram?.title || '当前架构图'}
+          diagramTitle={selectedDiagram?.title || t('shell.architectureDiagram')}
           viewLabel={selectedArchitectureView[1]}
           diff={draftDiff}
+          draftGraph={lane.draft.graph}
+          developmentContract={lane.draft.developmentContract}
+          changeProjection={draftProjection}
           onCancel={() => setPublishDialogOpen(false)}
           onConfirm={publishCurrentDraft}
+          onRefreshDocuments={view === 'target' ? refreshCurrentDraftDocuments : null}
         />
       )}
       <div className={`toast ${toastMessage ? 'show' : ''}`} role="status">{toastMessage}</div>
@@ -1693,5 +1907,9 @@ function Viewer() {
 }
 
 export default function ViewerApp() {
-  return <ReactFlowProvider><Viewer /></ReactFlowProvider>;
+  return (
+    <I18nProvider>
+      <ReactFlowProvider><Viewer /></ReactFlowProvider>
+    </I18nProvider>
+  );
 }

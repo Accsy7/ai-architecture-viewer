@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "1.0.0",
+  "schemaVersion": "1.4.0",
   "artifactType": "architecture-proposal",
   "artifactId": "proposal-replace-me",
   "createdAt": "1970-01-01T00:00:00.000Z",
@@ -28,7 +28,13 @@
       "patch": { "data": { "purpose": "Replace with the proposed responsibility." } }
     }
   ],
-  "acceptanceCriteria": ["Replace with an observable acceptance criterion."],
+  "acceptanceCriteria": [
+    {
+      "id": "criterion-replace-me",
+      "statement": "Replace with an observable acceptance criterion.",
+      "targetRefs": [{ "targetType": "node", "targetId": "module-replace-me" }]
+    }
+  ],
   "risks": [],
   "decisionsRequired": [],
   "evidenceManifest": "evidence-manifest.json"

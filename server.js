@@ -8,6 +8,7 @@ const {
   ContractError,
   DEFAULT_NODE_HEIGHT,
   DEFAULT_NODE_WIDTH,
+  DEVELOPMENT_CONTRACT_SCHEMA_VERSION,
   NODE_TYPE,
   SCHEMA_VERSION,
   clone,
@@ -19,6 +20,7 @@ const {
   validateGraph,
   validateRevisionRequest,
   validateState,
+  unboundDraftDevelopmentContract,
 } = require('./schema/state-contract.cjs');
 const {
   DOCUMENT_SCHEMA_VERSION,
@@ -43,36 +45,54 @@ const {
   resolveArchitectureCatalog,
 } = require('./schema/architecture-catalog-contract.cjs');
 const {
+  REGISTERED_FLOW_SCHEMA_VERSION,
+  resolveRegisteredFlowRegistry,
+} = require('./schema/registered-flow-contract.cjs');
+const {
   ANALYSIS_SCHEMA_VERSION,
+  AGENT_TASK_TYPES,
   createEmptyAnalysis,
+  migrateAnalysis,
   validateAnalysis,
 } = require('./schema/analysis-contract.cjs');
 const {
-  AnalysisSourceError,
-  collectEvidence,
-  listAvailableAnalysisSources,
-  readAnalysisSource,
-} = require('./analysis-sources.cjs');
+  AI_CODING_PROTOCOL_VERSION,
+  validateExchangeArtifact,
+} = require('./schema/ai-coding-exchange-contract.cjs');
 const {
-  AnalysisProviderError,
-  createDeepSeekProvider,
-} = require('./analysis-provider.cjs');
+  readAnalysisSource,
+  sourceIdForPath,
+  sourceLabelForPath,
+  sourceTypeForPath,
+} = require('./analysis-sources.cjs');
 const { readSkillCatalog } = require('./skill-catalog.cjs');
+const {
+  AGENT_NODE_DATA_FIELDS: AGENT_NODE_DATA_FIELD_NAMES,
+  AGENT_NODE_CLEARABLE_FIELDS: AGENT_NODE_CLEARABLE_FIELD_NAMES,
+  AGENT_EDGE_DATA_FIELDS: AGENT_EDGE_DATA_FIELD_NAMES,
+} = require('./schema/agent-semantic-fields.cjs');
 
 const HOST = '127.0.0.1';
 const DEFAULT_PORT = 8800;
 const ROOT = __dirname;
 const PROJECTS_ROOT = path.join(ROOT, 'projects');
 const PROJECT_MANIFEST_FILE = 'project.json';
+const TASK_ARTIFACT_TYPES = Object.freeze({
+  'architecture-discovery': new Set(['architecture-snapshot']),
+  'architecture-change-plan': new Set(['architecture-proposal']),
+  'implementation-reconcile': new Set(['implementation-report', 'architecture-snapshot']),
+});
 const PROJECT_FILES = Object.freeze({
   state: 'state.json',
   documents: 'document-registry.json',
   layout: 'viewer-layout.json',
   config: 'viewer.config.json',
   catalog: 'architecture-catalog.json',
+  registeredFlows: 'registered-business-flows.json',
   analysis: 'analysis.json',
 });
 const VIEWER_CONFIG_SCHEMA_VERSION = '1.0.0';
+const FORMAL_CONTRACT_PROTOCOL_VERSIONS = new Set(['1.3.0', AI_CODING_PROTOCOL_VERSION]);
 const CSP = "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'";
 const MIME_TYPES = {
   '.css': 'text/css; charset=utf-8',
@@ -90,6 +110,14 @@ const MIME_TYPES = {
   '.woff': 'font/woff',
   '.woff2': 'font/woff2',
 };
+const AGENT_NODE_DATA_FIELDS = new Set(AGENT_NODE_DATA_FIELD_NAMES);
+const AGENT_NODE_CLEARABLE_FIELDS = new Set(AGENT_NODE_CLEARABLE_FIELD_NAMES);
+const AGENT_EDGE_DATA_FIELDS = new Set(AGENT_EDGE_DATA_FIELD_NAMES);
+const RECONCILIATION_NODE_FIELDS = [
+  'name', 'purpose', 'technical', 'product', 'authorization',
+  'documentRefs', 'interactionModes', 'architectureLayer',
+];
+const RECONCILIATION_EDGE_FIELDS = ['source', 'target', ...AGENT_EDGE_DATA_FIELD_NAMES];
 
 function parsePort(value) {
   const port = value === undefined || value === '' ? DEFAULT_PORT : Number(value);
@@ -136,6 +164,14 @@ function resolveProjectDirectory(value = process.env.VIEWER_PROJECT_DIR) {
   return projectDirectory;
 }
 
+function resolveWorkspaceRoot(value = process.env.VIEWER_WORKSPACE_ROOT, projectDirectory = resolveProjectDirectory()) {
+  const workspaceRoot = value ? path.resolve(ROOT, value) : projectDirectory;
+  if (!fs.existsSync(workspaceRoot) || !fs.statSync(workspaceRoot).isDirectory()) {
+    throw new Error(`待检查代码仓库目录不存在：${workspaceRoot}`);
+  }
+  return workspaceRoot;
+}
+
 function resolveProjectFile(value, projectDirectory, fileName) {
   return value ? path.resolve(value) : path.join(projectDirectory, fileName);
 }
@@ -160,6 +196,13 @@ function resolveCatalogFile(value = process.env.CATALOG_FILE, projectDirectory =
   return resolveProjectFile(value, projectDirectory, PROJECT_FILES.catalog);
 }
 
+function resolveRegisteredFlowsFile(
+  value = process.env.REGISTERED_FLOWS_FILE,
+  projectDirectory = resolveProjectDirectory(),
+) {
+  return resolveProjectFile(value, projectDirectory, PROJECT_FILES.registeredFlows);
+}
+
 function resolveAnalysisFile(value = process.env.ANALYSIS_FILE, projectDirectory = resolveProjectDirectory()) {
   return resolveProjectFile(value, projectDirectory, PROJECT_FILES.analysis);
 }
@@ -169,6 +212,29 @@ function requiredConfigText(value, field, maxLength = 240) {
     throw new ContractError(`查看器配置 ${field} 无效`, 'VIEWER_CONFIG_INVALID', 500, { field });
   }
   return value.trim();
+}
+
+function localizedConfigText(value, field, maxLength) {
+  if (typeof value === 'string') return requiredConfigText(value, field, maxLength);
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new ContractError(`查看器配置 ${field} 无效`, 'VIEWER_CONFIG_INVALID', 500, { field });
+  }
+  const localized = {};
+  for (const language of ['zh', 'en']) {
+    if (value[language] === undefined || value[language] === null) continue;
+    localized[language] = requiredConfigText(value[language], `${field}.${language}`, maxLength);
+  }
+  if (!localized.zh && !localized.en) {
+    throw new ContractError(`查看器配置 ${field} 无效`, 'VIEWER_CONFIG_INVALID', 500, { field });
+  }
+  return localized;
+}
+
+function resolvedConfigText(value, language = 'zh') {
+  if (typeof value === 'string') return value;
+  const preferredLanguage = language === 'en' ? 'en' : 'zh';
+  const alternateLanguage = preferredLanguage === 'en' ? 'zh' : 'en';
+  return value?.[preferredLanguage] || value?.[alternateLanguage] || '';
 }
 
 function readViewerConfig(configFile) {
@@ -213,18 +279,26 @@ function readViewerConfig(configFile) {
       multiline: Boolean(field.multiline),
       tone: typeof field.tone === 'string' ? field.tone.slice(0, 40) : null,
       optional: Boolean(field.optional),
+      ...(field.format === 'tags' ? { format: 'tags' } : {}),
     };
   });
   const defaultFocusNodeId = raw.defaultFocusNodeId === null || raw.defaultFocusNodeId === undefined
     ? null
     : requiredConfigText(raw.defaultFocusNodeId, 'defaultFocusNodeId', 120);
+  const defaultLanguage = raw.defaultLanguage === null || raw.defaultLanguage === undefined
+    ? null
+    : requiredConfigText(raw.defaultLanguage, 'defaultLanguage', 8);
+  if (defaultLanguage !== null && !['zh', 'en'].includes(defaultLanguage)) {
+    throw new ContractError('查看器配置 defaultLanguage 只能是 zh 或 en', 'VIEWER_CONFIG_INVALID', 500);
+  }
   return {
     schemaVersion: VIEWER_CONFIG_SCHEMA_VERSION,
     projectId,
     projectName: requiredConfigText(raw.projectName, 'projectName', 80),
-    viewerName: requiredConfigText(raw.viewerName, 'viewerName', 80),
-    eyebrow: requiredConfigText(raw.eyebrow, 'eyebrow', 120),
-    scopeNote: requiredConfigText(raw.scopeNote, 'scopeNote', 320),
+    viewerName: localizedConfigText(raw.viewerName, 'viewerName', 80),
+    eyebrow: localizedConfigText(raw.eyebrow, 'eyebrow', 120),
+    scopeNote: localizedConfigText(raw.scopeNote, 'scopeNote', 320),
+    defaultLanguage,
     defaultFocusNodeId,
     views,
     nodeFields,
@@ -248,6 +322,28 @@ function readArchitectureCatalog(
     }
     throw new ContractError(`无法读取本地架构目录：${error.message}`, 'ARCHITECTURE_CATALOG_READ_FAILED', 500);
   }
+}
+
+function readRegisteredFlows(file, context) {
+  if (!fs.existsSync(file)) {
+    return {
+      schemaVersion: REGISTERED_FLOW_SCHEMA_VERSION,
+      diagramId: context.diagramId,
+      view: context.view,
+      flows: [],
+    };
+  }
+  let raw;
+  try {
+    raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (error) {
+    throw new ContractError(
+      `无法读取登记业务流：${error.message}`,
+      'REGISTERED_FLOW_READ_FAILED',
+      500,
+    );
+  }
+  return resolveRegisteredFlowRegistry(raw, context);
 }
 
 function diagramFrom(url, catalog) {
@@ -430,8 +526,9 @@ function readAnalysis(analysisFile) {
       writeJsonAtomic(initial, analysisFile);
       return initial;
     }
-    const analysis = JSON.parse(fs.readFileSync(analysisFile, 'utf8'));
-    validateAnalysis(analysis);
+    const stored = JSON.parse(fs.readFileSync(analysisFile, 'utf8'));
+    const analysis = migrateAnalysis(stored);
+    if (stored.schemaVersion !== analysis.schemaVersion) writeJsonAtomic(analysis, analysisFile);
     return analysis;
   } catch (error) {
     if (error instanceof ContractError) {
@@ -453,10 +550,44 @@ function writeAnalysis(value, analysisFile) {
 function proposalEvidenceIds(proposal) {
   const ids = new Set(proposal.evidenceIds || []);
   (proposal.changes || []).forEach((change) => (change.evidenceIds || []).forEach((id) => ids.add(id)));
+  (proposal.contractPatch?.upsert || []).forEach((criterion) => (criterion.evidenceIds || []).forEach((id) => ids.add(id)));
+  (proposal.contractPatch?.delete || []).forEach((operation) => (operation.evidenceIds || []).forEach((id) => ids.add(id)));
   return ids;
 }
 
-function assertProposalEvidenceCurrent(proposal, analysis, projectRoot) {
+function publicArtifactRecord(record) {
+  const artifact = record.artifact;
+  const summary = {};
+  if (artifact.artifactType === 'evidence-manifest') {
+    summary.evidenceCount = artifact.entries.length;
+  } else if (artifact.artifactType === 'architecture-snapshot') {
+    summary.nodeCount = artifact.nodes.length;
+    summary.edgeCount = artifact.edges.length;
+    summary.unknownCount = artifact.unknowns.length;
+  } else if (artifact.artifactType === 'architecture-proposal') {
+    summary.changeCount = artifact.changes.length;
+    summary.contractChangeCount = (artifact.contractPatch?.upsert?.length || 0) + (artifact.contractPatch?.delete?.length || 0);
+    summary.optionCount = artifact.options.length;
+    summary.decisionCount = artifact.decisionsRequired.length;
+  } else if (artifact.artifactType === 'implementation-report') {
+    summary.status = artifact.status;
+    summary.changedFileCount = artifact.changedFiles.length;
+    summary.passedCheckCount = artifact.tests.filter((item) => item.outcome === 'passed').length;
+    summary.failedCheckCount = artifact.tests.filter((item) => item.outcome === 'failed').length;
+    summary.acceptedCriterionCount = artifact.acceptanceResults.filter((item) => item.status === 'satisfied').length;
+    summary.criterionCount = artifact.acceptanceResults.length;
+    summary.driftCount = artifact.drift.length;
+    summary.unresolvedCount = artifact.unresolved.length;
+  }
+  return {
+    id: record.id,
+    artifactType: record.artifactType,
+    submittedAt: record.submittedAt,
+    summary,
+  };
+}
+
+function assertProposalEvidenceCurrent(proposal, analysis, { workspaceRoot, projectRoot, registry }) {
   const evidenceById = new Map(analysis.evidence.map((evidence) => [evidence.id, evidence]));
   const sourceById = new Map(analysis.sources.map((source) => [source.id, source]));
   const staleEvidenceIds = [];
@@ -467,8 +598,28 @@ function assertProposalEvidenceCurrent(proposal, analysis, projectRoot) {
       staleEvidenceIds.push(evidenceId);
       return;
     }
+    if (evidence.sourceKind === 'discussion') {
+      if (source.sourceKind !== 'discussion' || source.contentHash !== evidence.contentHash) {
+        staleEvidenceIds.push(evidenceId);
+      }
+      return;
+    }
+    if (evidence.sourceKind === 'project-document') {
+      try {
+        const document = registry.documents.find((item) => item.id === evidence.documentId);
+        const material = document
+          ? readRegisteredDocumentMaterial(document, evidence.section || null, projectRoot)
+          : null;
+        if (!material || source.documentId !== evidence.documentId || material.scopedHash !== evidence.contentHash) {
+          staleEvidenceIds.push(evidenceId);
+        }
+      } catch {
+        staleEvidenceIds.push(evidenceId);
+      }
+      return;
+    }
     try {
-      if (readAnalysisSource(source.path, projectRoot).contentHash !== evidence.contentHash) {
+      if (readAnalysisSource(source.path, workspaceRoot).contentHash !== evidence.contentHash) {
         staleEvidenceIds.push(evidenceId);
       }
     } catch {
@@ -476,199 +627,1716 @@ function assertProposalEvidenceCurrent(proposal, analysis, projectRoot) {
     }
   });
   if (staleEvidenceIds.length) {
-    throw new ContractError('提案引用的资料已变化，请重新扫描并生成新提案', 'PROPOSAL_EVIDENCE_STALE', 409, {
+    throw new ContractError('提案引用的文件已变化，请让智能体重新检查仓库并提交新提案', 'PROPOSAL_EVIDENCE_STALE', 409, {
       evidenceIds: staleEvidenceIds,
     });
   }
 }
 
-function analysisResponse(analysis, projectRoot, analysisProvider) {
-  const discovered = listAvailableAnalysisSources(projectRoot);
-  const discoveredByPath = new Map(discovered.map((source) => [source.path, source]));
-  const existingByPath = new Map(analysis.sources.map((source) => [source.path, source]));
+function assertProposalEvidenceBasisAllowed(proposal, analysis) {
+  if (proposal.view !== 'current') return;
+  const evidenceById = new Map(analysis.evidence.map((evidence) => [evidence.id, evidence]));
+  const forbidden = [...proposalEvidenceIds(proposal)]
+    .map((id) => evidenceById.get(id))
+    .filter((evidence) => evidence && evidence.basis !== 'code-fact')
+    .map((evidence) => ({ id: evidence.id, basis: evidence.basis }));
+  if (forbidden.length) {
+    throw new ContractError(
+      '该提案把目标意图用作当前实现依据；请让智能体根据代码事实重新提交',
+      'PROPOSAL_EVIDENCE_BASIS_FORBIDDEN',
+      422,
+      { evidence: forbidden },
+    );
+  }
+}
+
+function analysisResponse(analysis) {
   const evidenceBySource = new Map();
   analysis.evidence.forEach((evidence) => {
     evidenceBySource.set(evidence.sourceId, (evidenceBySource.get(evidence.sourceId) || 0) + 1);
   });
-  const sources = discovered.map((candidate) => {
-    const existing = existingByPath.get(candidate.path);
-    const source = existing ? {
-      ...candidate,
-      id: existing.id,
-      label: existing.label,
-      selected: existing.selected,
-      lastScannedAt: existing.lastScannedAt,
-      contentHash: existing.contentHash,
-      sizeBytes: existing.sizeBytes,
-    } : candidate;
+  const sources = analysis.sources.map((source) => ({
+    ...clone(source),
+    evidenceCount: evidenceBySource.get(source.id) || 0,
+    status: source.lastScannedAt ? 'ready' : 'stale',
+  }));
+  const sourcesById = new Map(sources.map((source) => [source.id, source]));
+  const publicEvidence = analysis.evidence.map((evidence) => {
+    const source = sourcesById.get(evidence.sourceId);
     return {
-      ...source,
-      evidenceCount: evidenceBySource.get(source.id) || 0,
-      status: source.selected ? (source.lastScannedAt ? 'ready' : 'stale') : 'ignored',
+      ...clone(evidence),
+      sourceLabel: source?.label || null,
+      sourceType: source?.type || null,
     };
   });
-  analysis.sources.forEach((source) => {
-    if (discoveredByPath.has(source.path)) return;
-    sources.push({
-      ...clone(source),
-      evidenceCount: evidenceBySource.get(source.id) || 0,
-      status: 'failed',
-    });
-  });
-  const evidenceById = new Map(analysis.evidence.map((evidence) => [evidence.id, evidence]));
+  const evidenceById = new Map(publicEvidence.map((evidence) => [evidence.id, evidence]));
   const proposals = analysis.proposals.map((proposal) => ({
     ...clone(proposal),
     evidence: [...proposalEvidenceIds(proposal)].map((id) => evidenceById.get(id)).filter(Boolean).map(clone),
     changeCount: proposal.changes.length,
     evidenceCount: proposalEvidenceIds(proposal).size,
   }));
-  const provider = typeof analysisProvider?.describe === 'function'
-    ? analysisProvider.describe()
-    : { provider: 'deepseek', configured: false, model: null };
+  const proposalsByRun = new Map();
+  analysis.proposals.forEach((proposal) => {
+    if (!proposal.origin?.runId) return;
+    const list = proposalsByRun.get(proposal.origin.runId) || [];
+    list.push(proposal);
+    proposalsByRun.set(proposal.origin.runId, list);
+  });
+  const artifactsById = new Map(analysis.artifacts.map((record) => [record.id, record]));
+  const runs = analysis.agentRuns.map((run) => {
+    const runProposals = proposalsByRun.get(run.id) || [];
+    return {
+      ...clone(run),
+      artifacts: run.artifactIds.map((id) => artifactsById.get(id)).filter(Boolean).map(publicArtifactRecord),
+      proposalCount: runProposals.length,
+      pendingProposalCount: runProposals.filter((proposal) => proposal.status === 'pending').length,
+      draftWriteCount: runProposals.filter((proposal) => proposal.status === 'draft-applied').length,
+    };
+  });
   return {
     schemaVersion: analysis.schemaVersion,
     baseRevision: analysis.baseRevision,
     lastUpdated: analysis.lastUpdated,
     sources,
-    evidence: clone(analysis.evidence),
+    evidence: publicEvidence,
     proposals,
-    provider,
+    runs,
+    artifacts: analysis.artifacts.map((record) => ({ ...publicArtifactRecord(record), runId: record.runId })),
+    integration: {
+      mode: 'external-agent',
+      protocolVersion: AI_CODING_PROTOCOL_VERSION,
+      modelProviderRequired: false,
+      implementationHumanReviewRequired: true,
+      serverComputedContractGate: true,
+      agentCanReview: false,
+      agentCanApprove: false,
+      agentCanPublish: false,
+      mcpCommand: 'npm run mcp',
+      cliCommand: 'npm run agent --',
+    },
   };
 }
 
-function selectionRequestSources(incoming, analysis, projectRoot) {
-  if (!Array.isArray(incoming.sources)) {
-    throw new ContractError('分析资料列表必须是数组', 'ANALYSIS_REQUEST_INVALID', 400);
+function assertAgentRequest(value, allowedKeys, valuePath = 'agent request') {
+  if (!isPlainObject(value)) {
+    throw new ContractError(`${valuePath} 必须是对象`, 'AGENT_REQUEST_INVALID', 400);
   }
-  const discovered = listAvailableAnalysisSources(projectRoot);
-  const discoveredByPath = new Map(discovered.map((source) => [source.path, source]));
-  const existingByPath = new Map(analysis.sources.map((source) => [source.path, source]));
-  const requested = new Map();
-  incoming.sources.forEach((source, index) => {
-    if (!isPlainObject(source) || typeof source.path !== 'string' || typeof source.selected !== 'boolean') {
-      throw new ContractError(`分析资料[${index}]必须提供 path 和 selected`, 'ANALYSIS_REQUEST_INVALID', 400);
+  Object.keys(value).forEach((key) => {
+    if (!allowedKeys.has(key)) {
+      throw new ContractError(`${valuePath} 不支持字段 ${key}`, 'AGENT_REQUEST_INVALID', 400);
     }
-    if (requested.has(source.path)) {
-      throw new ContractError(`分析资料路径重复：${source.path}`, 'ANALYSIS_REQUEST_INVALID', 400);
-    }
-    if (!discoveredByPath.has(source.path)) {
-      throw new ContractError('只能选择项目内可安全读取的资料文件', 'ANALYSIS_SOURCE_NOT_AVAILABLE', 422, { path: source.path });
-    }
-    requested.set(source.path, source.selected);
   });
-  const evidenceSourceIds = new Set(analysis.evidence.map((evidence) => evidence.sourceId));
-  const next = discovered.map((candidate) => {
-    const existing = existingByPath.get(candidate.path);
-    return {
-      ...candidate,
-      id: existing?.id || candidate.id,
-      label: existing?.label || candidate.label,
-      selected: requested.has(candidate.path) ? requested.get(candidate.path) : Boolean(existing?.selected),
-      lastScannedAt: existing?.lastScannedAt || null,
-      contentHash: existing?.contentHash || null,
-      sizeBytes: existing?.sizeBytes ?? null,
+  return value;
+}
+
+function requiredAgentText(value, field, maxLength = 120) {
+  if (typeof value !== 'string' || !value.trim() || value.trim().length > maxLength) {
+    throw new ContractError(`智能体提交字段 ${field} 无效`, 'AGENT_REQUEST_INVALID', 400, { field });
+  }
+  return value.trim();
+}
+
+function agentDiagram(catalog, diagramId) {
+  const selectedId = diagramId || catalog.defaultDiagramId;
+  const diagram = catalog.diagrams.find((item) => item.id === selectedId);
+  if (!diagram) throw new ContractError('未找到智能体运行对应的架构图', 'DIAGRAM_NOT_FOUND', 404, { diagramId: selectedId });
+  return diagram;
+}
+
+function laneLockDescriptor(lane) {
+  return {
+    publishedRevision: lane.published.revision,
+    publishedRevisionId: lane.published.revisionId,
+    draftId: lane.draft?.draftId || null,
+    draftRevision: lane.draft?.draftRevision || 0,
+  };
+}
+
+function sameLaneLock(left, right) {
+  return Boolean(left && right) && [
+    'publishedRevision', 'publishedRevisionId', 'draftId', 'draftRevision',
+  ].every((field) => left[field] === right[field]);
+}
+
+function assertAgentRunLaneLock(run, lane) {
+  const actual = laneLockDescriptor(lane);
+  if (!run.laneLock) {
+    throw new ContractError(
+      '该旧智能体运行没有视图状态锁，不能安全继续提交；请基于当前正式基线和草案创建新的运行',
+      'AGENT_LANE_LOCK_REQUIRED',
+      409,
+      { actual },
+    );
+  }
+  if (!sameLaneLock(run.laneLock, actual)) {
+    throw new ContractError(
+      '智能体运行锁定的正式基线或活动草案已经变化，请创建新的运行后重新提交',
+      'AGENT_RUN_STALE',
+      409,
+      {
+        headRevision: lane.published.revision,
+        headRevisionId: lane.published.revisionId,
+        expectedLaneLock: clone(run.laneLock),
+        actualLaneLock: actual,
+      },
+    );
+  }
+  return lane.draft ? lane.draft.graph : lane.published.graph;
+}
+
+function createAgentRun(incoming, catalog, { registry, projectRoot }) {
+  assertAgentRequest(incoming, new Set(['agentName', 'agentClient', 'taskType', 'diagramId', 'view', 'summary']));
+  const agentName = requiredAgentText(incoming.agentName, 'agentName');
+  const agentClient = requiredAgentText(incoming.agentClient, 'agentClient', 80);
+  if (!AGENT_TASK_TYPES.has(incoming.taskType)) {
+    throw new ContractError('taskType 不是支持的智能体协作任务', 'AGENT_TASK_TYPE_INVALID', 422);
+  }
+  const diagram = agentDiagram(catalog, incoming.diagramId);
+  const defaultView = incoming.taskType === 'architecture-change-plan' ? 'target' : 'current';
+  const view = incoming.view || defaultView;
+  if (!['current', 'target'].includes(view)) {
+    throw new ContractError('智能体运行 view 必须是 current 或 target', 'AGENT_VIEW_INVALID', 422);
+  }
+  if (incoming.taskType !== 'architecture-change-plan' && view !== 'current') {
+    throw new ContractError('项目理解和实施核验只能提交到当前架构视图', 'AGENT_VIEW_INVALID', 422);
+  }
+  const state = readState(diagram.statePath);
+  if (incoming.taskType === 'implementation-reconcile') {
+    assertExecutableTargetContract(state.target.published, registry, projectRoot);
+  }
+  const lane = state[view];
+  const now = new Date().toISOString();
+  return {
+    id: `run-${crypto.randomUUID().toLowerCase()}`,
+    agentName,
+    agentClient,
+    taskType: incoming.taskType,
+    status: 'active',
+    diagramId: diagram.id,
+    view,
+    baseRevision: lane.published.revision,
+    baseRevisionId: lane.published.revisionId,
+    laneLock: laneLockDescriptor(lane),
+    createdAt: now,
+    updatedAt: now,
+    submittedAt: null,
+    summary: incoming.summary === undefined || incoming.summary === null
+      ? null
+      : requiredAgentText(incoming.summary, 'summary', 1000),
+    artifactIds: [],
+    approvedTarget: incoming.taskType === 'implementation-reconcile'
+      ? formalTargetDescriptor(diagram.id, state.target.published)
+      : null,
+    agentClaim: null,
+    architectureGate: null,
+    contractGate: null,
+    humanReview: null,
+  };
+}
+
+function artifactRecord(artifact, runId, submittedAt) {
+  return {
+    id: artifact.artifactId,
+    runId,
+    artifactType: artifact.artifactType,
+    submittedAt,
+    artifact: clone(artifact),
+  };
+}
+
+function sameJson(left, right) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function evidenceExcerpt(material, entry) {
+  const lines = material.content.replace(/\r\n?/g, '\n').split('\n');
+  if (entry.lineEnd > lines.length) {
+    throw new ContractError('证据行号超出文件范围', 'AGENT_EVIDENCE_RANGE_INVALID', 422, {
+      evidenceId: entry.id,
+      path: entry.path,
+      lineCount: lines.length,
+    });
+  }
+  const excerpt = lines.slice(entry.lineStart - 1, entry.lineEnd).join('\n').trim();
+  if (!excerpt) {
+    throw new ContractError('证据范围没有可核验文本', 'AGENT_EVIDENCE_RANGE_INVALID', 422, {
+      evidenceId: entry.id,
+      path: entry.path,
+    });
+  }
+  return excerpt.length > 12000 ? `${excerpt.slice(0, 11999)}…` : excerpt;
+}
+
+function normalizedEvidenceSourceKind(entry) {
+  return entry.sourceKind || 'workspace-file';
+}
+
+function normalizedEvidenceBasis(entry) {
+  if (entry.basis === 'inference') return 'agent-inference';
+  if (entry.basis === 'fact') {
+    return sourceTypeForPath(entry.path) === 'source-code' ? 'code-fact' : 'design-document';
+  }
+  return entry.basis;
+}
+
+function discussionEvidenceHash(entry) {
+  return crypto.createHash('sha256').update(JSON.stringify({
+    sourceLabel: entry.sourceLabel,
+    recordedAt: entry.recordedAt,
+    summary: entry.summary,
+    excerpt: entry.excerpt,
+  })).digest('hex');
+}
+
+function discussionSourceId(entry) {
+  const digest = crypto.createHash('sha256')
+    .update(`${entry.sourceLabel}:${entry.recordedAt}:${entry.id}`)
+    .digest('hex')
+    .slice(0, 24);
+  return `discussion-${digest}`;
+}
+
+function projectDocumentSourceId(documentId) {
+  return `project-document-${crypto.createHash('sha256').update(documentId).digest('hex').slice(0, 24)}`;
+}
+
+function importAgentEvidence(analysis, manifest, { workspaceRoot, projectRoot, registry }, collectedAt) {
+  const next = clone(analysis);
+  const sourcesByPath = new Map(next.sources.filter((source) => source.path).map((source) => [source.path.toLowerCase(), source]));
+  const sourcesById = new Map(next.sources.map((source) => [source.id, source]));
+  const evidenceById = new Map(next.evidence.map((evidence) => [evidence.id, evidence]));
+
+  manifest.entries.forEach((entry) => {
+    const sourceKind = normalizedEvidenceSourceKind(entry);
+    const basis = normalizedEvidenceBasis(entry);
+    if (sourceKind === 'discussion') {
+      const contentHash = discussionEvidenceHash(entry);
+      const sourceId = discussionSourceId(entry);
+      const source = {
+        id: sourceId,
+        sourceKind,
+        path: null,
+        label: entry.sourceLabel,
+        type: 'discussion',
+        selected: false,
+        lastScannedAt: entry.recordedAt,
+        contentHash,
+        sizeBytes: Buffer.byteLength(entry.excerpt, 'utf8'),
+      };
+      const existingSource = sourcesById.get(sourceId);
+      if (existingSource && !sameJson(existingSource, source)) {
+        throw new ContractError('讨论来源 ID 已被其他内容使用', 'AGENT_EVIDENCE_ID_CONFLICT', 409, { evidenceId: entry.id });
+      }
+      if (!existingSource) {
+        next.sources.push(source);
+        sourcesById.set(sourceId, source);
+      }
+      const evidence = {
+        id: entry.id,
+        sourceId,
+        sourceKind,
+        basis,
+        path: null,
+        lineStart: null,
+        lineEnd: null,
+        excerpt: entry.excerpt.trim(),
+        contentHash,
+        collectedAt,
+      };
+      addImportedEvidence(next, evidenceById, evidence);
+      return;
+    }
+
+    if (sourceKind === 'project-document') {
+      const document = registry.documents.find((item) => item.id === entry.documentId);
+      if (!document) {
+        throw new ContractError('智能体引用的注册文档不存在', 'DOCUMENT_NOT_FOUND', 404, { documentId: entry.documentId });
+      }
+      const material = readRegisteredDocumentMaterial(document, entry.section || null, projectRoot);
+      if (material.scopedHash !== entry.contentHash) {
+        throw new ContractError('注册文档依据已变化，请按 documentId 重新读取后提交', 'AGENT_EVIDENCE_STALE', 409, {
+          evidenceId: entry.id,
+          documentId: entry.documentId,
+          section: entry.section || null,
+        });
+      }
+      const sourceId = projectDocumentSourceId(document.id);
+      const source = {
+        id: sourceId,
+        sourceKind,
+        path: null,
+        documentId: document.id,
+        label: document.title,
+        type: 'markdown',
+        selected: false,
+        lastScannedAt: collectedAt,
+        contentHash: material.fullHash,
+        sizeBytes: material.stats.size,
+      };
+      const existingSource = sourcesById.get(sourceId);
+      if (existingSource) Object.assign(existingSource, source);
+      else {
+        next.sources.push(source);
+        sourcesById.set(sourceId, source);
+      }
+      const evidence = {
+        id: entry.id,
+        sourceId,
+        sourceKind,
+        basis,
+        path: null,
+        documentId: document.id,
+        section: entry.section || null,
+        lineStart: null,
+        lineEnd: null,
+        excerpt: material.scopedContent.length > 12000
+          ? `${material.scopedContent.slice(0, 11999)}…`
+          : material.scopedContent,
+        contentHash: material.scopedHash,
+        collectedAt,
+      };
+      addImportedEvidence(next, evidenceById, evidence);
+      return;
+    }
+
+    const material = readAnalysisSource(entry.path, workspaceRoot);
+    if (material.contentHash !== entry.contentHash) {
+      throw new ContractError('智能体证据与当前工作区内容不一致，请重新检查仓库后提交', 'AGENT_EVIDENCE_STALE', 409, {
+        evidenceId: entry.id,
+        path: entry.path,
+      });
+    }
+    const sourceKey = entry.path.toLowerCase();
+    const existingSource = sourcesByPath.get(sourceKey);
+    const source = {
+      id: existingSource?.id || sourceIdForPath(entry.path),
+      sourceKind,
+      path: entry.path,
+      documentId: null,
+      label: existingSource?.label || sourceLabelForPath(entry.path),
+      type: sourceTypeForPath(entry.path),
+      selected: Boolean(existingSource?.selected),
+      lastScannedAt: collectedAt,
+      contentHash: material.contentHash,
+      sizeBytes: material.stats.size,
     };
-  });
-  analysis.sources.forEach((source) => {
-    if (discoveredByPath.has(source.path) || !evidenceSourceIds.has(source.id)) return;
-    next.push({ ...clone(source), selected: false });
+    if (existingSource) Object.assign(existingSource, source);
+    else {
+      next.sources.push(source);
+      sourcesByPath.set(sourceKey, source);
+      sourcesById.set(source.id, source);
+    }
+
+    const evidence = {
+      id: entry.id,
+      sourceId: source.id,
+      sourceKind,
+      basis,
+      path: entry.path,
+      documentId: null,
+      section: null,
+      lineStart: entry.lineStart,
+      lineEnd: entry.lineEnd,
+      excerpt: evidenceExcerpt(material, entry),
+      contentHash: material.contentHash,
+      collectedAt,
+    };
+    addImportedEvidence(next, evidenceById, evidence);
   });
   return next;
 }
 
-function scanSelectedAnalysisSources(analysis, projectRoot, now = new Date().toISOString()) {
-  const selectedSources = analysis.sources.filter((source) => source.selected);
-  if (!selectedSources.length) {
-    throw new ContractError('请先选择至少一份资料再分析', 'ANALYSIS_SOURCE_REQUIRED', 422);
+function addImportedEvidence(analysis, evidenceById, evidence) {
+  const existingEvidence = evidenceById.get(evidence.id);
+  const sameEvidence = existingEvidence && [
+    'id', 'sourceId', 'sourceKind', 'basis', 'path', 'documentId', 'section',
+    'lineStart', 'lineEnd', 'excerpt', 'contentHash',
+  ].every((field) => existingEvidence[field] === evidence[field]);
+  if (existingEvidence && !sameEvidence) {
+    throw new ContractError('证据 ID 已被其他内容使用', 'AGENT_EVIDENCE_ID_CONFLICT', 409, { evidenceId: evidence.id });
   }
-  const selectedIds = new Set(selectedSources.map((source) => source.id));
-  const referencedEvidence = new Set();
-  analysis.proposals.forEach((proposal) => proposalEvidenceIds(proposal).forEach((id) => referencedEvidence.add(id)));
-  const nextSources = analysis.sources.map((source) => {
-    if (!selectedIds.has(source.id)) return clone(source);
-    const material = readAnalysisSource(source.path, projectRoot);
+  if (!existingEvidence) {
+    analysis.evidence.push(evidence);
+    evidenceById.set(evidence.id, evidence);
+  }
+}
+
+function changeIdForArtifact(artifactId, kind, targetType, targetId) {
+  const digest = crypto.createHash('sha256').update(`${artifactId}:${kind}:${targetType}:${targetId}`).digest('hex').slice(0, 20);
+  return `change-${digest}`;
+}
+
+function proposalOrigin(run, artifact) {
+  return {
+    runId: run.id,
+    artifactId: artifact.artifactId,
+    artifactType: artifact.artifactType,
+    agentName: run.agentName,
+    agentClient: run.agentClient,
+  };
+}
+
+function proposalAcceptanceCriteria(artifact) {
+  const defaultRefs = [...new Map((artifact.changes || []).map((change) => [
+    `${change.targetType}:${change.targetId}`,
+    { targetType: change.targetType, targetId: change.targetId },
+  ])).values()];
+  return (artifact.acceptanceCriteria || []).map((criterion, index) => {
+    if (criterion && typeof criterion === 'object' && !Array.isArray(criterion)) return clone(criterion);
+    const statement = String(criterion);
+    const digest = crypto.createHash('sha256')
+      .update(`${artifact.artifactId}:${index}:${statement}`)
+      .digest('hex')
+      .slice(0, 20);
+    return { id: `criterion-${digest}`, statement, targetRefs: clone(defaultRefs) };
+  });
+}
+
+function normalizeExchangeProposalChange(change) {
+  const normalized = clone(change);
+  if (
+    normalized.targetType === 'node'
+    && typeof normalized.patch?.data?.group === 'string'
+  ) normalized.patch.data.group = normalized.patch.data.group.trim();
+  return normalized;
+}
+
+function artifactEvidenceIds(artifact) {
+  if (artifact.artifactType === 'architecture-snapshot') {
+    return new Set([
+      ...artifact.nodes.flatMap((node) => node.evidenceIds),
+      ...artifact.edges.flatMap((edge) => edge.evidenceIds),
+    ]);
+  }
+  if (artifact.artifactType === 'architecture-proposal') {
+    return new Set([
+      ...artifact.changes.flatMap((change) => change.evidenceIds),
+      ...(artifact.contractPatch?.upsert || []).flatMap((criterion) => criterion.evidenceIds),
+      ...(artifact.contractPatch?.delete || []).flatMap((operation) => operation.evidenceIds),
+    ]);
+  }
+  if (artifact.artifactType === 'implementation-report') {
+    return new Set([
+      ...artifact.acceptanceResults.flatMap((result) => result.evidenceIds),
+      ...artifact.drift.flatMap((item) => item.evidenceIds),
+    ]);
+  }
+  return new Set();
+}
+
+function assertRunArtifactType(run, artifact) {
+  const allowedTypes = TASK_ARTIFACT_TYPES[run.taskType];
+  if (!allowedTypes?.has(artifact.artifactType)) {
+    throw new ContractError(
+      `任务 ${run.taskType} 不接受 ${artifact.artifactType} 工件`,
+      'AGENT_ARTIFACT_TYPE_MISMATCH',
+      422,
+      { taskType: run.taskType, artifactType: artifact.artifactType, allowedTypes: [...(allowedTypes || [])] },
+    );
+  }
+}
+
+function assertManifestCoversArtifact(artifact, manifest) {
+  const manifestIds = new Set(manifest.entries.map((entry) => entry.id));
+  const missingEvidenceIds = [...artifactEvidenceIds(artifact)].filter((id) => !manifestIds.has(id));
+  if (missingEvidenceIds.length) {
+    throw new ContractError(
+      '当前提交的证据清单未覆盖工件引用的全部证据',
+      'AGENT_EVIDENCE_MANIFEST_INCOMPLETE',
+      422,
+      { evidenceIds: missingEvidenceIds },
+    );
+  }
+}
+
+function assertEvidenceBasisAllowed(run, artifact, manifest) {
+  if (run.view !== 'current') return;
+  const referencedIds = artifactEvidenceIds(artifact);
+  const forbidden = manifest.entries
+    .filter((entry) => referencedIds.has(entry.id) && normalizedEvidenceBasis(entry) !== 'code-fact')
+    .map((entry) => ({ id: entry.id, basis: normalizedEvidenceBasis(entry) }));
+  if (forbidden.length) {
+    throw new ContractError(
+      '当前架构与实施结果只能引用代码事实；用户讨论和设计材料只能支持目标架构',
+      'AGENT_EVIDENCE_BASIS_FORBIDDEN',
+      422,
+      { evidence: forbidden },
+    );
+  }
+}
+
+function assertEvidenceBasisIntegrity(manifest) {
+  const mislabeled = manifest.entries.filter((entry) => (
+    normalizedEvidenceSourceKind(entry) === 'workspace-file'
+    && normalizedEvidenceBasis(entry) === 'code-fact'
+    && sourceTypeForPath(entry.path) === 'markdown'
+  ));
+  if (mislabeled.length) {
+    throw new ContractError(
+      'Markdown 设计材料不能标记为代码事实',
+      'AGENT_EVIDENCE_BASIS_INVALID',
+      422,
+      { evidenceIds: mislabeled.map((entry) => entry.id) },
+    );
+  }
+}
+
+function proposalFromExchangeArtifact(artifact, run) {
+  const evidenceIds = [...artifactEvidenceIds(artifact)];
+  return {
+    id: artifact.artifactId,
+    status: 'pending',
+    view: run.view,
+    diagramId: run.diagramId,
+    baseRevision: run.baseRevision,
+    baseRevisionId: run.baseRevisionId,
+    laneLock: clone(run.laneLock),
+    title: artifact.title,
+    summary: artifact.summary,
+    requestId: artifact.requestId,
+    acceptanceCriteria: proposalAcceptanceCriteria(artifact),
+    contractPatch: clone(artifact.contractPatch || null),
+    confidence: null,
+    createdAt: artifact.createdAt,
+    reviewedAt: null,
+    evidenceIds,
+    changes: artifact.changes.map(normalizeExchangeProposalChange),
+    application: null,
+    origin: proposalOrigin(run, artifact),
+  };
+}
+
+function snapshotProposal(artifact, run, graph) {
+  const changes = [];
+  const graphNodes = new Map(graph.nodes.map((node) => [node.id, node]));
+  const graphEdges = new Map(graph.edges.map((edge) => [edge.id, edge]));
+  const semanticFields = [
+    'name', 'purpose', 'technical', 'product', 'authorization',
+    'documentRefs', 'interactionModes', 'architectureLayer',
+  ];
+
+  artifact.nodes.forEach((node) => {
+    const existing = graphNodes.get(node.id);
+    const data = Object.fromEntries(semanticFields
+      .filter((field) => node[field] !== undefined)
+      .map((field) => [field, clone(node[field])]));
+    if (!existing) {
+      changes.push({
+        id: changeIdForArtifact(artifact.artifactId, 'add', 'node', node.id),
+        kind: 'add',
+        targetType: 'node',
+        targetId: node.id,
+        summary: `智能体识别到新的架构职责：${node.name}`,
+        evidenceIds: clone(node.evidenceIds),
+        patch: { data },
+      });
+      return;
+    }
+    const patchData = {};
+    semanticFields.forEach((field) => {
+      if (node[field] !== undefined && !sameJson(existing.data?.[field], node[field])) patchData[field] = clone(node[field]);
+    });
+    if (Object.keys(patchData).length) {
+      changes.push({
+        id: changeIdForArtifact(artifact.artifactId, 'update', 'node', node.id),
+        kind: 'update',
+        targetType: 'node',
+        targetId: node.id,
+        summary: `根据仓库证据更新架构职责：${node.name}`,
+        evidenceIds: clone(node.evidenceIds),
+        patch: { data: patchData },
+      });
+    }
+  });
+
+  artifact.edges.forEach((edge) => {
+    const existing = graphEdges.get(edge.id);
+    if (!existing) {
+      changes.push({
+        id: changeIdForArtifact(artifact.artifactId, 'add', 'edge', edge.id),
+        kind: 'add',
+        targetType: 'edge',
+        targetId: edge.id,
+        summary: `智能体识别到新的架构关系：${edge.label}`,
+        evidenceIds: clone(edge.evidenceIds),
+        patch: {
+          source: edge.source,
+          target: edge.target,
+          data: {
+            label: edge.label,
+            relationType: edge.relationType,
+            ...(edge.controlledBoundaryPosture === undefined
+              ? {}
+              : { controlledBoundaryPosture: edge.controlledBoundaryPosture }),
+          },
+        },
+      });
+      return;
+    }
+    if (existing.source !== edge.source || existing.target !== edge.target) {
+      throw new ContractError('快照试图用同一关系 ID 改变连接端点，请使用新的稳定 ID', 'AGENT_EDGE_ID_CONFLICT', 422, {
+        edgeId: edge.id,
+      });
+    }
+    const patchData = {};
+    if (existing.data?.label !== edge.label) patchData.label = edge.label;
+    if (existing.data?.relationType !== edge.relationType) patchData.relationType = edge.relationType;
+    if (
+      edge.controlledBoundaryPosture !== undefined
+      && existing.data?.controlledBoundaryPosture !== edge.controlledBoundaryPosture
+    ) {
+      patchData.controlledBoundaryPosture = edge.controlledBoundaryPosture;
+    }
+    if (Object.keys(patchData).length) {
+      changes.push({
+        id: changeIdForArtifact(artifact.artifactId, 'update', 'edge', edge.id),
+        kind: 'update',
+        targetType: 'edge',
+        targetId: edge.id,
+        summary: `根据仓库证据更新架构关系：${edge.label}`,
+        evidenceIds: clone(edge.evidenceIds),
+        patch: { data: patchData },
+      });
+    }
+  });
+
+  if (!changes.length) return null;
+  const evidenceIds = [...new Set(changes.flatMap((change) => change.evidenceIds))];
+  const notes = [
+    artifact.assumptions.length ? `假设 ${artifact.assumptions.length} 项` : null,
+    artifact.unknowns.length ? `未知项 ${artifact.unknowns.length} 项` : null,
+  ].filter(Boolean).join('，');
+  return {
+    id: artifact.artifactId,
+    status: 'pending',
+    view: run.view,
+    diagramId: run.diagramId,
+    baseRevision: run.baseRevision,
+    baseRevisionId: run.baseRevisionId,
+    laneLock: clone(run.laneLock),
+    title: `审阅 ${run.agentName} 对当前架构的理解`,
+    summary: `智能体基于仓库证据提交了 ${changes.length} 项架构差异${notes ? `；${notes}` : ''}。未在快照中出现的现有节点不会被自动移除。`,
+    requestId: null,
+    acceptanceCriteria: [],
+    confidence: null,
+    createdAt: artifact.createdAt,
+    reviewedAt: null,
+    evidenceIds,
+    changes,
+    application: null,
+    origin: proposalOrigin(run, artifact),
+  };
+}
+
+function reconciliationId(kind, targetType, targetId) {
+  const digest = crypto.createHash('sha256')
+    .update(`${kind}:${targetType}:${targetId}`)
+    .digest('hex')
+    .slice(0, 20);
+  return `drift-${digest}`;
+}
+
+function unsupportedDriftId(item, index) {
+  const digest = crypto.createHash('sha256')
+    .update(`${index}:${item.kind}:${item.targetId}:${item.summary}`)
+    .digest('hex')
+    .slice(0, 20);
+  return `unsupported-${digest}`;
+}
+
+function targetNodeElement(node) {
+  return {
+    id: node.id,
+    targetType: 'node',
+    name: node.data.name,
+    purpose: node.data.purpose,
+    technical: node.data.technical,
+    product: node.data.product,
+    authorization: node.data.authorization,
+    ...(node.data.documentRefs === undefined ? {} : { documentRefs: clone(node.data.documentRefs) }),
+    ...(node.data.interactionModes === undefined ? {} : { interactionModes: clone(node.data.interactionModes) }),
+    ...(node.data.architectureLayer === undefined ? {} : { architectureLayer: node.data.architectureLayer }),
+    evidenceIds: [],
+  };
+}
+
+function targetEdgeElement(edge) {
+  return {
+    id: edge.id,
+    targetType: 'edge',
+    source: edge.source,
+    target: edge.target,
+    label: edge.data.label,
+    relationType: edge.data.relationType,
+    controlledBoundaryPosture: edge.data.controlledBoundaryPosture,
+    evidenceIds: [],
+  };
+}
+
+function actualNodeElement(node) {
+  return {
+    id: node.id,
+    targetType: 'node',
+    name: node.name,
+    purpose: node.purpose,
+    technical: node.technical,
+    product: node.product,
+    authorization: node.authorization,
+    ...(node.documentRefs === undefined ? {} : { documentRefs: clone(node.documentRefs) }),
+    ...(node.interactionModes === undefined ? {} : { interactionModes: clone(node.interactionModes) }),
+    ...(node.architectureLayer === undefined ? {} : { architectureLayer: node.architectureLayer }),
+    evidenceIds: clone(node.evidenceIds),
+  };
+}
+
+function actualEdgeElement(edge) {
+  return {
+    id: edge.id,
+    targetType: 'edge',
+    source: edge.source,
+    target: edge.target,
+    label: edge.label,
+    relationType: edge.relationType,
+    controlledBoundaryPosture: edge.controlledBoundaryPosture,
+    evidenceIds: clone(edge.evidenceIds),
+  };
+}
+
+function reconciliationElementKey(targetType, targetId) {
+  return `${targetType}:${targetId}`;
+}
+
+function hasSufficientCodeEvidence(analysis, element) {
+  if (!element?.evidenceIds?.length) return false;
+  const evidenceById = new Map(analysis.evidence.map((evidence) => [evidence.id, evidence]));
+  return element.evidenceIds.every((id) => {
+    const evidence = evidenceById.get(id);
+    return Boolean(
+      evidence
+      && evidence.sourceKind === 'workspace-file'
+      && evidence.basis === 'code-fact'
+      && evidence.path
+      && evidence.excerpt
+      && evidence.contentHash
+    );
+  });
+}
+
+function serverDriftItem({ kind, targetType, targetId, summary, changedFields = [], target, actual, source = 'server-computed' }) {
+  return {
+    id: reconciliationId(kind, targetType, targetId),
+    kind,
+    source,
+    targetType,
+    targetId,
+    summary,
+    changedFields,
+    target: target ? clone(target) : null,
+    actual: actual ? clone(actual) : null,
+    evidenceIds: clone(actual?.evidenceIds || []),
+    explanation: {
+      status: 'unexplained',
+      summary: null,
+      evidenceIds: [],
+    },
+  };
+}
+
+function buildImplementationReconciliation({ run, targetRevision, snapshot, report, analysis, computedAt }) {
+  const targetElements = new Map();
+  targetRevision.graph.nodes.forEach((node) => {
+    const element = targetNodeElement(node);
+    targetElements.set(reconciliationElementKey('node', element.id), element);
+  });
+  targetRevision.graph.edges.forEach((edge) => {
+    const element = targetEdgeElement(edge);
+    targetElements.set(reconciliationElementKey('edge', element.id), element);
+  });
+
+  const actualElements = new Map();
+  snapshot.nodes.forEach((node) => {
+    const element = actualNodeElement(node);
+    actualElements.set(reconciliationElementKey('node', element.id), element);
+  });
+  snapshot.edges.forEach((edge) => {
+    const element = actualEdgeElement(edge);
+    actualElements.set(reconciliationElementKey('edge', element.id), element);
+  });
+
+  const drift = [];
+  targetElements.forEach((target, key) => {
+    const actual = actualElements.get(key);
+    if (!actual) {
+      drift.push(serverDriftItem({
+        kind: 'missing',
+        targetType: target.targetType,
+        targetId: target.id,
+        summary: `实施后快照缺少正式目标中的${target.targetType === 'node' ? '模块' : '关系'} ${target.id}`,
+        target,
+        actual: null,
+      }));
+      return;
+    }
+    const fields = target.targetType === 'node' ? RECONCILIATION_NODE_FIELDS : RECONCILIATION_EDGE_FIELDS;
+    const changedFields = fields.filter((field) => !sameJson(target[field], actual[field]));
+    if (changedFields.length) {
+      drift.push(serverDriftItem({
+        kind: 'changed',
+        targetType: target.targetType,
+        targetId: target.id,
+        summary: `${target.targetType === 'node' ? '模块职责或权限边界' : '关系或受控边界'}与正式目标不同：${changedFields.join('、')}`,
+        changedFields,
+        target,
+        actual,
+      }));
+    }
+  });
+  actualElements.forEach((actual, key) => {
+    if (!targetElements.has(key)) {
+      drift.push(serverDriftItem({
+        kind: 'extra',
+        targetType: actual.targetType,
+        targetId: actual.id,
+        summary: `实施后快照包含正式目标之外的${actual.targetType === 'node' ? '模块' : '关系'} ${actual.id}`,
+        target: null,
+        actual,
+      }));
+    }
+    if (!hasSufficientCodeEvidence(analysis, actual)) {
+      drift.push(serverDriftItem({
+        kind: 'unverified',
+        source: 'evidence-check',
+        targetType: actual.targetType,
+        targetId: actual.id,
+        summary: `实施后快照中的 ${actual.id} 缺少可核验的 code-fact 证据`,
+        target: targetElements.get(key) || null,
+        actual,
+      }));
+    }
+  });
+
+  const explanations = new Map();
+  const unsupported = [];
+  report.drift.forEach((reported, index) => {
+    if (reported.kind === 'unverified') {
+      const elementCandidates = [...new Set([
+        ...[...targetElements.values()].filter((item) => item.id === reported.targetId).map((item) => reconciliationElementKey(item.targetType, item.id)),
+        ...[...actualElements.values()].filter((item) => item.id === reported.targetId).map((item) => reconciliationElementKey(item.targetType, item.id)),
+      ])];
+      if (elementCandidates.length === 1) {
+        const [key] = elementCandidates;
+        const target = targetElements.get(key) || null;
+        const actual = actualElements.get(key) || null;
+        const targetType = (target || actual).targetType;
+        let item = drift.find((candidate) => (
+          candidate.kind === 'unverified'
+          && candidate.targetType === targetType
+          && candidate.targetId === reported.targetId
+        ));
+        if (!item) {
+          item = serverDriftItem({
+            kind: 'unverified',
+            source: 'agent-declared',
+            targetType,
+            targetId: reported.targetId,
+            summary: `智能体声明 ${reported.targetId} 尚不能由当前证据充分核验`,
+            target,
+            actual,
+          });
+          drift.push(item);
+        }
+        if (!explanations.has(item.id)) {
+          explanations.set(item.id, reported);
+          return;
+        }
+      }
+    } else {
+      const candidates = drift.filter((item) => (
+        item.kind === reported.kind
+        && item.targetId === reported.targetId
+        && !explanations.has(item.id)
+      ));
+      if (candidates.length === 1) {
+        explanations.set(candidates[0].id, reported);
+        return;
+      }
+    }
+    unsupported.push({
+      id: unsupportedDriftId(reported, index),
+      kind: reported.kind,
+      targetId: reported.targetId,
+      summary: reported.summary,
+    });
+  });
+
+  const detailedDrift = drift
+    .map((item) => {
+      const explanation = explanations.get(item.id);
+      const explanationEvidenceIds = explanation ? clone(explanation.evidenceIds) : [];
+      return {
+        ...item,
+        evidenceIds: [...new Set([...item.evidenceIds, ...explanationEvidenceIds])],
+        explanation: explanation
+          ? {
+            status: 'agent-provided',
+            summary: explanation.summary,
+            evidenceIds: explanationEvidenceIds,
+          }
+          : item.explanation,
+      };
+    })
+    .sort((left, right) => (
+      ['missing', 'extra', 'changed', 'unverified'].indexOf(left.kind)
+      - ['missing', 'extra', 'changed', 'unverified'].indexOf(right.kind)
+      || left.targetType.localeCompare(right.targetType)
+      || left.targetId.localeCompare(right.targetId)
+    ));
+  const unreported = detailedDrift
+    .filter((item) => item.explanation.status === 'unexplained')
+    .map((item) => item.id);
+  const counts = {
+    missing: detailedDrift.filter((item) => item.kind === 'missing').length,
+    extra: detailedDrift.filter((item) => item.kind === 'extra').length,
+    changed: detailedDrift.filter((item) => item.kind === 'changed').length,
+    unverified: detailedDrift.filter((item) => item.kind === 'unverified').length,
+    unexplained: detailedDrift.filter((item) => item.explanation.status === 'unexplained').length,
+    unreported: unreported.length,
+    unsupported: unsupported.length,
+  };
+  const crossCheck = {
+    matches: !unreported.length && !unsupported.length,
+    unreported,
+    unsupported,
+  };
+  const unresolved = Boolean(counts.unverified || counts.unexplained || counts.unsupported);
+  const status = !detailedDrift.length && !unsupported.length
+    ? 'aligned'
+    : unresolved
+      ? 'unresolved-drift'
+      : 'explained-drift';
+  return {
+    status,
+    target: clone(run.approvedTarget),
+    snapshotArtifactId: snapshot.artifactId,
+    reportArtifactId: report.artifactId,
+    computedAt,
+    counts,
+    drift: detailedDrift,
+    crossCheck,
+    readyForHumanReview: status !== 'unresolved-drift',
+  };
+}
+
+function assertImplementationTarget(run, state, artifact, { registry, projectRoot }) {
+  if (run.taskType !== 'implementation-reconcile') return;
+  if (!run.approvedTarget) {
+    if (FORMAL_CONTRACT_PROTOCOL_VERSIONS.has(artifact.schemaVersion)) {
+      throw new ContractError(
+        '旧实施运行没有正式目标锁，请创建新的 implementation-reconcile 运行',
+        'AGENT_APPROVED_TARGET_LOCK_REQUIRED',
+        409,
+      );
+    }
+    return;
+  }
+  if (!FORMAL_CONTRACT_PROTOCOL_VERSIONS.has(artifact.schemaVersion)) {
+    throw new ContractError(
+      `新实施运行必须使用协议 ${AI_CODING_PROTOCOL_VERSION}，旧协议不能绕过正式目标核验`,
+      'AGENT_PROTOCOL_UPGRADE_REQUIRED',
+      422,
+      { requiredVersion: AI_CODING_PROTOCOL_VERSION },
+    );
+  }
+  assertExecutableTargetContract(state.target.published, registry, projectRoot);
+  const actualTarget = formalTargetDescriptor(run.diagramId, state.target.published);
+  if (!sameFormalTarget(run.approvedTarget, actualTarget)) {
+    throw new ContractError(
+      '运行锁定的正式目标已经变化，请基于新目标创建新的实施运行',
+      'AGENT_APPROVED_TARGET_STALE',
+      409,
+      { expected: clone(run.approvedTarget), actual: actualTarget },
+    );
+  }
+}
+
+function implementationArtifactRecords(analysis, run) {
+  return analysis.artifacts.filter((record) => record.runId === run.id);
+}
+
+function assertImplementationAcceptanceResults(report, contract) {
+  if (report.artifactType !== 'implementation-report') return;
+  const expected = new Set(contract.acceptanceCriteria.map((criterion) => criterion.id));
+  const submitted = new Set(report.acceptanceResults.map((result) => result.criterionId));
+  const missing = [...expected].filter((id) => !submitted.has(id));
+  const extra = [...submitted].filter((id) => !expected.has(id));
+  if (missing.length || extra.length || submitted.size !== report.acceptanceResults.length) {
+    throw new ContractError(
+      '实施报告必须逐项引用正式开发合同的验收条件，不能漏报、增报或改写',
+      'AGENT_ACCEPTANCE_CONTRACT_MISMATCH',
+      422,
+      { missingCriterionIds: missing, extraCriterionIds: extra },
+    );
+  }
+}
+
+function buildImplementationContractGate({ run, contract, report, computedAt }) {
+  const resultsById = new Map(report.acceptanceResults.map((result) => [result.criterionId, result]));
+  const criteria = contract.acceptanceCriteria.map((criterion) => {
+    const result = resultsById.get(criterion.id);
     return {
-      ...clone(source),
-      lastScannedAt: now,
-      contentHash: material.contentHash,
-      sizeBytes: material.stats.size,
+      criterionId: criterion.id,
+      statement: criterion.statement,
+      targetRefs: clone(criterion.targetRefs),
+      status: result?.status || 'unverified',
+      evidenceIds: clone(result?.evidenceIds || []),
     };
   });
-  const sourcesById = new Map(nextSources.map((source) => [source.id, source]));
-  const retainedEvidence = analysis.evidence.filter((evidence) => (
-    !selectedIds.has(evidence.sourceId) || referencedEvidence.has(evidence.id)
-  )).map(clone);
-  const evidenceById = new Map(retainedEvidence.map((evidence) => [evidence.id, evidence]));
-  selectedSources.forEach((source) => {
-    const material = readAnalysisSource(source.path, projectRoot);
-    const current = sourcesById.get(source.id);
-    collectEvidence({
-      id: current.id,
-      path: current.path,
-      content: material.content,
-      contentHash: material.contentHash,
-    }, now).forEach((evidence) => evidenceById.set(evidence.id, evidence));
-  });
-  const next = {
-    ...clone(analysis),
-    sources: nextSources,
-    evidence: [...evidenceById.values()],
+  const counts = {
+    satisfied: criteria.filter((criterion) => criterion.status === 'satisfied').length,
+    unsatisfied: criteria.filter((criterion) => criterion.status === 'unsatisfied').length,
+    unverified: criteria.filter((criterion) => criterion.status === 'unverified').length,
   };
+  const status = counts.unsatisfied || counts.unverified
+    ? 'criteria-unmet'
+    : report.status === 'complete'
+      ? 'satisfied'
+      : 'claim-incomplete';
+  return {
+    status,
+    contractId: run.approvedTarget.contractId,
+    contractHash: run.approvedTarget.contractHash,
+    reportArtifactId: report.artifactId,
+    computedAt,
+    agentClaimStatus: report.status,
+    counts,
+    criteria,
+    readyForAcceptance: status === 'satisfied',
+  };
+}
+
+function assertImplementationSequence(analysis, run, artifact) {
+  if (run.taskType !== 'implementation-reconcile' || !run.approvedTarget) return null;
+  const records = implementationArtifactRecords(analysis, run);
+  const snapshots = records.filter((record) => record.artifactType === 'architecture-snapshot');
+  const reports = records.filter((record) => record.artifactType === 'implementation-report');
+  if (artifact.artifactType === 'architecture-snapshot') {
+    if (reports.length) {
+      throw new ContractError('实施报告已经提交，不能再替换实施后快照；请创建新的运行', 'AGENT_IMPLEMENTATION_RUN_FINALIZED', 409);
+    }
+    if (snapshots.some((record) => record.id !== artifact.artifactId)) {
+      throw new ContractError('一个实施运行只能绑定一个实施后快照', 'AGENT_RESULTING_SNAPSHOT_CONFLICT', 409);
+    }
+    return null;
+  }
+  if (artifact.artifactType !== 'implementation-report') return null;
+  if (!snapshots.length) {
+    throw new ContractError(
+      '请先提交由 code-fact 支持的实施后架构快照，再提交实施报告',
+      'AGENT_RESULTING_SNAPSHOT_REQUIRED',
+      422,
+    );
+  }
+  if (snapshots.length !== 1 || snapshots[0].id !== artifact.resultingSnapshotArtifactId) {
+    throw new ContractError(
+      '实施报告引用的快照工件与该运行已提交的快照不一致',
+      'AGENT_RESULTING_SNAPSHOT_MISMATCH',
+      422,
+      { submittedSnapshotIds: snapshots.map((record) => record.id) },
+    );
+  }
+  if (!sameFormalTarget(run.approvedTarget, artifact.approvedTarget)) {
+    throw new ContractError(
+      '实施报告引用的正式目标与运行锁定目标不一致',
+      'AGENT_APPROVED_TARGET_MISMATCH',
+      422,
+      { expected: clone(run.approvedTarget), submitted: clone(artifact.approvedTarget) },
+    );
+  }
+  if (!sameJson(snapshots[0].artifact.project.revision, artifact.resultingRevision)) {
+    throw new ContractError(
+      '实施报告的结果版本与实施后快照版本不一致',
+      'AGENT_RESULTING_REVISION_MISMATCH',
+      422,
+    );
+  }
+  if (reports.some((record) => record.id !== artifact.artifactId)) {
+    throw new ContractError('一个实施运行只能绑定一份实施报告', 'AGENT_IMPLEMENTATION_REPORT_CONFLICT', 409);
+  }
+  return snapshots[0].artifact;
+}
+
+function addArtifactRecord(next, run, artifact, submittedAt) {
+  const existing = next.artifacts.find((record) => record.id === artifact.artifactId);
+  if (existing) {
+    if (existing.runId !== run.id || !sameJson(existing.artifact, artifact)) {
+      throw new ContractError('工件 ID 已被其他提交使用', 'AGENT_ARTIFACT_ID_CONFLICT', 409, { artifactId: artifact.artifactId });
+    }
+    return false;
+  }
+  next.artifacts.push(artifactRecord(artifact, run.id, submittedAt));
+  return true;
+}
+
+function proposalCanOverrideProtectedTarget(proposal, analysis, state, beforeGraph, afterGraph) {
+  if (proposal.view !== 'target') return false;
+  const protectedChanges = protectedSemanticChanges(state.meta, proposal.view, beforeGraph, afterGraph);
+  if (!protectedChanges.length) return false;
+  const evidenceById = new Map(analysis.evidence.map((evidence) => [evidence.id, evidence]));
+  return protectedChanges.every(({ nodeId }) => proposal.changes
+    .filter((change) => change.targetType === 'node' && change.targetId === nodeId)
+    .some((change) => change.evidenceIds.some((id) => evidenceById.get(id)?.basis === 'user-confirmed')));
+}
+
+function assertAgentRelatedArchitectureReferences(proposal, graph, catalog) {
+  const changedNodeIds = new Set(proposal.changes
+    .filter((change) => (
+      change.targetType === 'node'
+      && change.kind !== 'remove'
+      && (
+        Object.prototype.hasOwnProperty.call(change.patch?.data || {}, 'relatedDiagramId')
+        || Object.prototype.hasOwnProperty.call(change.patch?.data || {}, 'relatedNodeId')
+      )
+    ))
+    .map((change) => change.targetId));
+  if (!changedNodeIds.size) return;
+  const catalogById = new Map(catalog.diagrams.map((diagram) => [diagram.id, diagram]));
+  const graphByDiagramId = new Map([[proposal.diagramId, graph]]);
+  for (const nodeId of changedNodeIds) {
+    const node = graph.nodes.find((entry) => entry.id === nodeId);
+    const relatedDiagramId = node?.data?.relatedDiagramId;
+    const relatedNodeId = node?.data?.relatedNodeId;
+    if (!relatedDiagramId) continue;
+    const relatedDiagram = catalogById.get(relatedDiagramId);
+    if (!relatedDiagram) {
+      throw new ContractError(
+        '智能体补丁引用了项目目录中不存在的下钻架构图',
+        'AGENT_RELATED_DIAGRAM_NOT_FOUND',
+        422,
+        { targetId: nodeId, relatedDiagramId },
+      );
+    }
+    if (!relatedNodeId) continue;
+    if (!graphByDiagramId.has(relatedDiagramId)) {
+      const relatedLane = readState(relatedDiagram.statePath)[proposal.view];
+      graphByDiagramId.set(relatedDiagramId, relatedLane.draft?.graph || relatedLane.published.graph);
+    }
+    const relatedGraph = graphByDiagramId.get(relatedDiagramId);
+    if (!relatedGraph.nodes.some((entry) => entry.id === relatedNodeId)) {
+      throw new ContractError(
+        '智能体补丁引用的下钻目标节点在对应架构图视图中不存在',
+        'AGENT_RELATED_NODE_NOT_FOUND',
+        422,
+        { targetId: nodeId, relatedDiagramId, relatedNodeId, view: proposal.view },
+      );
+    }
+  }
+}
+
+function applyAgentProposalToDraft(proposal, analysis, state, {
+  workspaceRoot, projectRoot, registry, catalog, now,
+}) {
+  const lane = state[proposal.view];
+  const actualLaneLock = laneLockDescriptor(lane);
+  if (!proposal.laneLock || !sameLaneLock(proposal.laneLock, actualLaneLock)) {
+    throw new ContractError(
+      '智能体写入锁定的正式基线或活动草稿已经变化，请创建新运行并重新提交',
+      'AGENT_RUN_STALE',
+      409,
+      { expectedLaneLock: clone(proposal.laneLock || null), actualLaneLock },
+    );
+  }
+  if (proposal.view === 'current' && proposal.contractPatch) {
+    throw new ContractError(
+      '当前架构草稿不能携带目标开发合同条件；请在目标架构运行中提交合同补丁',
+      'AGENT_CURRENT_CONTRACT_PATCH_FORBIDDEN',
+      422,
+    );
+  }
+  assertProposalEvidenceBasisAllowed(proposal, analysis);
+  assertProposalEvidenceCurrent(proposal, analysis, { workspaceRoot, projectRoot, registry });
+  const priorDraft = lane.draft;
+  const priorContract = proposal.view === 'target' ? editableDraftContractBase(lane) : null;
+  const priorGraph = priorDraft ? priorDraft.graph : lane.published.graph;
+  const graph = applyProposalChanges(priorGraph, proposal, state);
+  assertAgentRelatedArchitectureReferences(proposal, graph, catalog);
+  assertHumanConfirmedSemantics(state.meta, proposal.view, priorGraph, graph, {
+    userConfirmedSemanticOverride: proposalCanOverrideProtectedTarget(
+      proposal,
+      analysis,
+      state,
+      priorGraph,
+      graph,
+    ),
+  });
+  validateNewDocumentBindings(priorGraph, graph, registry, projectRoot);
+  const draftId = priorDraft?.draftId || newDraftId(proposal.view);
+  const draftRevision = priorDraft ? priorDraft.draftRevision + 1 : 1;
+  const developmentContract = proposal.view === 'target'
+    ? draftDevelopmentContract(graph, {
+      draftId,
+      proposal,
+      prior: priorContract,
+      registry,
+      projectRoot,
+    })
+    : null;
+  const graphChanged = agentSemanticHash({ graph }) !== agentSemanticHash({ graph: priorGraph });
+  const criteriaChanged = proposal.view === 'target'
+    && !sameJson(
+      developmentContract?.acceptanceCriteria || [],
+      priorContract?.acceptanceCriteria || [],
+    );
+  if (!graphChanged && !criteriaChanged) {
+    throw new ContractError(
+      '该语义补丁与当前锁定草稿完全相同，没有产生可发布变化',
+      'AGENT_PATCH_NO_EFFECT',
+      422,
+      { diagramId: proposal.diagramId, view: proposal.view },
+    );
+  }
+
+  const candidateDraft = {
+    draftId,
+    draftRevision,
+    baseRevision: lane.published.revision,
+    baseRevisionId: lane.published.revisionId,
+    savedAt: now,
+    graph,
+    developmentContract,
+  };
+  const revertedToPublished = Boolean(priorDraft) && draftEquivalentToPublished(candidateDraft, lane.published, proposal.view);
+  lane.draft = revertedToPublished ? null : candidateDraft;
+  proposal.status = 'draft-applied';
+  proposal.reviewedAt = null;
+  proposal.application = {
+    draftId,
+    draftRevision,
+    appliedAt: now,
+    outcome: revertedToPublished ? 'reverted-to-published' : 'draft-updated',
+  };
+  return clone(proposal.application);
+}
+
+function submitAgentArtifact(analysis, runId, incoming, {
+  workspaceRoot, projectRoot, registry, catalog, diagram,
+}) {
+  assertAgentRequest(incoming, new Set(['artifact', 'evidenceManifest']));
+  const artifact = validateExchangeArtifact(incoming.artifact);
+  const requiresEvidence = ['architecture-snapshot', 'architecture-proposal', 'implementation-report'].includes(artifact.artifactType);
+  const manifest = incoming.evidenceManifest === undefined
+    ? null
+    : validateExchangeArtifact(incoming.evidenceManifest);
+  if (manifest && manifest.artifactType !== 'evidence-manifest') {
+    throw new ContractError('evidenceManifest 必须是证据清单工件', 'AGENT_EVIDENCE_MANIFEST_INVALID', 422);
+  }
+  if (requiresEvidence && !manifest) {
+    throw new ContractError('该工件必须与证据清单一起提交', 'AGENT_EVIDENCE_MANIFEST_REQUIRED', 422);
+  }
+
+  let next = clone(analysis);
+  const run = next.agentRuns.find((item) => item.id === runId);
+  if (!run) throw new ContractError('未找到该智能体运行', 'AGENT_RUN_NOT_FOUND', 404);
+  assertRunArtifactType(run, artifact);
+  const existingArtifact = analysis.artifacts.find((record) => record.id === artifact.artifactId);
+  if (existingArtifact) {
+    if (existingArtifact.runId !== run.id || !sameJson(existingArtifact.artifact, artifact)) {
+      throw new ContractError('工件 ID 已被其他提交使用', 'AGENT_ARTIFACT_ID_CONFLICT', 409, { artifactId: artifact.artifactId });
+    }
+    if (manifest) {
+      const existingManifest = analysis.artifacts.find((record) => record.id === manifest.artifactId);
+      if (!existingManifest || existingManifest.runId !== run.id || !sameJson(existingManifest.artifact, manifest)) {
+        throw new ContractError('证据清单 ID 已被其他提交使用', 'AGENT_ARTIFACT_ID_CONFLICT', 409, { artifactId: manifest.artifactId });
+      }
+    }
+    const replayState = readState(diagram.statePath);
+    return {
+      analysis,
+      artifact,
+      proposal: analysis.proposals.find((item) => item.origin?.artifactId === artifact.artifactId) || null,
+      state: replayState,
+      originalState: clone(replayState),
+      stateChanged: false,
+      draftApplication: analysis.proposals.find((item) => item.origin?.artifactId === artifact.artifactId)?.application || null,
+      replayed: true,
+    };
+  }
+  if (run.status === 'reviewed') {
+    throw new ContractError('该运行已经完成审阅，请创建新的运行提交后续结果', 'AGENT_RUN_ALREADY_REVIEWED', 409);
+  }
+  assertManifestCoversArtifact(artifact, manifest);
+  assertEvidenceBasisIntegrity(manifest);
+  assertEvidenceBasisAllowed(run, artifact, manifest);
+  const state = readState(diagram.statePath);
+  const originalState = clone(state);
+  const lane = state[run.view];
+  const baselineGraph = assertAgentRunLaneLock(run, lane);
+  assertImplementationTarget(run, state, artifact, { registry, projectRoot });
+  if (run.taskType === 'implementation-reconcile' && run.approvedTarget) {
+    assertImplementationAcceptanceResults(artifact, state.target.published.developmentContract);
+  }
+  const resultingSnapshot = assertImplementationSequence(analysis, run, artifact);
+
+  const submittedAt = new Date().toISOString();
+  if (manifest) next = importAgentEvidence(next, manifest, { workspaceRoot, projectRoot, registry }, submittedAt);
+  if (manifest) addArtifactRecord(next, run, manifest, submittedAt);
+  addArtifactRecord(next, run, artifact, submittedAt);
+
+  const targetRun = next.agentRuns.find((item) => item.id === run.id);
+  for (const id of [manifest?.artifactId, artifact.artifactId].filter(Boolean)) {
+    if (!targetRun.artifactIds.includes(id)) targetRun.artifactIds.push(id);
+  }
+  targetRun.status = 'submitted';
+  targetRun.updatedAt = submittedAt;
+  targetRun.submittedAt ||= submittedAt;
+
+  let proposal = null;
+  let draftApplication = null;
+  let stateChanged = false;
+  if (artifact.artifactType === 'architecture-proposal') {
+    proposal = proposalFromExchangeArtifact(artifact, targetRun);
+  } else if (
+    artifact.artifactType === 'architecture-snapshot'
+    && targetRun.taskType !== 'implementation-reconcile'
+  ) {
+    proposal = snapshotProposal(artifact, targetRun, baselineGraph);
+  }
+  if (proposal) {
+    const existingProposal = next.proposals.find((item) => item.id === proposal.id);
+    if (existingProposal && !sameJson(existingProposal.origin, proposal.origin)) {
+      throw new ContractError('提案 ID 已被其他提交使用', 'AGENT_PROPOSAL_ID_CONFLICT', 409, { proposalId: proposal.id });
+    }
+    if (!existingProposal) {
+      draftApplication = applyAgentProposalToDraft(proposal, next, state, {
+        workspaceRoot,
+        projectRoot,
+        registry,
+        catalog,
+        now: submittedAt,
+      });
+      next.proposals.push(proposal);
+      stateChanged = true;
+    } else {
+      proposal = existingProposal;
+    }
+  }
+  if (
+    targetRun.taskType === 'implementation-reconcile'
+    && targetRun.approvedTarget
+    && artifact.artifactType === 'implementation-report'
+  ) {
+    const architectureGate = buildImplementationReconciliation({
+      run: targetRun,
+      targetRevision: state.target.published,
+      snapshot: resultingSnapshot,
+      report: artifact,
+      analysis: next,
+      computedAt: submittedAt,
+    });
+    const contractGate = buildImplementationContractGate({
+      run: targetRun,
+      contract: state.target.published.developmentContract,
+      report: artifact,
+      computedAt: submittedAt,
+    });
+    targetRun.agentClaim = {
+      status: artifact.status,
+      reportArtifactId: artifact.artifactId,
+      claimedAt: submittedAt,
+    };
+    targetRun.architectureGate = architectureGate;
+    targetRun.contractGate = contractGate;
+    targetRun.humanReview = null;
+  }
+  validateAnalysis(next);
+  return {
+    analysis: next,
+    artifact,
+    proposal,
+    state,
+    originalState,
+    stateChanged,
+    draftApplication,
+    replayed: false,
+  };
+}
+
+function architectureGateSummary(gate) {
+  if (!gate) return null;
+  return {
+    status: gate.status,
+    targetRevisionId: gate.target.revisionId,
+    snapshotArtifactId: gate.snapshotArtifactId,
+    reportArtifactId: gate.reportArtifactId,
+    computedAt: gate.computedAt,
+    counts: clone(gate.counts),
+    crossCheckMatches: gate.crossCheck.matches,
+    readyForHumanReview: gate.readyForHumanReview,
+    detailAvailable: true,
+  };
+}
+
+function contractGateSummary(gate) {
+  if (!gate) return null;
+  return {
+    status: gate.status,
+    contractId: gate.contractId,
+    contractHash: gate.contractHash,
+    reportArtifactId: gate.reportArtifactId,
+    computedAt: gate.computedAt,
+    agentClaimStatus: gate.agentClaimStatus,
+    counts: clone(gate.counts),
+    readyForAcceptance: gate.readyForAcceptance,
+    detailAvailable: true,
+  };
+}
+
+function publicAgentRun(run, {
+  includeArchitectureGateDetails = false,
+  includeContractGateDetails = false,
+} = {}) {
+  return {
+    ...clone(run),
+    architectureGate: includeArchitectureGateDetails
+      ? clone(run.architectureGate)
+      : architectureGateSummary(run.architectureGate),
+    contractGate: includeContractGateDetails
+      ? clone(run.contractGate)
+      : contractGateSummary(run.contractGate),
+  };
+}
+
+function agentRunResponse(
+  analysis,
+  runId,
+  {
+    activeDraftId = null,
+    includeArchitectureGateDetails = false,
+    includeContractGateDetails = false,
+  } = {},
+) {
+  const run = analysis.agentRuns.find((item) => item.id === runId);
+  if (!run) throw new ContractError('未找到该智能体运行', 'AGENT_RUN_NOT_FOUND', 404);
+  return {
+    protocolVersion: AI_CODING_PROTOCOL_VERSION,
+    analysisRevision: analysis.baseRevision,
+    run: publicAgentRun(run, { includeArchitectureGateDetails, includeContractGateDetails }),
+    artifacts: analysis.artifacts.filter((record) => record.runId === run.id).map(publicArtifactRecord),
+    proposals: analysis.proposals.filter((proposal) => proposal.origin?.runId === run.id).map((proposal) => ({
+      id: proposal.id,
+      title: proposal.title,
+      status: proposal.status,
+      reviewedAt: proposal.reviewedAt,
+      application: clone(proposal.application),
+      draftWrite: proposal.status === 'draft-applied'
+        ? {
+          status: proposal.application?.outcome === 'reverted-to-published'
+            ? 'reverted-to-published'
+            : 'applied-to-draft',
+          summary: proposal.summary,
+          humanApproved: false,
+        }
+        : null,
+      publication: ['draft-applied', 'accepted'].includes(proposal.status)
+        && proposal.application?.draftId === activeDraftId
+        ? {
+          status: 'awaiting-publication',
+          summary: proposal.summary,
+        }
+        : null,
+    })),
+    permissions: {
+      canSubmit: run.status !== 'reviewed',
+      requiresHumanReview: run.taskType === 'implementation-reconcile' && Boolean(run.agentClaim),
+      canAcceptImplementation: Boolean(
+        run.architectureGate?.readyForHumanReview && run.contractGate?.readyForAcceptance
+      ),
+      agentCanReview: false,
+      canApprove: false,
+      canPublish: false,
+    },
+  };
+}
+
+function updateReviewedRun(analysis, proposal, reviewedAt) {
+  const runId = proposal.origin?.runId;
+  if (!runId) return;
+  const run = analysis.agentRuns.find((item) => item.id === runId);
+  if (!run) return;
+  if (run.taskType === 'implementation-reconcile' && !run.humanReview) {
+    run.status = 'submitted';
+    run.updatedAt = reviewedAt;
+    return;
+  }
+  const hasPendingProposal = analysis.proposals.some((item) => (
+    item.origin?.runId === runId && item.status === 'pending'
+  ));
+  if (!hasPendingProposal) run.status = 'reviewed';
+  run.updatedAt = reviewedAt;
+}
+
+function reviewImplementationRun(analysis, runId, incoming, state, { registry, projectRoot }) {
+  const run = analysis.agentRuns.find((item) => item.id === runId);
+  if (!run) throw new ContractError('未找到该智能体运行', 'AGENT_RUN_NOT_FOUND', 404);
+  if (run.taskType !== 'implementation-reconcile') {
+    throw new ContractError('只有实施核验运行可以进行实施结果验收', 'IMPLEMENTATION_REVIEW_NOT_APPLICABLE', 422);
+  }
+  if (!run.agentClaim || !run.architectureGate) {
+    throw new ContractError('实施报告和自动架构核对尚未完成', 'IMPLEMENTATION_REVIEW_NOT_READY', 409);
+  }
+  if (run.humanReview) {
+    throw new ContractError('该实施结果已经由用户验收，不能覆盖原结论', 'IMPLEMENTATION_ALREADY_REVIEWED', 409);
+  }
+  if (!['accepted', 'revision-requested', 'rejected'].includes(incoming.decision)) {
+    throw new ContractError('人工验收结论无效', 'ANALYSIS_REQUEST_INVALID', 400);
+  }
+  if (typeof incoming.note !== 'string' || !incoming.note.trim() || incoming.note.trim().length > 2000) {
+    throw new ContractError('人工验收必须填写 1–2000 字备注', 'ANALYSIS_REQUEST_INVALID', 400);
+  }
+  if (incoming.decision === 'accepted') {
+    if (!run.contractGate) {
+      throw new ContractError(
+        '该旧实施运行未绑定正式开发合同，不能接受；请基于当前正式目标创建新的实施运行',
+        'IMPLEMENTATION_CONTRACT_GATE_REQUIRED',
+        409,
+      );
+    }
+    const currentContract = assertExecutableTargetContract(
+      state.target.published,
+      registry,
+      projectRoot,
+    );
+    const currentTarget = formalTargetDescriptor(run.diagramId, state.target.published);
+    if (!sameFormalTarget(run.approvedTarget, currentTarget)) {
+      throw new ContractError(
+        '该运行锁定的正式目标已经变化，不能作为当前目标的实施结果接受',
+        'AGENT_APPROVED_TARGET_STALE',
+        409,
+        { expected: clone(run.approvedTarget), actual: currentTarget },
+      );
+    }
+    if (!run.architectureGate.readyForHumanReview) {
+      throw new ContractError(
+        '自动架构核对仍有未解决项，不能接受；请要求修订或拒绝',
+        'IMPLEMENTATION_GATE_NOT_READY',
+        409,
+        { status: run.architectureGate.status, counts: clone(run.architectureGate.counts) },
+      );
+    }
+    const reportRecord = analysis.artifacts.find((record) => (
+      record.id === run.contractGate.reportArtifactId
+      && record.runId === run.id
+      && record.artifactType === 'implementation-report'
+    ));
+    const recomputedContractGate = reportRecord
+      ? buildImplementationContractGate({
+        run,
+        contract: currentContract,
+        report: reportRecord.artifact,
+        computedAt: run.contractGate.computedAt,
+      })
+      : null;
+    if (!recomputedContractGate || !sameJson(recomputedContractGate, run.contractGate)) {
+      throw new ContractError(
+        '实施合同门禁与正式合同或原始报告不一致，不能接受；请创建新的实施运行',
+        'IMPLEMENTATION_CONTRACT_GATE_INVALID',
+        409,
+      );
+    }
+    if (!run.contractGate.readyForAcceptance) {
+      throw new ContractError(
+        '正式开发合同仍有未满足、未核验条件，或智能体尚未声明完整完成；不能接受，请要求修订或拒绝',
+        'IMPLEMENTATION_CONTRACT_GATE_NOT_READY',
+        409,
+        {
+          status: run.contractGate.status,
+          agentClaimStatus: run.contractGate.agentClaimStatus,
+          counts: clone(run.contractGate.counts),
+        },
+      );
+    }
+  }
+
+  const next = clone(analysis);
+  const targetRun = next.agentRuns.find((item) => item.id === runId);
+  const reviewedAt = new Date().toISOString();
+  targetRun.humanReview = {
+    decision: incoming.decision,
+    reviewer: 'local-user',
+    reviewedAt,
+    note: incoming.note.trim(),
+  };
+  targetRun.status = 'reviewed';
+  targetRun.updatedAt = reviewedAt;
   validateAnalysis(next);
   return next;
 }
 
-function modelOutputError() {
-  return new ContractError('AI 返回的提案未通过安全校验，请补充资料后重试', 'AI_OUTPUT_INVALID', 502);
+function configuredGroupNames(state) {
+  return Array.isArray(state.meta?.groups)
+    ? state.meta.groups
+      .map((group) => typeof group?.group === 'string' ? group.group.trim() : '')
+      .filter(Boolean)
+    : [];
 }
 
-function assertModelObject(value, allowedKeys) {
-  if (!isPlainObject(value)) throw modelOutputError();
-  if (Object.keys(value).some((key) => !allowedKeys.has(key))) throw modelOutputError();
-}
-
-function normalizeGeneratedProposals(result, analysis, { diagramId, view, lane, now = new Date().toISOString() }) {
-  try {
-    assertModelObject(result, new Set(['proposals']));
-    if (!Array.isArray(result.proposals) || result.proposals.length > 5) {
-      throw modelOutputError();
+function assertAgentChangePatch(change, state, view) {
+  if (change.kind === 'remove') return;
+  const patch = isPlainObject(change.patch) ? change.patch : {};
+  const allowedPatchKeys = change.targetType === 'edge' ? new Set(['source', 'target', 'data']) : new Set(['data']);
+  const forbiddenPatchKeys = Object.keys(patch).filter((field) => !allowedPatchKeys.has(field));
+  const allowedDataFields = change.targetType === 'edge' ? AGENT_EDGE_DATA_FIELDS : AGENT_NODE_DATA_FIELDS;
+  const forbiddenDataFields = Object.keys(patch.data || {}).filter((field) => !allowedDataFields.has(field));
+  if (forbiddenPatchKeys.length || forbiddenDataFields.length) {
+    throw new ContractError(
+      '智能体补丁包含非架构语义字段；人工确认元数据、布局、端口和路由只能由本地用户维护',
+      'AGENT_PATCH_FIELD_FORBIDDEN',
+      422,
+      {
+        changeId: change.id,
+        targetType: change.targetType,
+        forbiddenPatchFields: forbiddenPatchKeys,
+        forbiddenDataFields,
+      },
+    );
+  }
+  const clearedFields = Object.entries(patch.data || {})
+    .filter(([, value]) => value === null)
+    .map(([field]) => field);
+  const invalidClears = clearedFields.filter((field) => (
+    change.targetType !== 'node'
+    || change.kind !== 'update'
+    || !AGENT_NODE_CLEARABLE_FIELDS.has(field)
+    || (view === 'target' && field === 'horizon')
+  ));
+  if (invalidClears.length) {
+    throw new ContractError(
+      '智能体只能在协议 1.4 的节点更新中显式清除可选语义字段；必填字段、关系字段和目标时间范围不能清除',
+      'AGENT_PATCH_CLEAR_INVALID',
+      422,
+      { changeId: change.id, targetId: change.targetId, invalidFields: invalidClears, view },
+    );
+  }
+  if (clearedFields.includes('relatedDiagramId') || clearedFields.includes('relatedNodeId')) {
+    if (patch.data.relatedDiagramId !== null || patch.data.relatedNodeId !== null) {
+      throw new ContractError(
+        '下钻图与下钻节点引用必须在同一次补丁中成对清除',
+        'AGENT_RELATED_REFERENCE_CLEAR_PAIR_REQUIRED',
+        422,
+        { changeId: change.id, targetId: change.targetId },
+      );
     }
-    const proposals = result.proposals.map((candidate) => {
-      assertModelObject(candidate, new Set(['title', 'summary', 'confidence', 'evidenceIds', 'changes']));
-      if (!Array.isArray(candidate.changes) || !candidate.changes.length) throw modelOutputError();
-      return {
-        id: `proposal-${crypto.randomUUID().toLowerCase()}`,
-        status: 'pending',
-        view,
-        diagramId,
-        baseRevision: lane.published.revision,
-        baseRevisionId: lane.published.revisionId,
-        title: candidate.title,
-        summary: candidate.summary,
-        confidence: candidate.confidence,
-        createdAt: now,
-        reviewedAt: null,
-        evidenceIds: clone(candidate.evidenceIds),
-        changes: candidate.changes.map((change) => {
-          assertModelObject(change, new Set(['kind', 'targetType', 'targetId', 'summary', 'evidenceIds', 'patch']));
-          return {
-            id: `change-${crypto.randomUUID().toLowerCase()}`,
-            kind: change.kind,
-            targetType: change.targetType,
-            targetId: change.targetId,
-            summary: change.summary,
-            evidenceIds: clone(change.evidenceIds),
-            patch: change.patch === null ? null : clone(change.patch),
-          };
-        }),
-        application: null,
-      };
-    });
-    validateAnalysis({ ...clone(analysis), proposals: [...analysis.proposals, ...proposals] });
-    return proposals;
-  } catch (error) {
-    if (error instanceof ContractError && error.code === 'AI_OUTPUT_INVALID') throw error;
-    throw modelOutputError();
+  }
+  if (change.targetType === 'node' && typeof patch.data?.group === 'string' && patch.data.group.trim()) {
+    const allowedGroups = configuredGroupNames(state);
+    if (allowedGroups.length && !allowedGroups.includes(patch.data.group.trim())) {
+      throw new ContractError(
+        '智能体补丁指定了项目配置中不存在的架构分组',
+        'AGENT_NODE_GROUP_INVALID',
+        422,
+        { changeId: change.id, targetId: change.targetId, group: patch.data.group, allowedGroups },
+      );
+    }
   }
 }
 
@@ -714,6 +2382,7 @@ function applyProposalChanges(graph, proposal, state) {
     .map((change, index) => ({ change, index }))
     .sort((left, right) => proposalChangePhase(left.change) - proposalChangePhase(right.change) || left.index - right.index)
     .map(({ change }) => change);
+  changes.forEach((change) => assertAgentChangePatch(change, state, proposal.view));
   let generatedIndex = 0;
   const nodeById = () => new Map(next.nodes.map((node) => [node.id, node]));
   const edgeById = () => new Map(next.edges.map((edge) => [edge.id, edge]));
@@ -726,6 +2395,8 @@ function applyProposalChanges(graph, proposal, state) {
         if (nodes.has(change.targetId)) {
           throw new ContractError('提案新增的节点已存在，请刷新后重新审阅', 'PROPOSAL_TARGET_CONFLICT', 409, { targetId: change.targetId });
         }
+        const nodeData = clone(change.patch.data || {});
+        const explicitGroup = typeof nodeData.group === 'string' ? nodeData.group.trim() : '';
         next.nodes.push({
           id: change.targetId,
           type: NODE_TYPE,
@@ -733,8 +2404,8 @@ function applyProposalChanges(graph, proposal, state) {
           width: DEFAULT_NODE_WIDTH,
           height: DEFAULT_NODE_HEIGHT,
           data: {
-            ...clone(change.patch.data),
-            group: sourceGroupForGeneratedNode(next, proposal, change.targetId, state),
+            ...nodeData,
+            group: explicitGroup || sourceGroupForGeneratedNode(next, proposal, change.targetId, state),
           },
         });
         return;
@@ -749,10 +2420,16 @@ function applyProposalChanges(graph, proposal, state) {
         next.nodes = next.nodes.filter((node) => node.id !== change.targetId);
         return;
       }
-      next.nodes = next.nodes.map((node) => node.id === change.targetId ? {
-        ...node,
-        data: { ...node.data, ...clone(change.patch.data) },
-      } : node);
+      next.nodes = next.nodes.map((node) => {
+        if (node.id !== change.targetId) return node;
+        const data = { ...node.data };
+        for (const [field, value] of Object.entries(change.patch.data || {})) {
+          if (value === null) delete data[field];
+          else data[field] = clone(value);
+        }
+        if (typeof data.group === 'string') data.group = data.group.trim();
+        return { ...node, data };
+      });
       return;
     }
 
@@ -763,13 +2440,16 @@ function applyProposalChanges(graph, proposal, state) {
       if (!nodes.has(change.patch.source) || !nodes.has(change.patch.target)) {
         throw new ContractError('新增关系引用的节点不存在', 'PROPOSAL_EDGE_NODE_MISSING', 422, { targetId: change.targetId });
       }
+      if (change.patch.source === change.patch.target) {
+        throw new ContractError('架构关系不允许自连接', 'PROPOSAL_EDGE_SELF_LOOP', 422, { targetId: change.targetId });
+      }
       next.edges.push({
         id: change.targetId,
         source: change.patch.source,
         target: change.patch.target,
         data: {
-          ...clone(change.patch.data),
           controlledBoundaryPosture: 'none',
+          ...clone(change.patch.data),
           routingMode: 'auto',
         },
       });
@@ -784,58 +2464,28 @@ function applyProposalChanges(graph, proposal, state) {
     }
     next.edges = next.edges.map((edge) => {
       if (edge.id !== change.targetId) return edge;
+      const source = change.patch.source === undefined ? edge.source : change.patch.source;
+      const target = change.patch.target === undefined ? edge.target : change.patch.target;
+      if (!nodes.has(source) || !nodes.has(target)) {
+        throw new ContractError('关系端点更新引用了不存在的节点', 'PROPOSAL_EDGE_NODE_MISSING', 422, {
+          targetId: change.targetId,
+          source,
+          target,
+        });
+      }
+      if (source === target) {
+        throw new ContractError('架构关系不允许自连接', 'PROPOSAL_EDGE_SELF_LOOP', 422, { targetId: change.targetId });
+      }
       return {
         ...edge,
+        source,
+        target,
         data: { ...edge.data, ...clone(change.patch.data || {}) },
       };
     });
   });
   validateGraph(next, proposal.view);
   return next;
-}
-
-function analysisModelInput({ diagram, view, lane, analysis }) {
-  const selectedSources = analysis.sources.filter((source) => source.selected && source.lastScannedAt && source.contentHash);
-  const selectedSourceIds = new Set(selectedSources.map((source) => source.id));
-  const evidence = analysis.evidence.filter((item) => {
-    const source = selectedSources.find((candidate) => candidate.id === item.sourceId);
-    return selectedSourceIds.has(item.sourceId) && source?.contentHash === item.contentHash;
-  }).slice(0, 64);
-  if (!evidence.length) {
-    throw new ContractError('请先扫描已选资料，再生成 AI 提案', 'ANALYSIS_EVIDENCE_REQUIRED', 422);
-  }
-  return {
-    task: 'architecture-governance-proposal',
-    diagram: { id: diagram.id, title: diagram.title, description: diagram.description },
-    view,
-    published: {
-      revision: lane.published.revision,
-      revisionId: lane.published.revisionId,
-      graph: clone(lane.published.graph),
-    },
-    sources: selectedSources.map((source) => ({
-      id: source.id,
-      path: source.path,
-      label: source.label,
-      contentHash: source.contentHash,
-    })),
-    evidence: evidence.map(clone),
-  };
-}
-
-async function generateWithSafeProvider(analysisProvider, input) {
-  try {
-    return await analysisProvider.generate(input);
-  } catch (error) {
-    if (error instanceof AnalysisProviderError) throw error;
-    if (error?.code === 'AI_PROVIDER_NOT_CONFIGURED') {
-      throw new AnalysisProviderError('尚未配置 AI 服务密钥', 'AI_PROVIDER_NOT_CONFIGURED', 503);
-    }
-    if (error?.code === 'AI_PROVIDER_UNAVAILABLE') {
-      throw new AnalysisProviderError('AI 服务暂时不可访问，请稍后重试', 'AI_PROVIDER_UNAVAILABLE', 502);
-    }
-    throw new AnalysisProviderError('AI 服务暂时无法生成提案，请稍后重试', 'AI_PROVIDER_FAILED', 502);
-  }
 }
 
 function responseLayout(layout, view, diagramId = 'default') {
@@ -1062,6 +2712,414 @@ function enrichedRegistry(registry, stateOrEntries, projectRoot = resolveProject
   };
 }
 
+function pickAgentFields(value, allowed) {
+  return Object.fromEntries(Object.entries(value || {}).filter(([key, item]) => allowed.has(key) && item !== undefined));
+}
+
+function compactAgentArchitecture(revision) {
+  const { graph, developmentContract, ...metadata } = revision;
+  return {
+    ...clone(metadata),
+    representation: 'semantic-graph-v1',
+    graph: {
+      nodes: graph.nodes.map((node) => ({
+        id: node.id,
+        ...(node.type ? { type: node.type } : {}),
+        data: pickAgentFields(node.data, AGENT_NODE_DATA_FIELDS),
+      })),
+      edges: graph.edges.map((edge) => ({
+        id: edge.id,
+        source: edge.source,
+        target: edge.target,
+        data: pickAgentFields(edge.data, AGENT_EDGE_DATA_FIELDS),
+      })),
+    },
+  };
+}
+
+function canonicalizeJson(value) {
+  if (Array.isArray(value)) return value.map(canonicalizeJson);
+  if (!isPlainObject(value)) return value;
+  return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalizeJson(value[key])]));
+}
+
+function sha256Json(value) {
+  return crypto.createHash('sha256').update(JSON.stringify(canonicalizeJson(value))).digest('hex');
+}
+
+function canonicalAgentSemanticGraph(revision) {
+  const graph = compactAgentArchitecture(revision).graph;
+  return canonicalizeJson({
+    nodes: [...graph.nodes].sort((left, right) => left.id.localeCompare(right.id)),
+    edges: [...graph.edges].sort((left, right) => left.id.localeCompare(right.id)),
+  });
+}
+
+function agentSemanticHash(revision) {
+  return sha256Json(canonicalAgentSemanticGraph(revision));
+}
+
+function graphContractTargetRefs(graph) {
+  return [
+    ...graph.nodes.map((node) => ({ targetType: 'node', targetId: node.id })),
+    ...graph.edges.map((edge) => ({ targetType: 'edge', targetId: edge.id })),
+  ].sort((left, right) => `${left.targetType}:${left.targetId}`.localeCompare(`${right.targetType}:${right.targetId}`));
+}
+
+function graphContractBoundaryRefs(graph) {
+  return [
+    ...graph.nodes.map((node) => ({
+      targetType: 'node',
+      targetId: node.id,
+      field: 'authorization',
+      value: node.data.authorization,
+    })),
+    ...graph.edges.map((edge) => ({
+      targetType: 'edge',
+      targetId: edge.id,
+      field: 'controlledBoundaryPosture',
+      value: edge.data.controlledBoundaryPosture,
+    })),
+  ].sort((left, right) => (
+    `${left.targetType}:${left.targetId}:${left.field}`.localeCompare(`${right.targetType}:${right.targetId}:${right.field}`)
+  ));
+}
+
+function graphDocumentIds(graph) {
+  return [...new Set(graph.nodes.flatMap((node) => node.data.documentRefs || []))].sort();
+}
+
+function frozenDocumentIndex(graph, registry, projectRoot) {
+  const documentsById = new Map(registry.documents.map((document) => [document.id, document]));
+  return graphDocumentIds(graph).map((documentId) => {
+    const document = documentsById.get(documentId);
+    if (!document) {
+      throw new ContractError('目标架构绑定了注册表中不存在的文档', 'UNKNOWN_DOCUMENT_BINDING', 422, { documentId });
+    }
+    if (['archived', 'superseded'].includes(document.status)) {
+      throw new ContractError('目标开发合同不能冻结已归档或已替代文档', 'DOCUMENT_BINDING_BLOCKED', 422, {
+        documentId,
+        status: document.status,
+      });
+    }
+    const material = readRegisteredDocumentMaterial(document, null, projectRoot);
+    return {
+      id: document.id,
+      title: document.title,
+      path: document.path,
+      summary: document.summary,
+      status: document.status,
+      authority: document.authority,
+      lastVerifiedAt: document.lastVerifiedAt,
+      contentHash: material.fullHash,
+      sizeBytes: material.stats.size,
+    };
+  });
+}
+
+function contractDocumentSetHash(documents) {
+  return sha256Json(documents.map((document) => ({
+    id: document.id,
+    status: document.status,
+    authority: document.authority,
+    path: document.path,
+    contentHash: document.contentHash,
+  })));
+}
+
+function contractDocumentBinding(document, contentHash = document.contentHash) {
+  return {
+    id: document.id,
+    status: document.status,
+    authority: document.authority,
+    path: document.path,
+    contentHash,
+  };
+}
+
+function contractHash(contract) {
+  const { contractHash: ignored, ...content } = contract;
+  return sha256Json(content);
+}
+
+function proposalContractSource(proposal) {
+  if (!proposal) return null;
+  return {
+    proposalId: proposal.id,
+    requestId: proposal.requestId || null,
+    artifactId: proposal.origin?.artifactId || null,
+    runId: proposal.origin?.runId || null,
+  };
+}
+
+function editableDraftContractBase(lane) {
+  if (lane.draft?.developmentContract) return lane.draft.developmentContract;
+  const published = lane.published?.developmentContract;
+  if (!published || !['executable', 'not-executable'].includes(published.status)) return null;
+  return {
+    contractId: null,
+    source: clone(published.source || null),
+    acceptanceCriteria: clone(published.acceptanceCriteria || []),
+  };
+}
+
+function comparableCriteria(contract) {
+  return clone(contract?.acceptanceCriteria || [])
+    .sort((left, right) => left.id.localeCompare(right.id));
+}
+
+function comparableDocumentBindings(contract) {
+  return clone(contract?.documents || [])
+    .map((document) => contractDocumentBinding(document))
+    .sort((left, right) => left.id.localeCompare(right.id));
+}
+
+function draftEquivalentToPublished(draft, published, view) {
+  if (agentSemanticHash({ graph: draft.graph }) !== agentSemanticHash(published)) return false;
+  if (view !== 'target') return true;
+  return sameJson(
+    comparableCriteria(draft.developmentContract),
+    comparableCriteria(published.developmentContract),
+  ) && sameJson(
+    comparableDocumentBindings(draft.developmentContract),
+    comparableDocumentBindings(published.developmentContract),
+  );
+}
+
+function draftDevelopmentContract(graph, { draftId, proposal = null, prior = null, registry, projectRoot }) {
+  const acceptanceCriteriaById = new Map();
+  for (const criterion of prior?.acceptanceCriteria || []) {
+    acceptanceCriteriaById.set(criterion.id, clone(criterion));
+  }
+  if (proposal?.contractPatch) {
+    for (const criterion of proposal.contractPatch.upsert || []) {
+      acceptanceCriteriaById.set(criterion.id, {
+        id: criterion.id,
+        statement: criterion.statement,
+        targetRefs: clone(criterion.targetRefs),
+      });
+    }
+    for (const operation of proposal.contractPatch.delete || []) {
+      if (!acceptanceCriteriaById.has(operation.id)) {
+        throw new ContractError(
+          '合同补丁试图删除活动目标草稿中不存在的验收条件',
+          'PROPOSAL_CONTRACT_CRITERION_NOT_FOUND',
+          409,
+          { criterionId: operation.id },
+        );
+      }
+      acceptanceCriteriaById.delete(operation.id);
+    }
+  } else {
+    for (const criterion of proposal?.acceptanceCriteria || []) {
+      const existing = acceptanceCriteriaById.get(criterion.id);
+      if (existing && !sameJson(existing, criterion)) {
+        throw new ContractError(
+          '旧版 acceptanceCriteria 不能用同一 ID 覆盖草稿条件；请使用显式 contractPatch.upsert',
+          'PROPOSAL_CONTRACT_CRITERION_CONFLICT',
+          409,
+          { criterionId: criterion.id },
+        );
+      }
+      if (!existing) acceptanceCriteriaById.set(criterion.id, clone(criterion));
+    }
+  }
+  const acceptanceCriteria = [...acceptanceCriteriaById.values()];
+  const source = clone(prior?.source || (proposal ? proposalContractSource(proposal) : null));
+  return {
+    schemaVersion: DEVELOPMENT_CONTRACT_SCHEMA_VERSION,
+    status: 'draft',
+    contractId: prior?.contractId || `contract-${draftId}`,
+    target: { revision: null, revisionId: null, semanticHash: null },
+    source,
+    acceptanceCriteria,
+    targetRefs: graphContractTargetRefs(graph),
+    boundaryRefs: graphContractBoundaryRefs(graph),
+    documents: frozenDocumentIndex(graph, registry, projectRoot),
+    frozenAt: null,
+    frozenBy: null,
+    contractHash: null,
+    documentSetHash: null,
+    executionReason: acceptanceCriteria.length
+      ? '该开发合同仍是草案，必须由用户正式发布后才能用于实施。'
+      : '草案尚未绑定可执行验收标准。',
+  };
+}
+
+function acceptanceCriteriaReferenceExistingTargets(criteria, graph) {
+  const valid = new Set(graphContractTargetRefs(graph).map((ref) => `${ref.targetType}:${ref.targetId}`));
+  return criteria.every((criterion) => criterion.targetRefs.every((ref) => valid.has(`${ref.targetType}:${ref.targetId}`)));
+}
+
+function assertDraftBoundDocumentsCurrent(draftContract, graph, registry, projectRoot) {
+  const expected = clone(draftContract?.documents || []);
+  let current;
+  try {
+    current = frozenDocumentIndex(graph, registry, projectRoot);
+  } catch (error) {
+    throw new ContractError(
+      '目标草稿绑定文档在审阅后发生变化；请刷新草稿合同并重新检查后再发布',
+      'DRAFT_BOUND_DOCUMENT_STALE',
+      409,
+      { causeCode: error.code || 'DOCUMENT_BINDING_UNAVAILABLE', cause: error.message },
+    );
+  }
+  const expectedBindings = expected.map((document) => contractDocumentBinding(document));
+  const currentBindings = current.map((document) => contractDocumentBinding(document));
+  if (!sameJson(expectedBindings, currentBindings)) {
+    throw new ContractError(
+      '目标草稿绑定文档在审阅后发生变化；请刷新草稿合同并重新检查后再发布',
+      'DRAFT_BOUND_DOCUMENT_STALE',
+      409,
+      { expected: expectedBindings, current: currentBindings },
+    );
+  }
+  return current;
+}
+
+function freezeDevelopmentContract(draftContract, graph, revision, registry, projectRoot, frozenAt, verifiedDocuments = null) {
+  const acceptanceCriteria = clone(draftContract?.acceptanceCriteria || []);
+  const documents = verifiedDocuments ? clone(verifiedDocuments) : frozenDocumentIndex(graph, registry, projectRoot);
+  const refsValid = acceptanceCriteriaReferenceExistingTargets(acceptanceCriteria, graph);
+  const executable = acceptanceCriteria.length > 0 && refsValid;
+  const frozen = {
+    schemaVersion: DEVELOPMENT_CONTRACT_SCHEMA_VERSION,
+    status: executable ? 'executable' : 'not-executable',
+    contractId: `contract-${revision.revisionId}`,
+    target: {
+      revision: revision.revision,
+      revisionId: revision.revisionId,
+      semanticHash: agentSemanticHash({ graph }),
+    },
+    source: clone(draftContract?.source || null),
+    acceptanceCriteria,
+    targetRefs: graphContractTargetRefs(graph),
+    boundaryRefs: graphContractBoundaryRefs(graph),
+    documents,
+    frozenAt,
+    frozenBy: 'user',
+    contractHash: null,
+    documentSetHash: contractDocumentSetHash(documents),
+    executionReason: executable
+      ? null
+      : acceptanceCriteria.length
+        ? '验收条件引用了该目标版本中不存在的架构项。'
+        : '该正式目标没有用户发布的可观察验收条件，不能启动严格实施闭环。',
+  };
+  frozen.contractHash = contractHash(frozen);
+  return frozen;
+}
+
+function compactDevelopmentContract(contract) {
+  return contract ? clone(contract) : null;
+}
+
+function compactDraftDevelopmentContract(contract) {
+  if (!contract) return null;
+  return {
+    contractId: contract.contractId,
+    status: 'draft',
+    unpublished: true,
+    acceptanceCriteria: clone(contract.acceptanceCriteria || []),
+    targetRefs: clone(contract.targetRefs || []),
+    boundaryRefs: clone(contract.boundaryRefs || []),
+    documentIds: (contract.documents || []).map((document) => document.id),
+    executionReason: contract.executionReason || null,
+  };
+}
+
+function assertExecutableTargetContract(revision, registry, projectRoot) {
+  const contract = revision.developmentContract;
+  if (!contract || contract.status !== 'executable') {
+    throw new ContractError(
+      '当前正式目标没有可执行开发合同；请先发布带稳定验收条件的目标提案',
+      'AGENT_TARGET_NOT_EXECUTABLE',
+      409,
+      { revisionId: revision.revisionId, contractStatus: contract?.status || 'unbound' },
+    );
+  }
+  if (contract.contractHash !== contractHash(contract)
+    || contract.documentSetHash !== contractDocumentSetHash(contract.documents)) {
+    throw new ContractError('正式目标开发合同完整性校验失败', 'AGENT_TARGET_CONTRACT_INVALID', 409, {
+      revisionId: revision.revisionId,
+    });
+  }
+  const semanticHash = agentSemanticHash(revision);
+  if (contract.target.semanticHash !== semanticHash
+    || !sameJson(contract.targetRefs, graphContractTargetRefs(revision.graph))
+    || !sameJson(contract.boundaryRefs, graphContractBoundaryRefs(revision.graph))) {
+    throw new ContractError('正式目标语义图与冻结开发合同不一致', 'AGENT_TARGET_CONTRACT_INVALID', 409, {
+      revisionId: revision.revisionId,
+      expectedSemanticHash: contract.target.semanticHash,
+      actualSemanticHash: semanticHash,
+    });
+  }
+  const registryById = new Map(registry.documents.map((document) => [document.id, document]));
+  const staleDocumentIds = [];
+  contract.documents.forEach((locked) => {
+    try {
+      const document = registryById.get(locked.id);
+      const material = document ? readRegisteredDocumentMaterial(document, null, projectRoot) : null;
+      const currentBinding = material ? contractDocumentBinding(document, material.fullHash) : null;
+      if (!currentBinding
+        || sha256Json(currentBinding) !== sha256Json(contractDocumentBinding(locked))) {
+        staleDocumentIds.push(locked.id);
+      }
+    } catch {
+      staleDocumentIds.push(locked.id);
+    }
+  });
+  if (staleDocumentIds.length) {
+    throw new ContractError(
+      '正式目标绑定的文档已经变化，请由用户重新发布目标合同后再继续',
+      'AGENT_BOUND_DOCUMENT_STALE',
+      409,
+      { documentIds: staleDocumentIds },
+    );
+  }
+  return contract;
+}
+
+function formalTargetDescriptor(diagramId, revision) {
+  return {
+    status: 'executable-formal-baseline',
+    diagramId,
+    revision: revision.revision,
+    revisionId: revision.revisionId,
+    semanticHash: revision.developmentContract.target.semanticHash,
+    contractId: revision.developmentContract.contractId,
+    contractHash: revision.developmentContract.contractHash,
+    documentSetHash: revision.developmentContract.documentSetHash,
+  };
+}
+
+function publishedTargetBaseline(diagramId, revision, registry, projectRoot) {
+  const contract = revision.developmentContract;
+  let formalBaseline = null;
+  let baselineStatus = contract?.status || 'unbound';
+  let executionIssue = null;
+  if (contract?.status === 'executable') {
+    try {
+      assertExecutableTargetContract(revision, registry, projectRoot);
+      formalBaseline = formalTargetDescriptor(diagramId, revision);
+      baselineStatus = 'executable-formal-baseline';
+    } catch (error) {
+      if (!['AGENT_BOUND_DOCUMENT_STALE', 'AGENT_TARGET_CONTRACT_INVALID'].includes(error.code)) throw error;
+      baselineStatus = 'stale-formal-contract';
+      executionIssue = { code: error.code, message: error.message, details: error.details || null };
+    }
+  }
+  return { baselineStatus, formalBaseline, executionIssue };
+}
+
+function sameFormalTarget(left, right) {
+  return Boolean(left && right) && [
+    'status', 'diagramId', 'revision', 'revisionId', 'semanticHash',
+    ...(left.status === 'executable-formal-baseline' ? ['contractId', 'contractHash', 'documentSetHash'] : []),
+  ]
+    .every((field) => left[field] === right[field]);
+}
+
 function addedDocumentRefs(beforeGraph, afterGraph) {
   const before = new Map(beforeGraph.nodes.map((node) => [node.id, new Set(node.data.documentRefs || [])]));
   const added = [];
@@ -1178,7 +3236,7 @@ function extractSection(content, section) {
   return lines.slice(start, end).join('\n');
 }
 
-function previewDocument(document, section, projectRoot = resolveProjectDirectory()) {
+function readRegisteredDocumentMaterial(document, section, projectRoot = resolveProjectDirectory()) {
   const { absolutePath, stats } = resolveSafeDocument(document.path, projectRoot);
   let fullContent;
   try {
@@ -1186,19 +3244,33 @@ function previewDocument(document, section, projectRoot = resolveProjectDirector
   } catch {
     throw new ContractError('无法读取文档正文', 'DOCUMENT_UNREADABLE', 422, { path: document.path });
   }
-  const scoped = extractSection(fullContent, section);
-  const scopedBuffer = Buffer.from(scoped, 'utf8');
+  const scopedContent = extractSection(fullContent, section);
+  return {
+    stats,
+    fullContent,
+    scopedContent,
+    fullHash: crypto.createHash('sha256').update(fullContent).digest('hex'),
+    scopedHash: crypto.createHash('sha256').update(scopedContent).digest('hex'),
+  };
+}
+
+function previewDocument(document, section, projectRoot = resolveProjectDirectory()) {
+  const material = readRegisteredDocumentMaterial(document, section, projectRoot);
+  const scopedBuffer = Buffer.from(material.scopedContent, 'utf8');
   const truncated = scopedBuffer.length > MAX_PREVIEW_BYTES;
   const content = truncated
     ? scopedBuffer.subarray(0, MAX_PREVIEW_BYTES).toString('utf8').replace(/\uFFFD$/, '')
-    : scoped;
+    : material.scopedContent;
   return {
     documentId: document.id,
+    title: document.title,
     path: document.path,
     section: section || null,
     content,
     truncated,
-    sizeBytes: stats.size,
+    sizeBytes: material.stats.size,
+    contentHash: material.scopedHash,
+    fullContentHash: material.fullHash,
     diagnostics: documentFileDiagnostics(document, projectRoot),
   };
 }
@@ -1240,6 +3312,7 @@ function serveFile(req, res, staticRoot, pathname) {
 
 function createServer(options = {}) {
   const projectRoot = resolveProjectDirectory(options.projectDirectory || options.projectRoot || options.commandRoot);
+  const workspaceRoot = resolveWorkspaceRoot(options.workspaceRoot, projectRoot);
   const stateFile = resolveStateFile(options.stateFile, projectRoot);
   const documentsFile = resolveDocumentsFile(options.documentsFile, projectRoot);
   const layoutFile = resolveLayoutFile(options.layoutFile, projectRoot);
@@ -1249,14 +3322,17 @@ function createServer(options = {}) {
     : (options.stateFile || options.layoutFile
       ? path.join(path.dirname(stateFile), PROJECT_FILES.catalog)
       : resolveCatalogFile(undefined, projectRoot));
+  const registeredFlowsFile = resolveRegisteredFlowsFile(options.registeredFlowsFile, projectRoot);
   const analysisFile = options.analysisFile !== undefined
     ? resolveAnalysisFile(options.analysisFile, projectRoot)
     : (options.stateFile || options.layoutFile
       ? path.join(path.dirname(stateFile), PROJECT_FILES.analysis)
       : resolveAnalysisFile(undefined, projectRoot));
-  const analysisProvider = options.analysisProvider || createDeepSeekProvider(options.analysisProviderOptions);
   const staticRoot = resolveStaticRoot(options.staticRoot || process.env.STATIC_ROOT);
   const skillsRoot = path.resolve(options.skillsRoot || path.join(ROOT, 'skills'));
+  const afterAgentDraftStateWrite = typeof options.afterAgentDraftStateWrite === 'function'
+    ? options.afterAgentDraftStateWrite
+    : null;
 
   return http.createServer(async (req, res) => {
     try {
@@ -1271,146 +3347,280 @@ function createServer(options = {}) {
         return json(res, 200, readSkillCatalog(skillsRoot));
       }
 
+      if (req.method === 'GET' && pathname === '/api/agent/context') {
+        const catalog = readArchitectureCatalog(catalogFile, stateFile, layoutFile);
+        const diagram = agentDiagram(catalog, requestUrl.searchParams.get('diagram'));
+        const view = requestUrl.searchParams.get('view') || 'current';
+        if (!['current', 'target'].includes(view)) {
+          throw new ContractError('智能体上下文 view 必须是 current 或 target', 'AGENT_VIEW_INVALID', 422);
+        }
+        const lane = readState(diagram.statePath)[view];
+        const config = readViewerConfig(configFile);
+        const registry = readRegistry(documentsFile);
+        const targetBaseline = view === 'target'
+          ? publishedTargetBaseline(diagram.id, lane.published, registry, projectRoot)
+          : null;
+        return json(res, 200, {
+          protocolVersion: AI_CODING_PROTOCOL_VERSION,
+          project: {
+            id: config.projectId,
+            name: config.projectName,
+            scopeNote: resolvedConfigText(config.scopeNote, config.defaultLanguage || 'zh'),
+          },
+          diagrams: publicArchitectureCatalog(catalog),
+          selected: {
+            diagramId: diagram.id,
+            view,
+            title: diagram.title,
+            description: diagram.description,
+            published: compactAgentArchitecture(lane.published),
+            developmentContract: view === 'target'
+              ? compactDevelopmentContract(lane.published.developmentContract)
+              : null,
+            ...(targetBaseline || {}),
+            draft: lane.draft ? {
+              draftId: lane.draft.draftId,
+              draftRevision: lane.draft.draftRevision,
+              baseRevision: lane.draft.baseRevision,
+              baseRevisionId: lane.draft.baseRevisionId,
+              savedAt: lane.draft.savedAt,
+              representation: 'semantic-graph-v1',
+              graph: compactAgentArchitecture(lane.draft).graph,
+              developmentContract: view === 'target'
+                ? compactDraftDevelopmentContract(lane.draft.developmentContract)
+                : null,
+            } : null,
+          },
+          documents: registry.documents.map((document) => ({
+            id: document.id,
+            title: document.title,
+            path: document.path,
+            summary: document.summary,
+            status: document.status,
+            authority: document.authority,
+            lastVerifiedAt: document.lastVerifiedAt,
+            diagnostics: documentFileDiagnostics(document, projectRoot),
+          })),
+          workflow: {
+            createRunFirst: true,
+            evidenceRequired: true,
+            supportedEvidenceBases: ['user-confirmed', 'design-document', 'code-fact', 'agent-inference'],
+            conceptProjectsSupported: true,
+            currentArchitectureRequiresCodeFacts: true,
+            implementationRequiresPublishedTarget: true,
+            implementationSnapshotFirst: true,
+            serverComputedReconciliation: true,
+            serverComputedContractGate: true,
+            implementationHumanReviewRequired: true,
+            evidencePathsAreWorkspaceRelative: true,
+            projectDocumentsUseRegisteredIds: true,
+            projectDocumentsCannotProveImplementation: true,
+            separateWorkspaceConfigured: workspaceRoot !== projectRoot,
+            architectureChangesApplyToDraft: true,
+            architectureChangeHumanReviewRequired: false,
+            architecturePublicationHumanOnly: true,
+            agentCanReview: false,
+            agentCanApprove: false,
+            agentCanPublish: false,
+          },
+        });
+      }
+
+      if (req.method === 'POST' && pathname === '/api/agent/runs') {
+        const incoming = await readJsonBody(req);
+        const catalog = readArchitectureCatalog(catalogFile, stateFile, layoutFile);
+        const run = createAgentRun(incoming, catalog, {
+          registry: readRegistry(documentsFile),
+          projectRoot,
+        });
+        const analysis = readAnalysis(analysisFile);
+        const next = { ...clone(analysis), agentRuns: [...analysis.agentRuns, run] };
+        const saved = writeAnalysis(next, analysisFile);
+        return json(res, 201, agentRunResponse(saved, run.id));
+      }
+
+      const agentRunMatch = /^\/api\/agent\/runs\/([a-z0-9][a-z0-9._-]{0,79})$/.exec(pathname);
+      if (req.method === 'GET' && agentRunMatch) {
+        const analysis = readAnalysis(analysisFile);
+        const run = analysis.agentRuns.find((item) => item.id === agentRunMatch[1]);
+        if (!run) throw new ContractError('未找到该智能体运行', 'AGENT_RUN_NOT_FOUND', 404);
+        const catalog = readArchitectureCatalog(catalogFile, stateFile, layoutFile);
+        const diagram = agentDiagram(catalog, run.diagramId);
+        const activeDraftId = readState(diagram.statePath)[run.view].draft?.draftId || null;
+        const details = requestUrl.searchParams.get('details');
+        if (details && !['architecture-gate', 'contract-gate', 'review-gates', 'reconciliation'].includes(details)) {
+          throw new ContractError('details 只支持 architecture-gate、contract-gate 或 review-gates', 'AGENT_REQUEST_INVALID', 400);
+        }
+        return json(res, 200, agentRunResponse(analysis, run.id, {
+          activeDraftId,
+          includeArchitectureGateDetails: ['architecture-gate', 'review-gates', 'reconciliation'].includes(details),
+          includeContractGateDetails: ['contract-gate', 'review-gates'].includes(details),
+        }));
+      }
+
+      const agentArtifactMatch = /^\/api\/agent\/runs\/([a-z0-9][a-z0-9._-]{0,79})\/artifacts$/.exec(pathname);
+      if (req.method === 'POST' && agentArtifactMatch) {
+        const incoming = await readJsonBody(req);
+        const analysis = readAnalysis(analysisFile);
+        const run = analysis.agentRuns.find((item) => item.id === agentArtifactMatch[1]);
+        if (!run) throw new ContractError('未找到该智能体运行', 'AGENT_RUN_NOT_FOUND', 404);
+        const catalog = readArchitectureCatalog(catalogFile, stateFile, layoutFile);
+        const diagram = agentDiagram(catalog, run.diagramId);
+        const result = submitAgentArtifact(analysis, run.id, incoming, {
+          workspaceRoot,
+          projectRoot,
+          registry: readRegistry(documentsFile),
+          catalog,
+          diagram,
+        });
+        let saved = result.analysis;
+        if (!result.replayed) {
+          if (result.stateChanged) {
+            try {
+              writeState(result.state, diagram.statePath);
+              afterAgentDraftStateWrite?.({ runId: run.id, diagramId: diagram.id });
+              saved = writeAnalysis(result.analysis, analysisFile);
+            } catch (error) {
+              try {
+                writeState(result.originalState, diagram.statePath);
+              } catch (rollbackError) {
+                throw new ContractError(
+                  '智能体草稿写入未能完整提交，且自动回滚失败；请停止发布并检查本地状态',
+                  'AGENT_DRAFT_TRANSACTION_ROLLBACK_FAILED',
+                  500,
+                  { cause: error.message, rollbackCause: rollbackError.message },
+                );
+              }
+              throw error;
+            }
+          } else {
+            saved = writeAnalysis(result.analysis, analysisFile);
+          }
+        }
+        return json(res, result.replayed ? 200 : 201, {
+          ...agentRunResponse(saved, run.id, {
+            activeDraftId: result.state?.[run.view]?.draft?.draftId || null,
+          }),
+          submission: {
+            artifactId: result.artifact.artifactId,
+            artifactType: result.artifact.artifactType,
+            proposalId: result.proposal?.id || null,
+            draftApplication: clone(result.draftApplication),
+            replayed: result.replayed,
+            requiresHumanReview: result.artifact.artifactType === 'implementation-report',
+            requiresPublication: Boolean(
+              result.draftApplication
+              && result.draftApplication.outcome !== 'reverted-to-published'
+            ),
+            reviewType: result.artifact.artifactType === 'implementation-report'
+              ? 'implementation-result'
+              : result.draftApplication?.outcome !== 'reverted-to-published' && result.draftApplication
+                ? 'draft-publication'
+                : null,
+          },
+        });
+      }
+
+      if (req.method === 'GET' && pathname === '/api/agent/approved-target') {
+        const catalog = readArchitectureCatalog(catalogFile, stateFile, layoutFile);
+        const diagram = agentDiagram(catalog, requestUrl.searchParams.get('diagram'));
+        const lane = readState(diagram.statePath).target;
+        const registry = readRegistry(documentsFile);
+        const contract = lane.published.developmentContract;
+        const { baselineStatus, formalBaseline, executionIssue } = publishedTargetBaseline(
+          diagram.id,
+          lane.published,
+          registry,
+          projectRoot,
+        );
+        return json(res, 200, {
+          protocolVersion: AI_CODING_PROTOCOL_VERSION,
+          diagramId: diagram.id,
+          approvalStatus: 'published-target',
+          baselineStatus,
+          formalBaseline,
+          architecture: compactAgentArchitecture(lane.published),
+          developmentContract: compactDevelopmentContract(contract),
+          executionIssue,
+          agentCanPublish: false,
+        });
+      }
+
       if (req.method === 'GET' && pathname === '/api/analysis') {
-        return json(res, 200, analysisResponse(readAnalysis(analysisFile), projectRoot, analysisProvider));
+        return json(res, 200, analysisResponse(readAnalysis(analysisFile)));
       }
 
       if (req.method === 'PUT' && pathname === '/api/analysis/sources') {
-        const incoming = await readJsonBody(req);
-        assertAnalysisRequestShape(incoming, new Set(['schemaVersion', 'baseRevision', 'sources']));
-        const analysis = readAnalysis(analysisFile);
-        assertAnalysisRevision(incoming, analysis);
-        const next = {
-          ...clone(analysis),
-          sources: selectionRequestSources(incoming, analysis, projectRoot),
-        };
-        return json(res, 200, analysisResponse(writeAnalysis(next, analysisFile), projectRoot, analysisProvider));
+        throw new ContractError(
+          '查看器不选择或扫描仓库文件；请由外部智能体提交结构化依据清单',
+          'VIEWER_REPOSITORY_SCAN_REMOVED',
+          410,
+        );
       }
 
       if (req.method === 'POST' && pathname === '/api/analysis/scan') {
-        const incoming = await readJsonBody(req);
-        assertAnalysisRequestShape(incoming, new Set(['schemaVersion', 'baseRevision']));
-        const analysis = readAnalysis(analysisFile);
-        assertAnalysisRevision(incoming, analysis);
-        const next = scanSelectedAnalysisSources(analysis, projectRoot);
-        return json(res, 200, analysisResponse(writeAnalysis(next, analysisFile), projectRoot, analysisProvider));
+        throw new ContractError(
+          '查看器不选择或扫描仓库文件；请由外部智能体提交结构化依据清单',
+          'VIEWER_REPOSITORY_SCAN_REMOVED',
+          410,
+        );
       }
 
       if (req.method === 'POST' && pathname === '/api/analysis/proposals') {
+        throw new ContractError(
+          'v0.2 不再内嵌模型生成提案；请通过 MCP 或命令行创建智能体运行并提交工件',
+          'EMBEDDED_MODEL_REMOVED',
+          410,
+        );
+      }
+
+      const implementationReviewMatch = /^\/api\/analysis\/runs\/([a-z0-9][a-z0-9._-]{0,79})\/review$/.exec(pathname);
+      if (req.method === 'POST' && implementationReviewMatch) {
         const incoming = await readJsonBody(req);
-        assertAnalysisRequestShape(incoming, new Set(['schemaVersion', 'baseRevision']));
-        const catalog = readArchitectureCatalog(catalogFile, stateFile, layoutFile);
-        const diagram = diagramFrom(requestUrl, catalog);
-        const view = viewFrom(requestUrl);
+        assertAnalysisRequestShape(incoming, new Set([
+          'schemaVersion', 'baseRevision', 'userConfirmed', 'decision', 'note',
+        ]));
+        if (incoming.userConfirmed !== true) {
+          throw new ContractError('实施结果验收必须由用户明确确认', 'USER_CONFIRMATION_REQUIRED', 403);
+        }
         const analysis = readAnalysis(analysisFile);
         assertAnalysisRevision(incoming, analysis);
+        const run = analysis.agentRuns.find((item) => item.id === implementationReviewMatch[1]);
+        if (!run) throw new ContractError('未找到该智能体运行', 'AGENT_RUN_NOT_FOUND', 404);
+        const catalog = readArchitectureCatalog(catalogFile, stateFile, layoutFile);
+        const diagram = agentDiagram(catalog, run.diagramId);
         const state = readState(diagram.statePath);
-        const lane = state[view];
-        if (lane.draft) {
-          throw new ContractError('请先发布或丢弃当前草案，再生成新的 AI 提案', 'ACTIVE_DRAFT', 409);
-        }
-        const input = analysisModelInput({ diagram, view, lane, analysis });
-        if (!analysisProvider || typeof analysisProvider.generate !== 'function') {
-          throw new AnalysisProviderError('当前未配置可用的 AI 服务', 'AI_PROVIDER_NOT_CONFIGURED', 503);
-        }
-        const generated = await generateWithSafeProvider(analysisProvider, input);
-        const currentAnalysis = readAnalysis(analysisFile);
-        const currentLane = readState(diagram.statePath)[view];
-        if (
-          currentAnalysis.baseRevision !== analysis.baseRevision
-          || currentLane.published.revision !== lane.published.revision
-          || currentLane.published.revisionId !== lane.published.revisionId
-          || currentLane.draft
-        ) {
-          throw new ContractError('分析资料或架构基线已经变化，请刷新后重试', 'STALE_ANALYSIS_CONTEXT', 409);
-        }
-        const proposals = normalizeGeneratedProposals(generated, currentAnalysis, {
-          diagramId: diagram.id,
-          view,
-          lane: currentLane,
+        const next = reviewImplementationRun(analysis, run.id, incoming, state, {
+          registry: readRegistry(documentsFile),
+          projectRoot,
         });
-        if (!proposals.length) {
-          return json(res, 200, {
-            ...analysisResponse(currentAnalysis, projectRoot, analysisProvider),
-            generation: { proposalCount: 0 },
-          });
-        }
-        const next = { ...clone(currentAnalysis), proposals: [...currentAnalysis.proposals, ...proposals] };
-        return json(res, 201, {
-          ...analysisResponse(writeAnalysis(next, analysisFile), projectRoot, analysisProvider),
-          generation: { proposalCount: proposals.length },
-        });
+        return json(res, 200, analysisResponse(writeAnalysis(next, analysisFile)));
       }
 
       const proposalActionMatch = /^\/api\/analysis\/proposals\/([a-z0-9][a-z0-9._-]{0,79})\/(accept|reject)$/.exec(pathname);
       if (req.method === 'POST' && proposalActionMatch) {
-        const incoming = await readJsonBody(req);
-        assertAnalysisRequestShape(incoming, new Set(['schemaVersion', 'baseRevision', 'userConfirmed']));
-        if (incoming.userConfirmed !== true) {
-          throw new ContractError('提案审阅必须由用户明确确认', 'USER_CONFIRMATION_REQUIRED', 403);
-        }
-        const analysis = readAnalysis(analysisFile);
-        assertAnalysisRevision(incoming, analysis);
-        const proposal = analysis.proposals.find((item) => item.id === proposalActionMatch[1]);
-        if (!proposal) throw new ContractError('未找到该 AI 提案', 'PROPOSAL_NOT_FOUND', 404);
-        if (proposal.status !== 'pending') {
-          throw new ContractError('该 AI 提案已经审阅，不能重复处理', 'PROPOSAL_ALREADY_REVIEWED', 409);
-        }
-        const now = new Date().toISOString();
-        const action = proposalActionMatch[2];
-        if (action === 'reject') {
-          const next = clone(analysis);
-          const target = next.proposals.find((item) => item.id === proposal.id);
-          target.status = 'rejected';
-          target.reviewedAt = now;
-          target.application = null;
-          return json(res, 200, analysisResponse(writeAnalysis(next, analysisFile), projectRoot, analysisProvider));
-        }
-
-        const catalog = readArchitectureCatalog(catalogFile, stateFile, layoutFile);
-        const diagram = catalog.diagrams.find((item) => item.id === proposal.diagramId);
-        if (!diagram) throw new ContractError('提案对应的架构图已不存在', 'DIAGRAM_NOT_FOUND', 404, { diagramId: proposal.diagramId });
-        const state = readState(diagram.statePath);
-        const lane = state[proposal.view];
-        if (lane.draft) {
-          throw new ContractError('请先处理当前草案，再接受新的 AI 提案', 'ACTIVE_DRAFT', 409);
-        }
-        if (lane.published.revision !== proposal.baseRevision || lane.published.revisionId !== proposal.baseRevisionId) {
-          throw new ContractError('提案的架构基线已过期，请重新分析后再审阅', 'PROPOSAL_STALE', 409, {
-            headRevision: lane.published.revision,
-            headRevisionId: lane.published.revisionId,
-          });
-        }
-        assertProposalEvidenceCurrent(proposal, analysis, projectRoot);
-        const graph = applyProposalChanges(lane.published.graph, proposal, state);
-        assertHumanConfirmedSemantics(state.meta, proposal.view, lane.published.graph, graph, {
-          userConfirmedSemanticOverride: true,
-        });
-        const draftId = newDraftId(proposal.view);
-        lane.draft = {
-          draftId,
-          draftRevision: 1,
-          baseRevision: lane.published.revision,
-          baseRevisionId: lane.published.revisionId,
-          savedAt: now,
-          graph,
-        };
-        const next = clone(analysis);
-        const target = next.proposals.find((item) => item.id === proposal.id);
-        target.status = 'accepted';
-        target.reviewedAt = now;
-        target.application = { draftId, draftRevision: 1, appliedAt: now };
-        validateAnalysis(next);
-        const savedState = writeState(state, diagram.statePath);
-        const savedAnalysis = writeAnalysis(next, analysisFile);
-        return json(res, 200, {
-          analysis: analysisResponse(savedAnalysis, projectRoot, analysisProvider),
-          lane: responseState(savedState, proposal.view, diagram.id),
-        });
+        throw new ContractError(
+          '逐项提案审阅入口已停用；智能体变更只写入锁定草稿，用户通过发布完整草稿作最终确认',
+          'PROPOSAL_REVIEW_RETIRED',
+          410,
+          { proposalId: proposalActionMatch[1], action: proposalActionMatch[2] },
+        );
       }
 
       if (req.method === 'GET' && pathname === '/api/diagrams') {
         return json(res, 200, publicArchitectureCatalog(readArchitectureCatalog(catalogFile, stateFile, layoutFile)));
+      }
+
+      if (req.method === 'GET' && pathname === '/api/registered-flows') {
+        const view = viewFrom(requestUrl);
+        const catalog = readArchitectureCatalog(catalogFile, stateFile, layoutFile);
+        const diagram = diagramFrom(requestUrl, catalog);
+        return json(res, 200, readRegisteredFlows(registeredFlowsFile, {
+          catalog,
+          diagramId: diagram.id,
+          view,
+          readState,
+        }));
       }
 
       if (req.method === 'GET' && pathname === '/api/state') {
@@ -1457,13 +3667,23 @@ function createServer(options = {}) {
         const registry = readRegistry(documentsFile);
         validateNewDocumentBindings(priorGraph, incoming.graph, registry, projectRoot);
         const now = new Date().toISOString();
+        const draftId = lane.draft ? lane.draft.draftId : newDraftId(view);
+        const priorContract = view === 'target' ? editableDraftContractBase(lane) : null;
         lane.draft = {
-          draftId: lane.draft ? lane.draft.draftId : newDraftId(view),
+          draftId,
           draftRevision: lane.draft ? lane.draft.draftRevision + 1 : 1,
           baseRevision: lane.published.revision,
           baseRevisionId: lane.published.revisionId,
           savedAt: now,
           graph: clone(incoming.graph),
+          developmentContract: view === 'target'
+            ? draftDevelopmentContract(incoming.graph, {
+              draftId,
+              prior: priorContract,
+              registry,
+              projectRoot,
+            })
+            : null,
         };
         return json(res, 200, responseState(writeState(state, diagram.statePath), view, diagram.id));
       }
@@ -1481,6 +3701,39 @@ function createServer(options = {}) {
         return json(res, 200, responseState(writeState(state, diagram.statePath), view, diagram.id));
       }
 
+      if (req.method === 'POST' && pathname === '/api/draft/refresh-documents') {
+        const view = viewFrom(requestUrl);
+        if (view !== 'target') {
+          throw new ContractError(
+            '只有目标架构草稿可以刷新开发合同的绑定文档锁',
+            'DRAFT_DOCUMENT_REFRESH_TARGET_ONLY',
+            422,
+          );
+        }
+        const incoming = await readJsonBody(req);
+        validateRevisionRequest(incoming);
+        const diagram = diagramFrom(requestUrl, readArchitectureCatalog(catalogFile, stateFile, layoutFile));
+        const state = readState(diagram.statePath);
+        const lane = state.target;
+        assertLaneLock(incoming, lane);
+        if (!lane.draft) throw new ContractError('当前没有可刷新的目标草案', 'NO_ACTIVE_DRAFT', 409);
+
+        const registry = readRegistry(documentsFile);
+        const refreshedContract = draftDevelopmentContract(lane.draft.graph, {
+          draftId: lane.draft.draftId,
+          prior: lane.draft.developmentContract,
+          registry,
+          projectRoot,
+        });
+        lane.draft = {
+          ...lane.draft,
+          draftRevision: lane.draft.draftRevision + 1,
+          savedAt: new Date().toISOString(),
+          developmentContract: refreshedContract,
+        };
+        return json(res, 200, responseState(writeState(state, diagram.statePath), view, diagram.id));
+      }
+
       if (req.method === 'POST' && pathname === '/api/publish') {
         const view = viewFrom(requestUrl);
         const incoming = await readJsonBody(req);
@@ -1491,10 +3744,14 @@ function createServer(options = {}) {
         assertLaneLock(incoming, lane);
         if (!lane.draft) throw new ContractError('当前没有可发布的草案', 'NO_ACTIVE_DRAFT', 409);
         validateGraph(lane.draft.graph, view);
+        const registry = view === 'target' ? readRegistry(documentsFile) : null;
+        const verifiedDocuments = view === 'target'
+          ? assertDraftBoundDocumentsCurrent(lane.draft.developmentContract, lane.draft.graph, registry, projectRoot)
+          : null;
         const now = new Date().toISOString();
         const prior = clone(lane.published);
         lane.history.push(prior);
-        lane.published = {
+        const published = {
           revision: prior.revision + 1,
           revisionId: nextRevisionId(view, { published: prior }),
           parentRevisionId: prior.revisionId,
@@ -1504,7 +3761,20 @@ function createServer(options = {}) {
           publishedAt: now,
           publishedBy: 'user',
           graph: clone(lane.draft.graph),
+          developmentContract: null,
         };
+        if (view === 'target') {
+          published.developmentContract = freezeDevelopmentContract(
+            lane.draft.developmentContract,
+            published.graph,
+            published,
+            registry,
+            projectRoot,
+            now,
+            verifiedDocuments,
+          );
+        }
+        lane.published = published;
         lane.draft = null;
         return json(res, 200, responseState(writeState(state, diagram.statePath), view, diagram.id));
       }
@@ -1568,17 +3838,30 @@ function createServer(options = {}) {
         if (!source) throw new ContractError('未找到要恢复的历史版本', 'REVISION_NOT_FOUND', 404, { revisionId: incoming.sourceRevisionId });
         const prior = clone(lane.published);
         lane.history.push(prior);
-        lane.published = {
+        const now = new Date().toISOString();
+        const restored = {
           revision: prior.revision + 1,
           revisionId: nextRevisionId(view, { published: prior }),
           parentRevisionId: prior.revisionId,
           origin: 'restore',
           restoredFromRevisionId: source.revisionId,
           message: incoming.message.trim(),
-          publishedAt: new Date().toISOString(),
+          publishedAt: now,
           publishedBy: 'user',
           graph: clone(source.graph),
+          developmentContract: null,
         };
+        if (view === 'target') {
+          restored.developmentContract = freezeDevelopmentContract(
+            source.developmentContract,
+            restored.graph,
+            restored,
+            readRegistry(documentsFile),
+            projectRoot,
+            now,
+          );
+        }
+        lane.published = restored;
         return json(res, 200, responseState(writeState(state, diagram.statePath), view, diagram.id));
       }
 
@@ -1693,6 +3976,7 @@ function createServer(options = {}) {
 if (require.main === module) {
   const port = parsePort(process.env.PORT);
   const projectRoot = resolveProjectDirectory();
+  const workspaceRoot = resolveWorkspaceRoot(undefined, projectRoot);
   const stateFile = resolveStateFile(undefined, projectRoot);
   const documentsFile = resolveDocumentsFile(undefined, projectRoot);
   const layoutFile = resolveLayoutFile(undefined, projectRoot);
@@ -1703,16 +3987,17 @@ if (require.main === module) {
       ? path.join(path.dirname(stateFile), PROJECT_FILES.catalog)
       : resolveCatalogFile(undefined, projectRoot));
   const config = readViewerConfig(configFile);
-  const server = createServer({ stateFile, documentsFile, layoutFile, configFile, catalogFile, projectRoot });
+  const server = createServer({ stateFile, documentsFile, layoutFile, configFile, catalogFile, projectRoot, workspaceRoot });
   server.listen(port, HOST, () => {
     const address = server.address();
-    console.log(`${config.projectName} ${config.viewerName}：http://${HOST}:${address.port}`);
+    console.log(`${config.projectName} ${resolvedConfigText(config.viewerName, config.defaultLanguage || 'zh')}：http://${HOST}:${address.port}`);
     console.log(`状态文件：${stateFile}`);
     console.log(`文档注册表：${documentsFile}`);
     console.log(`查看器排版：${layoutFile}`);
     console.log(`项目配置：${configFile}`);
     console.log(`架构目录：${catalogFile}`);
     console.log(`项目文档根目录：${projectRoot}`);
+    console.log(`待检查代码仓库：${workspaceRoot}`);
   });
 }
 
@@ -1739,6 +4024,7 @@ module.exports = {
   resolveConfigFile,
   resolveLayoutFile,
   resolveProjectDirectory,
+  resolveWorkspaceRoot,
   resolveSafeDocument,
   resolveStateFile,
   resolveStaticRoot,

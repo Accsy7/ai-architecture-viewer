@@ -250,6 +250,9 @@ test('generic project config and viewer layout are independent from architecture
   assert.equal(config.response.status, 200);
   assert.equal(config.payload.projectId, 'fixture-project');
   assert.equal(config.payload.projectName, 'Fixture Project');
+  assert.equal(config.payload.viewerName, 'AI 架构查看器');
+  assert.equal(config.payload.eyebrow, 'FIXTURE ARCHITECTURE');
+  assert.equal(config.payload.scopeNote, '用于验证通用项目配置与独立排版。');
   assert.equal(config.payload.views.compare.label, '差异对比');
 
   const current = await getState(fixture.baseUrl, 'current');
@@ -316,6 +319,35 @@ test('generic project config and viewer layout are independent from architecture
   });
   assert.equal(unknownContainer.response.status, 409);
   assert.equal(unknownContainer.payload.code, 'UNKNOWN_LAYOUT_CONTAINER');
+});
+
+test('localized viewer headers are validated while agent context keeps a scalar scope note', async (t) => {
+  const fixture = await startFixture(t);
+  const config = JSON.parse(fs.readFileSync(fixture.configFile, 'utf8'));
+  config.defaultLanguage = 'en';
+  config.viewerName = { zh: 'AI 架构查看器', en: 'AI Architecture Viewer' };
+  config.eyebrow = { zh: '项目治理', en: 'PROJECT GOVERNANCE' };
+  config.scopeNote = { zh: '中文范围说明。', en: 'English scope note.' };
+  writeJson(fixture.configFile, config);
+
+  const localized = await request(fixture.baseUrl, '/api/config');
+  assert.equal(localized.response.status, 200);
+  assert.deepEqual(localized.payload.viewerName, config.viewerName);
+  assert.deepEqual(localized.payload.eyebrow, config.eyebrow);
+  assert.deepEqual(localized.payload.scopeNote, config.scopeNote);
+
+  const agentContext = await request(fixture.baseUrl, '/api/agent/context?view=current');
+  assert.equal(agentContext.response.status, 200);
+  assert.equal(agentContext.payload.project.scopeNote, 'English scope note.');
+  assert.equal(typeof agentContext.payload.project.scopeNote, 'string');
+
+  config.viewerName = { en: 'English-only viewer' };
+  config.eyebrow = {};
+  writeJson(fixture.configFile, config);
+  const invalid = await request(fixture.baseUrl, '/api/config');
+  assert.equal(invalid.response.status, 500);
+  assert.equal(invalid.payload.code, 'VIEWER_CONFIG_INVALID');
+  assert.equal(invalid.payload.details.field, 'eyebrow');
 });
 
 test('diagram catalog selects independent state and layout files without exposing local paths', async (t) => {

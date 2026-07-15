@@ -69,6 +69,23 @@ test('previous canonical state gains routing metadata without changing semantic 
   validateState(migrated);
 });
 
+test('state 3.2 interaction modes and architecture layers migrate without semantic loss', () => {
+  const previous = migrateLegacyState(readJson(path.join(FIXTURES, 'generic-state-legacy.json')));
+  previous.schemaVersion = '3.2.0';
+  for (const view of ['current', 'target']) {
+    for (const revision of [...previous[view].history, previous[view].published]) delete revision.developmentContract;
+    if (previous[view].draft) delete previous[view].draft.developmentContract;
+  }
+  previous.current.published.graph.nodes[0].data.interactionModes = ['human-ui', 'system-service'];
+  previous.current.published.graph.nodes[0].data.architectureLayer = 'application-layer';
+  const migrated = migrateLegacyState(previous);
+  assert.equal(migrated.schemaVersion, SCHEMA_VERSION);
+  assert.deepEqual(migrated.current.published.graph.nodes[0].data.interactionModes, ['human-ui', 'system-service']);
+  assert.equal(migrated.current.published.graph.nodes[0].data.architectureLayer, 'application-layer');
+  assert.equal(migrated.target.published.developmentContract.status, 'legacy-unbound');
+  assert.equal(migrated.target.published.developmentContract.target.semanticHash, null);
+});
+
 test('state and graph contracts reject drift, duplicate identities and invalid target data', () => {
   const canonical = migrateLegacyState(readJson(path.join(FIXTURES, 'generic-state-legacy.json')));
   const wrongVersion = structuredClone(canonical);
@@ -230,6 +247,33 @@ test('layout contract derives and guards generic group containers', () => {
     positions: {},
     containers: { missing: { x: 0, y: 0, width: 320, height: 240 } },
   }), (error) => error instanceof LayoutContractError && error.code === 'UNKNOWN_LAYOUT_CONTAINER');
+});
+
+test('canonical reads preserve groups and safely expose legacy capability domains as groups', () => {
+  const canonical = migrateLegacyState(readJson(path.join(FIXTURES, 'generic-state-legacy.json')));
+  delete canonical.meta.groups;
+  canonical.meta.capabilityDomains = Array.from({ length: 7 }, (_, index) => ({
+    id: `domain-${index + 1}`,
+    group: `Capability ${index + 1}`,
+    label: `Domain ${index + 1}`,
+    description: `Legacy capability domain ${index + 1}`,
+    position: { x: index * 400, y: 20 },
+    width: 360,
+    height: 420,
+    legacyMarker: `keep-${index + 1}`,
+  }));
+
+  const migrated = migrateLegacyState(canonical);
+  assert.deepEqual(migrated.meta.groups, canonical.meta.capabilityDomains);
+  assert.deepEqual(migrated.meta.capabilityDomains, canonical.meta.capabilityDomains);
+  assert.notEqual(migrated.meta.groups, migrated.meta.capabilityDomains);
+  assert.equal(migrated.meta.groups.length, 7);
+  assert.equal(migrated.meta.groups[4].legacyMarker, 'keep-5');
+  assert.equal(canonical.meta.groups, undefined, 'reading compatibility must not mutate the source object');
+
+  const explicit = structuredClone(canonical);
+  explicit.meta.groups = [];
+  assert.deepEqual(migrateLegacyState(explicit).meta.groups, [], 'an explicit canonical groups array always wins');
 });
 
 test('an explicitly selected project directory is resolved without global state', () => {

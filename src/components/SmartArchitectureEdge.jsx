@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { BaseEdge, EdgeLabelRenderer, useReactFlow } from '@xyflow/react';
 import { buildOrthogonalRoute, normalizeRoutingData, obstacleBounds } from '../routing.mjs';
+import { useI18n } from '../i18n.jsx';
 
 const BUNDLE_DISTANCE = 54;
 
@@ -46,6 +47,7 @@ export default function SmartArchitectureEdge({
   selected,
 }) {
   const { screenToFlowPosition } = useReactFlow();
+  const { t } = useI18n();
   const routing = normalizeRoutingData(data);
   const sourcePort = data.__sourcePort || routing.sourcePort || 'right';
   const targetPort = data.__targetPort || routing.targetPort || 'left';
@@ -106,8 +108,8 @@ export default function SmartArchitectureEdge({
               className="edge-waypoint nodrag nopan"
               style={{ transform: `translate(-50%, -50%) translate(${waypoint.x}px, ${waypoint.y}px)` }}
               type="button"
-              aria-label={`路径转折点 ${index + 1}`}
-              title="拖动调整；双击删除"
+              aria-label={t('edge.waypoint', { index: index + 1 })}
+              title={t('edge.waypointHelp')}
               key={`${id}-waypoint-${index}`}
               onPointerDown={(event) => startWaypointDrag(event, index)}
               onClick={(event) => event.stopPropagation()}

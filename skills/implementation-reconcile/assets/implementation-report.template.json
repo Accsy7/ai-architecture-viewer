@@ -1,10 +1,19 @@
 {
-  "schemaVersion": "1.0.0",
+  "schemaVersion": "1.4.0",
   "artifactType": "implementation-report",
   "artifactId": "report-replace-me",
   "createdAt": "1970-01-01T00:00:00.000Z",
   "requestId": "request-replace-me",
-  "approvedProposalId": "proposal-replace-me",
+  "approvedTarget": {
+    "status": "executable-formal-baseline",
+    "diagramId": "system-overview",
+    "revision": 0,
+    "revisionId": "target-r0",
+    "semanticHash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "contractId": "contract-target-r0",
+    "contractHash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "documentSetHash": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
   "status": "partial",
   "resultingRevision": { "kind": "workspace", "value": "uncommitted" },
   "changedFiles": ["src/replace-me.js"],
@@ -17,7 +26,7 @@
   ],
   "acceptanceResults": [
     {
-      "criterion": "Replace with the approved criterion.",
+      "criterionId": "criterion-replace-me",
       "status": "unverified",
       "evidenceIds": []
     }
@@ -25,5 +34,5 @@
   "drift": [],
   "unresolved": ["Replace with the remaining issue."],
   "evidenceManifest": "evidence-manifest.json",
-  "resultingSnapshot": "architecture-snapshot.json"
+  "resultingSnapshotArtifactId": "snapshot-after-implementation"
 }

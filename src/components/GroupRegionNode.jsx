@@ -1,6 +1,8 @@
 import { NodeResizeControl } from '@xyflow/react';
+import { useI18n } from '../i18n.jsx';
 
 export default function GroupRegionNode({ data, selected }) {
+  const { t } = useI18n();
   return (
     <section
       className={`group-region${selected ? ' is-selected' : ''}`}
@@ -8,7 +10,7 @@ export default function GroupRegionNode({ data, selected }) {
         '--group-region-color': data.color || '#eef3ef',
         '--group-region-accent': data.accent || '#758a7d',
       }}
-      aria-label={`${data.label}分组区域`}
+      aria-label={t('group.regionLabel', { name: data.label })}
     >
       {selected && data.__resizable && (
         <NodeResizeControl
@@ -24,7 +26,7 @@ export default function GroupRegionNode({ data, selected }) {
           <span aria-hidden="true" />
         </NodeResizeControl>
       )}
-      <header className="group-region__drag-handle" title="拖动整个分组区域">
+      <header className="group-region__drag-handle" title={t('group.dragTitle')}>
         <span>{data.level || 'L1'}</span>
         <h2>{data.label}</h2>
         {data.__resizable && <i aria-hidden="true">⠿</i>}

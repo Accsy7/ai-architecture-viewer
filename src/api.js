@@ -1,7 +1,7 @@
-export const SCHEMA_VERSION = '3.1.0';
+export const SCHEMA_VERSION = '3.3.0';
 export const DOCUMENT_SCHEMA_VERSION = '1.0.0';
 export const LAYOUT_SCHEMA_VERSION = '1.1.0';
-export const ANALYSIS_SCHEMA_VERSION = '1.0.0';
+export const ANALYSIS_SCHEMA_VERSION = '2.5.0';
 
 async function request(path, options = {}) {
   const response = await fetch(path, {
@@ -49,6 +49,8 @@ export const getSkills = () => request('/api/skills');
 
 export const getDiagramCatalog = () => request('/api/diagrams');
 
+export const getRegisteredFlows = (view, diagram) => request(lanePath('/api/registered-flows', view, diagram));
+
 export const getViewerLayout = (view, diagram) => request(lanePath('/api/layout', view, diagram));
 
 export const putViewerLayout = (view, layout, positions, diagram, containers) =>
@@ -75,6 +77,12 @@ export const putDraft = (view, lane, graph, diagram, { userConfirmedSemanticOver
 export const deleteDraft = (view, lane, diagram) =>
   request(lanePath('/api/draft', view, diagram), {
     method: 'DELETE',
+    body: JSON.stringify(laneLocks(lane)),
+  });
+
+export const refreshDraftDocuments = (lane, diagram) =>
+  request(lanePath('/api/draft/refresh-documents', 'target', diagram), {
+    method: 'POST',
     body: JSON.stringify(laneLocks(lane)),
   });
 
@@ -148,34 +156,14 @@ export const previewDocument = (documentId, section = '') => {
 
 export const getAnalysis = () => request('/api/analysis');
 
-export const putAnalysisSources = (baseRevision, sources) => request('/api/analysis/sources', {
-  method: 'PUT',
-  body: JSON.stringify({
-    schemaVersion: ANALYSIS_SCHEMA_VERSION,
-    baseRevision,
-    sources: sources.map((source) => ({ path: source.path, selected: Boolean(source.selected) })),
-  }),
-});
-
-export const scanAnalysisSources = (baseRevision) => request('/api/analysis/scan', {
-  method: 'POST',
-  body: JSON.stringify({ schemaVersion: ANALYSIS_SCHEMA_VERSION, baseRevision }),
-});
-
-export const generateAnalysisProposals = (view, baseRevision, diagram) =>
-  request(lanePath('/api/analysis/proposals', view, diagram), {
+export const reviewImplementationRun = (runId, baseRevision, decision, note) =>
+  request(`/api/analysis/runs/${encodeURIComponent(runId)}/review`, {
     method: 'POST',
-    body: JSON.stringify({ schemaVersion: ANALYSIS_SCHEMA_VERSION, baseRevision }),
-  });
-
-export const acceptAnalysisProposal = (proposalId, baseRevision) =>
-  request(`/api/analysis/proposals/${encodeURIComponent(proposalId)}/accept`, {
-    method: 'POST',
-    body: JSON.stringify({ schemaVersion: ANALYSIS_SCHEMA_VERSION, baseRevision, userConfirmed: true }),
-  });
-
-export const rejectAnalysisProposal = (proposalId, baseRevision) =>
-  request(`/api/analysis/proposals/${encodeURIComponent(proposalId)}/reject`, {
-    method: 'POST',
-    body: JSON.stringify({ schemaVersion: ANALYSIS_SCHEMA_VERSION, baseRevision, userConfirmed: true }),
+    body: JSON.stringify({
+      schemaVersion: ANALYSIS_SCHEMA_VERSION,
+      baseRevision,
+      userConfirmed: true,
+      decision,
+      note,
+    }),
   });

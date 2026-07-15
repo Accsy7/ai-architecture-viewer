@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://architecture-viewer.local/schema/architecture-state-3.1.0.json",
+  "$id": "https://architecture-viewer.local/schema/architecture-state-3.3.0.json",
   "title": "AI Architecture Viewer State",
   "type": "object",
   "additionalProperties": false,
   "required": ["schemaVersion", "meta", "current", "target"],
   "properties": {
-    "schemaVersion": { "const": "3.1.0" },
+    "schemaVersion": { "const": "3.3.0" },
     "meta": { "type": "object" },
     "current": { "$ref": "#/$defs/lane" },
     "target": { "$ref": "#/$defs/lane" }
@@ -54,6 +54,14 @@
         "aiCollaboration": { "type": "string", "minLength": 1, "maxLength": 80 },
         "relatedDiagramId": { "$ref": "#/$defs/stableId" },
         "relatedNodeId": { "$ref": "#/$defs/stableId" },
+        "interactionModes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": { "enum": ["human-ui", "system-service"] }
+        },
+        "architectureLayer": { "$ref": "#/$defs/stableId" },
         "documentRefs": {
           "type": "array",
           "uniqueItems": true,
@@ -141,12 +149,114 @@
         "edges": { "type": "array", "maxItems": 1000, "items": { "$ref": "#/$defs/edge" } }
       }
     },
+    "contractTargetRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["targetType", "targetId"],
+      "properties": {
+        "targetType": { "enum": ["node", "edge"] },
+        "targetId": { "$ref": "#/$defs/stableId" }
+      }
+    },
+    "developmentContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion", "status", "contractId", "target", "source", "acceptanceCriteria",
+        "targetRefs", "boundaryRefs", "documents", "frozenAt", "frozenBy", "contractHash",
+        "documentSetHash", "executionReason"
+      ],
+      "properties": {
+        "schemaVersion": { "const": "1.0.0" },
+        "status": { "enum": ["draft", "executable", "not-executable", "legacy-unbound"] },
+        "contractId": { "$ref": "#/$defs/stableId" },
+        "target": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["revision", "revisionId", "semanticHash"],
+          "properties": {
+            "revision": { "anyOf": [{ "type": "integer", "minimum": 0 }, { "type": "null" }] },
+            "revisionId": { "$ref": "#/$defs/nullableStableId" },
+            "semanticHash": { "anyOf": [{ "type": "string", "pattern": "^[a-f0-9]{64}$" }, { "type": "null" }] }
+          }
+        },
+        "source": {
+          "anyOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["proposalId", "requestId", "artifactId", "runId"],
+              "properties": {
+                "proposalId": { "$ref": "#/$defs/nullableStableId" },
+                "requestId": { "$ref": "#/$defs/nullableStableId" },
+                "artifactId": { "$ref": "#/$defs/nullableStableId" },
+                "runId": { "$ref": "#/$defs/nullableStableId" }
+              }
+            }
+          ]
+        },
+        "acceptanceCriteria": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "statement", "targetRefs"],
+            "properties": {
+              "id": { "$ref": "#/$defs/stableId" },
+              "statement": { "type": "string", "minLength": 1, "maxLength": 1000 },
+              "targetRefs": { "type": "array", "items": { "$ref": "#/$defs/contractTargetRef" } }
+            }
+          }
+        },
+        "targetRefs": { "type": "array", "items": { "$ref": "#/$defs/contractTargetRef" } },
+        "boundaryRefs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["targetType", "targetId", "field", "value"],
+            "properties": {
+              "targetType": { "enum": ["node", "edge"] },
+              "targetId": { "$ref": "#/$defs/stableId" },
+              "field": { "enum": ["authorization", "controlledBoundaryPosture"] },
+              "value": { "type": "string", "minLength": 1, "maxLength": 500 }
+            }
+          }
+        },
+        "documents": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "title", "path", "summary", "status", "authority", "lastVerifiedAt", "contentHash", "sizeBytes"],
+            "properties": {
+              "id": { "$ref": "#/$defs/stableId" },
+              "title": { "type": "string", "minLength": 1, "maxLength": 160 },
+              "path": { "type": "string", "minLength": 1, "maxLength": 500 },
+              "summary": { "type": "string", "minLength": 1, "maxLength": 1000 },
+              "status": { "type": "string", "minLength": 1, "maxLength": 80 },
+              "authority": { "type": "string", "minLength": 1, "maxLength": 80 },
+              "lastVerifiedAt": { "$ref": "#/$defs/nullableTimestamp" },
+              "contentHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+              "sizeBytes": { "type": "integer", "minimum": 0, "maximum": 1048576 }
+            }
+          }
+        },
+        "frozenAt": { "$ref": "#/$defs/nullableTimestamp" },
+        "frozenBy": { "anyOf": [{ "const": "user" }, { "type": "null" }] },
+        "contractHash": { "anyOf": [{ "type": "string", "pattern": "^[a-f0-9]{64}$" }, { "type": "null" }] },
+        "documentSetHash": { "anyOf": [{ "type": "string", "pattern": "^[a-f0-9]{64}$" }, { "type": "null" }] },
+        "executionReason": { "anyOf": [{ "type": "string", "minLength": 1, "maxLength": 500 }, { "type": "null" }] }
+      }
+    },
     "revision": {
       "type": "object",
       "additionalProperties": false,
       "required": [
         "revision", "revisionId", "parentRevisionId", "origin", "restoredFromRevisionId",
-        "message", "publishedAt", "publishedBy", "graph"
+        "message", "publishedAt", "publishedBy", "graph", "developmentContract"
       ],
       "properties": {
         "revision": { "type": "integer", "minimum": 0 },
@@ -157,20 +267,22 @@
         "message": { "$ref": "#/$defs/nullableText" },
         "publishedAt": { "$ref": "#/$defs/nullableTimestamp" },
         "publishedBy": { "anyOf": [{ "const": "user" }, { "type": "null" }] },
-        "graph": { "$ref": "#/$defs/graph" }
+        "graph": { "$ref": "#/$defs/graph" },
+        "developmentContract": { "anyOf": [{ "$ref": "#/$defs/developmentContract" }, { "type": "null" }] }
       }
     },
     "draft": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["draftId", "draftRevision", "baseRevision", "baseRevisionId", "savedAt", "graph"],
+      "required": ["draftId", "draftRevision", "baseRevision", "baseRevisionId", "savedAt", "graph", "developmentContract"],
       "properties": {
         "draftId": { "$ref": "#/$defs/stableId" },
         "draftRevision": { "type": "integer", "minimum": 1 },
         "baseRevision": { "type": "integer", "minimum": 0 },
         "baseRevisionId": { "$ref": "#/$defs/stableId" },
         "savedAt": { "type": "string", "format": "date-time" },
-        "graph": { "$ref": "#/$defs/graph" }
+        "graph": { "$ref": "#/$defs/graph" },
+        "developmentContract": { "anyOf": [{ "$ref": "#/$defs/developmentContract" }, { "type": "null" }] }
       }
     },
     "lane": {
