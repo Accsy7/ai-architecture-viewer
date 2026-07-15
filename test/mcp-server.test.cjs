@@ -68,6 +68,11 @@ test('MCP stdio server exposes the governed external-agent tool surface', async 
     const documentTool = tools.tools.find((tool) => tool.name === 'read_project_document');
     assert.equal(documentTool.annotations.readOnlyHint, true);
     assert.ok(documentTool.inputSchema.properties.section);
+    const snapshotTool = tools.tools.find((tool) => tool.name === 'submit_architecture_snapshot');
+    assert.match(snapshotTool.description, /architecture-discovery run/i);
+    assert.match(snapshotTool.description, /never publishes or records human approval/i);
+    assert.match(snapshotTool.description, /implementation-reconcile run/i);
+    assert.match(snapshotTool.description, /reconciliation evidence only/i);
 
     const result = await client.callTool({
       name: 'get_current_architecture',

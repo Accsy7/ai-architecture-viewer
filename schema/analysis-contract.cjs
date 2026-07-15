@@ -10,8 +10,13 @@ const {
   clone,
 } = require('./state-contract.cjs');
 const { validateExchangeArtifact } = require('./ai-coding-exchange-contract.cjs');
+const {
+  AGENT_NODE_DATA_FIELDS,
+  AGENT_NODE_CLEARABLE_FIELDS,
+  AGENT_EDGE_DATA_FIELDS,
+} = require('./agent-semantic-fields.cjs');
 
-const ANALYSIS_SCHEMA_VERSION = '2.4.0';
+const ANALYSIS_SCHEMA_VERSION = '2.5.0';
 const MAX_SOURCE_COUNT = 500;
 const MAX_EVIDENCE_COUNT = 5000;
 const MAX_PROPOSAL_COUNT = 500;
@@ -46,7 +51,7 @@ const EVIDENCE_BASES = new Set([
   'code-fact',
   'agent-inference',
 ]);
-const PROPOSAL_STATUSES = new Set(['pending', 'accepted', 'rejected']);
+const PROPOSAL_STATUSES = new Set(['pending', 'draft-applied', 'accepted', 'rejected']);
 const CONFIDENCE_LEVELS = new Set(['low', 'medium', 'high']);
 const AGENT_TASK_TYPES = new Set([
   'architecture-discovery',
@@ -66,22 +71,8 @@ const CONTRACT_CRITERION_STATUSES = new Set(['satisfied', 'unsatisfied', 'unveri
 const HUMAN_REVIEW_DECISIONS = new Set(['accepted', 'revision-requested', 'rejected']);
 const TARGET_HORIZONS = new Set(['近期', '后续', '远期']);
 
-const NODE_SEMANTIC_FIELDS = new Set([
-  'name',
-  'purpose',
-  'technical',
-  'product',
-  'authorization',
-  'horizon',
-  'focus',
-  'buildStrategy',
-  'aiCollaboration',
-  'relatedDiagramId',
-  'relatedNodeId',
-  'documentRefs',
-  'interactionModes',
-  'architectureLayer',
-]);
+const NODE_SEMANTIC_FIELDS = new Set(AGENT_NODE_DATA_FIELDS);
+const NODE_CLEARABLE_FIELDS = new Set(AGENT_NODE_CLEARABLE_FIELDS);
 const REQUIRED_NODE_SEMANTIC_FIELDS = [
   'name',
   'purpose',
@@ -89,7 +80,7 @@ const REQUIRED_NODE_SEMANTIC_FIELDS = [
   'product',
   'authorization',
 ];
-const EDGE_SEMANTIC_FIELDS = new Set(['label', 'relationType', 'controlledBoundaryPosture']);
+const EDGE_SEMANTIC_FIELDS = new Set(AGENT_EDGE_DATA_FIELDS);
 const REQUIRED_EDGE_SEMANTIC_FIELDS = ['label', 'relationType'];
 const INTERACTION_MODES = new Set(['human-ui', 'system-service']);
 
@@ -307,7 +298,7 @@ function validateEvidenceIds(value, valuePath, { max, knownEvidenceIds } = {}) {
   return value;
 }
 
-function validateNodeSemanticData(data, dataPath, { requireComplete = false, view } = {}) {
+function validateNodeSemanticData(data, dataPath, { requireComplete = false, allowClear = false, view } = {}) {
   assertObject(data, dataPath);
   assertKeys(data, NODE_SEMANTIC_FIELDS, dataPath, { patch: true });
   if (!Object.keys(data).length) fail(`${dataPath} 至少需要一个语义字段`);
@@ -322,34 +313,46 @@ function validateNodeSemanticData(data, dataPath, { requireComplete = false, vie
     }
   }
 
-  if (Object.prototype.hasOwnProperty.call(data, 'name')) assertText(data.name, `${dataPath}.name`, { max: 120 });
-  if (Object.prototype.hasOwnProperty.call(data, 'group')) assertText(data.group, `${dataPath}.group`, { max: 120 });
-  if (Object.prototype.hasOwnProperty.call(data, 'purpose')) assertText(data.purpose, `${dataPath}.purpose`, { max: 2000 });
-  if (Object.prototype.hasOwnProperty.call(data, 'technical')) assertText(data.technical, `${dataPath}.technical`, { max: 240 });
-  if (Object.prototype.hasOwnProperty.call(data, 'product')) assertText(data.product, `${dataPath}.product`, { max: 240 });
-  if (Object.prototype.hasOwnProperty.call(data, 'authorization')) assertText(data.authorization, `${dataPath}.authorization`, { max: 300 });
-  if (Object.prototype.hasOwnProperty.call(data, 'horizon') && !TARGET_HORIZONS.has(data.horizon)) {
+  for (const [field, value] of Object.entries(data)) {
+    if (value !== null) continue;
+    if (!allowClear || !NODE_CLEARABLE_FIELDS.has(field) || (view === 'target' && field === 'horizon')) {
+      fail(`${dataPath}.${field} 不能清除；只有协议 1.4 节点更新中的可选字段可以使用 null`);
+    }
+  }
+  const clearsRelatedDiagram = data.relatedDiagramId === null;
+  const clearsRelatedNode = data.relatedNodeId === null;
+  if (clearsRelatedDiagram !== clearsRelatedNode) {
+    fail(`${dataPath}.relatedDiagramId 与 relatedNodeId 必须在同一次更新中成对清除`);
+  }
+
+  if (data.name !== undefined) assertText(data.name, `${dataPath}.name`, { max: 120 });
+  if (data.group !== undefined) assertText(data.group, `${dataPath}.group`, { max: 120 });
+  if (data.purpose !== undefined) assertText(data.purpose, `${dataPath}.purpose`, { max: 2000 });
+  if (data.technical !== undefined) assertText(data.technical, `${dataPath}.technical`, { max: 240 });
+  if (data.product !== undefined) assertText(data.product, `${dataPath}.product`, { max: 240 });
+  if (data.authorization !== undefined) assertText(data.authorization, `${dataPath}.authorization`, { max: 300 });
+  if (data.horizon !== undefined && data.horizon !== null && !TARGET_HORIZONS.has(data.horizon)) {
     fail(`${dataPath}.horizon 不是支持的目标时间范围`);
   }
-  if (Object.prototype.hasOwnProperty.call(data, 'focus') && typeof data.focus !== 'boolean') {
+  if (data.focus !== undefined && data.focus !== null && typeof data.focus !== 'boolean') {
     fail(`${dataPath}.focus 必须是布尔值`);
   }
-  if (Object.prototype.hasOwnProperty.call(data, 'buildStrategy') && !BUILD_STRATEGIES.has(data.buildStrategy)) {
+  if (data.buildStrategy !== undefined && data.buildStrategy !== null && !BUILD_STRATEGIES.has(data.buildStrategy)) {
     fail(`${dataPath}.buildStrategy 不是支持的建设策略`);
   }
-  if (Object.prototype.hasOwnProperty.call(data, 'aiCollaboration')) {
+  if (data.aiCollaboration !== undefined && data.aiCollaboration !== null) {
     assertText(data.aiCollaboration, `${dataPath}.aiCollaboration`, { max: 80 });
   }
-  if (Object.prototype.hasOwnProperty.call(data, 'relatedDiagramId')) {
+  if (data.relatedDiagramId !== undefined && data.relatedDiagramId !== null) {
     assertStableId(data.relatedDiagramId, `${dataPath}.relatedDiagramId`);
   }
-  if (Object.prototype.hasOwnProperty.call(data, 'relatedNodeId')) {
+  if (data.relatedNodeId !== undefined && data.relatedNodeId !== null) {
     assertStableId(data.relatedNodeId, `${dataPath}.relatedNodeId`);
     if (requireComplete && !Object.prototype.hasOwnProperty.call(data, 'relatedDiagramId')) {
       fail(`${dataPath}.relatedNodeId 需要同时提供 relatedDiagramId`);
     }
   }
-  if (Object.prototype.hasOwnProperty.call(data, 'documentRefs')) {
+  if (data.documentRefs !== undefined && data.documentRefs !== null) {
     assertArray(data.documentRefs, `${dataPath}.documentRefs`, { max: 64 });
     const refs = new Set();
     data.documentRefs.forEach((id, index) => {
@@ -358,7 +361,7 @@ function validateNodeSemanticData(data, dataPath, { requireComplete = false, vie
       refs.add(id);
     });
   }
-  if (Object.prototype.hasOwnProperty.call(data, 'interactionModes')) {
+  if (data.interactionModes !== undefined && data.interactionModes !== null) {
     assertArray(data.interactionModes, `${dataPath}.interactionModes`, { min: 1, max: 2 });
     const modes = new Set();
     data.interactionModes.forEach((mode, index) => {
@@ -367,7 +370,7 @@ function validateNodeSemanticData(data, dataPath, { requireComplete = false, vie
       modes.add(mode);
     });
   }
-  if (Object.prototype.hasOwnProperty.call(data, 'architectureLayer')) {
+  if (data.architectureLayer !== undefined && data.architectureLayer !== null) {
     assertStableId(data.architectureLayer, `${dataPath}.architectureLayer`);
   }
   return data;
@@ -378,6 +381,7 @@ function validateNodePatch(patch, patchPath, { kind, view }) {
   assertKeys(patch, new Set(['data']), patchPath, { patch: true });
   validateNodeSemanticData(patch.data, `${patchPath}.data`, {
     requireComplete: kind === 'add',
+    allowClear: kind === 'update',
     view,
   });
   return patch;
@@ -411,15 +415,15 @@ function validateEdgeSemanticData(data, dataPath, { requireComplete = false } = 
 
 function validateEdgePatch(patch, patchPath, { kind }) {
   assertObject(patch, patchPath);
-  assertKeys(patch, kind === 'add' ? new Set(['source', 'target', 'data']) : new Set(['data']), patchPath, { patch: true });
+  assertKeys(patch, new Set(['source', 'target', 'data']), patchPath, { patch: true });
   if (kind === 'add') {
     for (const field of ['source', 'target', 'data']) {
       if (!Object.prototype.hasOwnProperty.call(patch, field)) {
         fail(`${patchPath}.${field} 是新增关系的必填字段`);
       }
     }
-  } else if (!Object.prototype.hasOwnProperty.call(patch, 'data')) {
-    fail(`${patchPath}.data 是更新关系的必填字段`);
+  } else if (!['source', 'target', 'data'].some((field) => Object.prototype.hasOwnProperty.call(patch, field))) {
+    fail(`${patchPath} 至少需要一个关系语义字段或端点`);
   }
   if (Object.prototype.hasOwnProperty.call(patch, 'source')) {
     assertStableId(patch.source, `${patchPath}.source`);
@@ -472,10 +476,13 @@ function validateProposalChange(change, changePath = 'change', { view, knownEvid
 function validateApplication(application, applicationPath = 'proposal.application') {
   if (application === null) return application;
   assertObject(application, applicationPath);
-  assertKeys(application, new Set(['draftId', 'draftRevision', 'appliedAt']), applicationPath);
+  assertKeys(application, new Set(['draftId', 'draftRevision', 'appliedAt', 'outcome']), applicationPath);
   assertStableId(application.draftId, `${applicationPath}.draftId`);
   assertPositiveRevision(application.draftRevision, `${applicationPath}.draftRevision`);
   assertTimestamp(application.appliedAt, `${applicationPath}.appliedAt`);
+  if (application.outcome !== undefined && !['draft-updated', 'reverted-to-published'].includes(application.outcome)) {
+    fail(`${applicationPath}.outcome 不是支持的草稿写入结果`);
+  }
   return application;
 }
 
@@ -1019,6 +1026,38 @@ function validateAcceptanceCriteria(criteria, valuePath = 'proposal.acceptanceCr
   });
 }
 
+function validateContractPatch(contractPatch, valuePath, { knownEvidenceIds } = {}) {
+  if (contractPatch === null || contractPatch === undefined) return;
+  assertObject(contractPatch, valuePath);
+  assertKeys(contractPatch, new Set(['upsert', 'delete']), valuePath);
+  const upsert = contractPatch.upsert || [];
+  const removals = contractPatch.delete || [];
+  assertArray(upsert, `${valuePath}.upsert`, { max: 100 });
+  assertArray(removals, `${valuePath}.delete`, { max: 100 });
+  if (!upsert.length && !removals.length) fail(`${valuePath} 必须包含至少一项新增、修订或删除操作`);
+  const ids = new Set();
+  upsert.forEach((criterion, index) => {
+    validateAcceptanceCriteria([{
+      id: criterion.id,
+      statement: criterion.statement,
+      targetRefs: criterion.targetRefs,
+    }], `${valuePath}.upsert[${index}].criterion`);
+    assertKeys(criterion, new Set(['id', 'statement', 'targetRefs', 'evidenceIds']), `${valuePath}.upsert[${index}]`);
+    validateEvidenceIds(criterion.evidenceIds, `${valuePath}.upsert[${index}].evidenceIds`, { min: 1, max: 64, knownEvidenceIds });
+    if (ids.has(criterion.id)) fail(`${valuePath} 包含重复验收条件 ${criterion.id}`);
+    ids.add(criterion.id);
+  });
+  removals.forEach((operation, index) => {
+    const operationPath = `${valuePath}.delete[${index}]`;
+    assertObject(operation, operationPath);
+    assertKeys(operation, new Set(['id', 'evidenceIds']), operationPath);
+    assertStableId(operation.id, `${operationPath}.id`);
+    validateEvidenceIds(operation.evidenceIds, `${operationPath}.evidenceIds`, { min: 1, max: 64, knownEvidenceIds });
+    if (ids.has(operation.id)) fail(`${valuePath} 包含重复验收条件 ${operation.id}`);
+    ids.add(operation.id);
+  });
+}
+
 function validateProposal(proposal, proposalPath = 'proposal', { knownEvidenceIds } = {}) {
   assertObject(proposal, proposalPath);
   assertKeys(proposal, new Set([
@@ -1040,6 +1079,7 @@ function validateProposal(proposal, proposalPath = 'proposal', { knownEvidenceId
     'origin',
     'requestId',
     'acceptanceCriteria',
+    'contractPatch',
   ]), proposalPath);
   assertStableId(proposal.id, `${proposalPath}.id`);
   if (!PROPOSAL_STATUSES.has(proposal.status)) fail(`${proposalPath}.status 不是支持的提案状态`);
@@ -1057,6 +1097,7 @@ function validateProposal(proposal, proposalPath = 'proposal', { knownEvidenceId
     assertStableId(proposal.requestId, `${proposalPath}.requestId`);
   }
   validateAcceptanceCriteria(proposal.acceptanceCriteria || [], `${proposalPath}.acceptanceCriteria`);
+  validateContractPatch(proposal.contractPatch, `${proposalPath}.contractPatch`, { knownEvidenceIds });
   if (proposal.confidence !== null && !CONFIDENCE_LEVELS.has(proposal.confidence)) {
     fail(`${proposalPath}.confidence 必须是 low、medium、high 或 null`);
   }
@@ -1066,7 +1107,10 @@ function validateProposal(proposal, proposalPath = 'proposal', { knownEvidenceId
     max: MAX_EVIDENCE_REFS_PER_PROPOSAL,
     knownEvidenceIds,
   });
-  assertArray(proposal.changes, `${proposalPath}.changes`, { min: 1, max: MAX_CHANGES_PER_PROPOSAL });
+  assertArray(proposal.changes, `${proposalPath}.changes`, {
+    min: proposal.contractPatch ? 0 : 1,
+    max: MAX_CHANGES_PER_PROPOSAL,
+  });
   const changeIds = new Set();
   const changeTargets = new Set();
   proposal.changes.forEach((change, index) => {
@@ -1083,6 +1127,10 @@ function validateProposal(proposal, proposalPath = 'proposal', { knownEvidenceId
   if (proposal.status === 'pending') {
     if (proposal.reviewedAt !== null || proposal.application !== null) {
       fail(`${proposalPath} 的待审提案不得包含审阅或应用记录`);
+    }
+  } else if (proposal.status === 'draft-applied') {
+    if (proposal.reviewedAt !== null || proposal.application === null) {
+      fail(`${proposalPath} 的智能体草稿写入必须包含应用记录且不得伪造人工审阅时间`);
     }
   } else if (proposal.status === 'accepted') {
     if (proposal.reviewedAt === null || proposal.application === null) {
@@ -1239,7 +1287,7 @@ function migrateAnalysis(value) {
     validateAnalysis(incoming);
     return incoming;
   }
-  if (!['1.0.0', '2.0.0', '2.1.0', '2.2.0', '2.3.0'].includes(incoming?.schemaVersion)) {
+  if (!['1.0.0', '2.0.0', '2.1.0', '2.2.0', '2.3.0', '2.4.0'].includes(incoming?.schemaVersion)) {
     fail(
       `analysis.schemaVersion 无法迁移到 ${ANALYSIS_SCHEMA_VERSION}`,
       'ANALYSIS_SCHEMA_VERSION_MISMATCH',

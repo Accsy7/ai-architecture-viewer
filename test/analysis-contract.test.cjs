@@ -311,7 +311,11 @@ test('analysis contract only permits semantic node and edge patches', () => {
 
   const groupedNode = validAnalysis();
   groupedNode.proposals[0].changes[0].patch.data.group = 'Core services';
-  contractError(() => validateAnalysis(groupedNode), 'ANALYSIS_PATCH_FIELD_FORBIDDEN');
+  assert.doesNotThrow(() => validateAnalysis(groupedNode));
+
+  const forgedConfirmation = validAnalysis();
+  forgedConfirmation.proposals[0].changes[0].patch.data.humanConfirmed = true;
+  contractError(() => validateAnalysis(forgedConfirmation), 'ANALYSIS_PATCH_FIELD_FORBIDDEN');
 
   const edgeRouting = validAnalysis();
   edgeRouting.proposals[0].changes = [{
@@ -341,14 +345,21 @@ test('analysis contract only permits semantic node and edge patches', () => {
     kind: 'update',
     targetType: 'edge',
     targetId: 'gateway-to-catalog',
-    summary: 'Attempts to change the relationship endpoints.',
+    summary: 'Changes the relationship endpoint under a stable edge ID.',
     evidenceIds: ['evidence-readme-1'],
     patch: {
       source: 'replacement-gateway',
       data: { label: 'updated label' },
     },
   }];
-  contractError(() => validateAnalysis(reroutedEdge), 'ANALYSIS_PATCH_FIELD_FORBIDDEN');
+  assert.doesNotThrow(() => validateAnalysis(reroutedEdge));
+  reroutedEdge.proposals[0].changes[0].patch.target = 'replacement-gateway';
+  contractError(() => validateAnalysis(reroutedEdge));
+
+  const manualRouting = validAnalysis();
+  manualRouting.proposals[0].changes = structuredClone(edgeRouting.proposals[0].changes);
+  manualRouting.proposals[0].changes[0].patch.data.routingMode = 'manual';
+  contractError(() => validateAnalysis(manualRouting), 'ANALYSIS_PATCH_FIELD_FORBIDDEN');
 });
 
 test('analysis contract requires evidence, bounded batches and a valid review lifecycle', () => {

@@ -1,6 +1,6 @@
 {
   "name": "ai-architecture-viewer",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "A local-first visual architecture handoff and review workbench for coding agents and humans.",
   "private": true,
   "license": "PolyForm-Noncommercial-1.0.0",
@@ -24,8 +24,9 @@
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
     "check": "vite build",
+    "pretest": "npm run build",
     "test": "npm run test:contracts && npm run test:instance",
-    "test:contracts": "node --test test/contracts.test.cjs test/server.test.cjs test/analysis-contract.test.cjs test/analysis-server.test.cjs test/ai-coding-exchange.test.cjs test/mcp-server.test.cjs",
+    "test:contracts": "node --test test/contracts.test.cjs test/server.test.cjs test/analysis-contract.test.cjs test/analysis-server.test.cjs test/ai-coding-exchange.test.cjs test/mcp-server.test.cjs test/pending-changes.test.cjs test/development-contract-preview.test.mjs test/review-records.test.mjs",
     "protocol:validate": "node protocol/validate-artifact.cjs",
     "test:instance": "node --test test/project-instance.test.cjs"
   },

@@ -1,9 +1,16 @@
 'use strict';
 
 const path = require('path');
+const {
+  AGENT_NODE_DATA_FIELDS,
+  AGENT_NODE_CLEARABLE_FIELDS,
+  AGENT_EDGE_DATA_FIELDS,
+} = require('./agent-semantic-fields.cjs');
 
-const AI_CODING_PROTOCOL_VERSION = '1.3.0';
-const SUPPORTED_PROTOCOL_VERSIONS = new Set(['1.0.0', '1.1.0', '1.2.0', AI_CODING_PROTOCOL_VERSION]);
+const AI_CODING_PROTOCOL_VERSION = '1.4.0';
+const SUPPORTED_PROTOCOL_VERSIONS = new Set(['1.0.0', '1.1.0', '1.2.0', '1.3.0', AI_CODING_PROTOCOL_VERSION]);
+const FORMAL_TARGET_VERSIONS = new Set(['1.2.0', '1.3.0', AI_CODING_PROTOCOL_VERSION]);
+const CONTRACT_TARGET_VERSIONS = new Set(['1.3.0', AI_CODING_PROTOCOL_VERSION]);
 const ARTIFACT_TYPES = new Set([
   'task-request',
   'evidence-manifest',
@@ -107,7 +114,7 @@ function revision(value, valuePath) {
 
 function approvedTarget(value, valuePath, schemaVersion) {
   object(value, valuePath);
-  const current = schemaVersion === AI_CODING_PROTOCOL_VERSION;
+  const current = CONTRACT_TARGET_VERSIONS.has(schemaVersion);
   keys(value, new Set([
     'status', 'diagramId', 'revision', 'revisionId', 'semanticHash',
     ...(current ? ['contractId', 'contractHash', 'documentSetHash'] : []),
@@ -136,6 +143,129 @@ function evidenceIds(value, valuePath, { min = 1 } = {}) {
     if (seen.has(id)) fail(`${valuePath} contains duplicate evidence ID ${id}`);
     seen.add(id);
   });
+}
+
+function acceptanceCriterion(value, valuePath, { evidenceRequired = false } = {}) {
+  object(value, valuePath);
+  keys(value, new Set(['id', 'statement', 'targetRefs', ...(evidenceRequired ? ['evidenceIds'] : [])]), valuePath);
+  stableId(value.id, `${valuePath}.id`);
+  text(value.statement, `${valuePath}.statement`, { max: 1000 });
+  const refs = new Set();
+  list(value.targetRefs, `${valuePath}.targetRefs`, { max: 100 }).forEach((ref, refIndex) => {
+    const refPath = `${valuePath}.targetRefs[${refIndex}]`;
+    object(ref, refPath);
+    keys(ref, new Set(['targetType', 'targetId']), refPath);
+    if (!['node', 'edge'].includes(ref.targetType)) fail(`${refPath}.targetType is not supported`);
+    stableId(ref.targetId, `${refPath}.targetId`);
+    const key = `${ref.targetType}:${ref.targetId}`;
+    if (refs.has(key)) fail(`${valuePath}.targetRefs contains duplicate target ${key}`);
+    refs.add(key);
+  });
+  if (evidenceRequired) evidenceIds(value.evidenceIds, `${valuePath}.evidenceIds`);
+}
+
+function validateContractPatch(value) {
+  object(value, 'artifact.contractPatch');
+  keys(value, new Set(['upsert', 'delete']), 'artifact.contractPatch');
+  const upsert = value.upsert === undefined ? [] : list(value.upsert, 'artifact.contractPatch.upsert', { max: 100 });
+  const removals = value.delete === undefined ? [] : list(value.delete, 'artifact.contractPatch.delete', { max: 100 });
+  if (!upsert.length && !removals.length) fail('artifact.contractPatch must contain at least one upsert or delete operation');
+  const ids = new Set();
+  upsert.forEach((criterion, index) => {
+    acceptanceCriterion(criterion, `artifact.contractPatch.upsert[${index}]`, { evidenceRequired: true });
+    if (ids.has(criterion.id)) fail(`artifact.contractPatch contains duplicate criterion ID ${criterion.id}`);
+    ids.add(criterion.id);
+  });
+  removals.forEach((operation, index) => {
+    const operationPath = `artifact.contractPatch.delete[${index}]`;
+    object(operation, operationPath);
+    keys(operation, new Set(['id', 'evidenceIds']), operationPath);
+    stableId(operation.id, `${operationPath}.id`);
+    evidenceIds(operation.evidenceIds, `${operationPath}.evidenceIds`);
+    if (ids.has(operation.id)) fail(`artifact.contractPatch contains duplicate criterion ID ${operation.id}`);
+    ids.add(operation.id);
+  });
+}
+
+function validateAgentPatchData(data, targetType, valuePath, { allowClear = false } = {}) {
+  object(data, valuePath);
+  const allowed = new Set(targetType === 'node' ? AGENT_NODE_DATA_FIELDS : AGENT_EDGE_DATA_FIELDS);
+  const clearable = new Set(targetType === 'node' ? AGENT_NODE_CLEARABLE_FIELDS : []);
+  keys(data, allowed, valuePath);
+  Object.entries(data).forEach(([field, value]) => {
+    const fieldPath = `${valuePath}.${field}`;
+    if (value === null) {
+      if (!allowClear || !clearable.has(field)) {
+        fail(`${fieldPath} cannot be cleared; only optional protocol 1.4 node fields may use null in an update`);
+      }
+      return;
+    }
+    if (field === 'focus') {
+      if (typeof value !== 'boolean') fail(`${fieldPath} must be a boolean`);
+      return;
+    }
+    if (field === 'documentRefs') {
+      const seen = new Set();
+      list(value, fieldPath, { max: 200 }).forEach((id, index) => {
+        stableId(id, `${fieldPath}[${index}]`);
+        if (seen.has(id)) fail(`${fieldPath} contains duplicate ID ${id}`);
+        seen.add(id);
+      });
+      return;
+    }
+    if (field === 'interactionModes') {
+      const seen = new Set();
+      list(value, fieldPath, { min: 1, max: 2 }).forEach((mode, index) => {
+        if (!INTERACTION_MODES.has(mode)) fail(`${fieldPath}[${index}] is not supported`);
+        if (seen.has(mode)) fail(`${fieldPath} contains duplicate value ${mode}`);
+        seen.add(mode);
+      });
+      return;
+    }
+    if (['architectureLayer', 'relatedDiagramId', 'relatedNodeId'].includes(field)) {
+      stableId(value, fieldPath);
+      return;
+    }
+    if (field === 'relationType') {
+      if (!RELATION_TYPES.has(value)) fail(`${fieldPath} is not supported`);
+      return;
+    }
+    if (field === 'controlledBoundaryPosture') {
+      if (!BOUNDARY_POSTURES.has(value)) fail(`${fieldPath} is not supported`);
+      return;
+    }
+    text(value, fieldPath, { max: field === 'name' || field === 'group' ? 120 : 2000 });
+  });
+}
+
+function validateArchitectureChangePatch(change, changePath, schemaVersion) {
+  if (change.kind === 'remove') return;
+  const patchPath = `${changePath}.patch`;
+  object(change.patch, patchPath);
+  if (change.targetType === 'node') {
+    keys(change.patch, new Set(['data']), patchPath);
+    validateAgentPatchData(change.patch.data, 'node', `${patchPath}.data`, {
+      allowClear: schemaVersion === AI_CODING_PROTOCOL_VERSION && change.kind === 'update',
+    });
+    const clearsRelatedDiagram = change.patch.data.relatedDiagramId === null;
+    const clearsRelatedNode = change.patch.data.relatedNodeId === null;
+    if (clearsRelatedDiagram !== clearsRelatedNode) {
+      fail(`${patchPath}.data.relatedDiagramId and relatedNodeId must be cleared together`);
+    }
+    return;
+  }
+  keys(change.patch, new Set(['source', 'target', 'data']), patchPath);
+  if (change.kind === 'add' && (change.patch.source === undefined || change.patch.target === undefined)) {
+    fail(`${patchPath}.source and ${patchPath}.target are required for an edge add`);
+  }
+  if (change.patch.source !== undefined) stableId(change.patch.source, `${patchPath}.source`);
+  if (change.patch.target !== undefined) stableId(change.patch.target, `${patchPath}.target`);
+  if (change.patch.source !== undefined && change.patch.source === change.patch.target) {
+    fail(`${patchPath} cannot create a self-loop`);
+  }
+  if (change.patch.data !== undefined) validateAgentPatchData(change.patch.data, 'edge', `${patchPath}.data`);
+  else if (change.kind === 'add') fail(`${patchPath}.data is required for an edge add`);
+  else if (change.patch.source === undefined && change.patch.target === undefined) fail(`${patchPath} must change an endpoint or edge data`);
 }
 
 function common(value, type) {
@@ -181,7 +311,7 @@ function validateEvidenceManifest(value) {
       return;
     }
 
-    const current = value.schemaVersion === AI_CODING_PROTOCOL_VERSION;
+    const current = CONTRACT_TARGET_VERSIONS.has(value.schemaVersion);
     keys(entry, new Set([
       'id', 'sourceKind', 'basis', 'path', 'lineStart', 'lineEnd', 'sourceLabel',
       'recordedAt', 'summary', 'excerpt', 'contentHash',
@@ -268,7 +398,7 @@ function validateArchitectureSnapshot(value) {
     object(node, nodePath);
     keys(node, new Set([
       'id', 'name', 'purpose', 'technical', 'product', 'authorization', 'evidenceIds',
-      ...(value.schemaVersion === AI_CODING_PROTOCOL_VERSION
+      ...(CONTRACT_TARGET_VERSIONS.has(value.schemaVersion)
         ? ['documentRefs', 'interactionModes', 'architectureLayer']
         : []),
     ]), nodePath);
@@ -280,7 +410,7 @@ function validateArchitectureSnapshot(value) {
     text(node.technical, `${nodePath}.technical`, { max: 500 });
     text(node.product, `${nodePath}.product`, { max: 500 });
     text(node.authorization, `${nodePath}.authorization`, { max: 500 });
-    if (value.schemaVersion === AI_CODING_PROTOCOL_VERSION) {
+    if (CONTRACT_TARGET_VERSIONS.has(value.schemaVersion)) {
       if (node.documentRefs !== undefined) {
         const refs = new Set();
         list(node.documentRefs, `${nodePath}.documentRefs`, { max: 64 }).forEach((id, refIndex) => {
@@ -318,7 +448,7 @@ function validateArchitectureSnapshot(value) {
     if (!nodeIds.has(edge.source) || !nodeIds.has(edge.target)) fail(`${edgePath} references an unknown node`);
     text(edge.label, `${edgePath}.label`, { max: 240 });
     if (!RELATION_TYPES.has(edge.relationType)) fail(`${edgePath}.relationType is not supported`);
-    if (['1.2.0', AI_CODING_PROTOCOL_VERSION].includes(value.schemaVersion) && !BOUNDARY_POSTURES.has(edge.controlledBoundaryPosture)) {
+    if (FORMAL_TARGET_VERSIONS.has(value.schemaVersion) && !BOUNDARY_POSTURES.has(edge.controlledBoundaryPosture)) {
       fail(`${edgePath}.controlledBoundaryPosture is required by protocol ${value.schemaVersion}`);
     }
     if (edge.controlledBoundaryPosture !== undefined && !BOUNDARY_POSTURES.has(edge.controlledBoundaryPosture)) {
@@ -335,7 +465,7 @@ function validateArchitectureProposal(value) {
   common(value, 'architecture-proposal');
   keys(value, new Set([
     'schemaVersion', 'artifactType', 'artifactId', 'createdAt', 'requestId', 'baseSnapshotId',
-    'title', 'summary', 'options', 'recommendedOptionId', 'changes', 'acceptanceCriteria',
+    'title', 'summary', 'options', 'recommendedOptionId', 'changes', 'acceptanceCriteria', 'contractPatch',
     'risks', 'decisionsRequired', 'evidenceManifest',
   ]), 'artifact');
   stableId(value.requestId, 'artifact.requestId');
@@ -359,7 +489,14 @@ function validateArchitectureProposal(value) {
   if (!optionIds.has(value.recommendedOptionId)) fail('artifact.recommendedOptionId must reference an option');
 
   const changeIds = new Set();
-  list(value.changes, 'artifact.changes', { min: 1, max: 50 }).forEach((change, index) => {
+  if (value.contractPatch !== undefined && value.schemaVersion !== AI_CODING_PROTOCOL_VERSION) {
+    fail(`artifact.contractPatch requires protocol ${AI_CODING_PROTOCOL_VERSION}`);
+  }
+  if (value.contractPatch !== undefined && value.acceptanceCriteria !== undefined) {
+    fail('artifact.acceptanceCriteria and artifact.contractPatch cannot be used together');
+  }
+  const minimumChanges = value.contractPatch === undefined ? 1 : 0;
+  list(value.changes, 'artifact.changes', { min: minimumChanges, max: 50 }).forEach((change, index) => {
     const changePath = `artifact.changes[${index}]`;
     object(change, changePath);
     keys(change, new Set(['id', 'kind', 'targetType', 'targetId', 'summary', 'evidenceIds', 'patch']), changePath);
@@ -374,29 +511,19 @@ function validateArchitectureProposal(value) {
     if (change.kind === 'remove' ? change.patch !== null : !isObject(change.patch)) {
       fail(`${changePath}.patch does not match the change kind`);
     }
+    validateArchitectureChangePatch(change, changePath, value.schemaVersion);
   });
-  if (value.schemaVersion === AI_CODING_PROTOCOL_VERSION) {
+  if (CONTRACT_TARGET_VERSIONS.has(value.schemaVersion)) {
     const criterionIds = new Set();
-    list(value.acceptanceCriteria, 'artifact.acceptanceCriteria', { min: 1, max: 100 }).forEach((criterion, index) => {
-      const criterionPath = `artifact.acceptanceCriteria[${index}]`;
-      object(criterion, criterionPath);
-      keys(criterion, new Set(['id', 'statement', 'targetRefs']), criterionPath);
-      stableId(criterion.id, `${criterionPath}.id`);
-      if (criterionIds.has(criterion.id)) fail(`artifact.acceptanceCriteria contains duplicate ID ${criterion.id}`);
-      criterionIds.add(criterion.id);
-      text(criterion.statement, `${criterionPath}.statement`, { max: 1000 });
-      const refs = new Set();
-      list(criterion.targetRefs, `${criterionPath}.targetRefs`, { max: 100 }).forEach((ref, refIndex) => {
-        const refPath = `${criterionPath}.targetRefs[${refIndex}]`;
-        object(ref, refPath);
-        keys(ref, new Set(['targetType', 'targetId']), refPath);
-        if (!['node', 'edge'].includes(ref.targetType)) fail(`${refPath}.targetType is not supported`);
-        stableId(ref.targetId, `${refPath}.targetId`);
-        const key = `${ref.targetType}:${ref.targetId}`;
-        if (refs.has(key)) fail(`${criterionPath}.targetRefs contains duplicate target ${key}`);
-        refs.add(key);
+    if (value.schemaVersion === '1.3.0' || value.acceptanceCriteria !== undefined) {
+      list(value.acceptanceCriteria, 'artifact.acceptanceCriteria', { min: 1, max: 100 }).forEach((criterion, index) => {
+        const criterionPath = `artifact.acceptanceCriteria[${index}]`;
+        acceptanceCriterion(criterion, criterionPath);
+        if (criterionIds.has(criterion.id)) fail(`artifact.acceptanceCriteria contains duplicate ID ${criterion.id}`);
+        criterionIds.add(criterion.id);
       });
-    });
+    }
+    if (value.contractPatch !== undefined) validateContractPatch(value.contractPatch);
   } else {
     textList(value.acceptanceCriteria, 'artifact.acceptanceCriteria', { min: 1, max: 100 });
   }
@@ -414,7 +541,7 @@ function validateImplementationReport(value) {
     'unresolved', 'evidenceManifest', 'resultingSnapshot', 'resultingSnapshotArtifactId',
   ]), 'artifact');
   stableId(value.requestId, 'artifact.requestId');
-  const usesFormalTarget = ['1.2.0', AI_CODING_PROTOCOL_VERSION].includes(value.schemaVersion);
+  const usesFormalTarget = FORMAL_TARGET_VERSIONS.has(value.schemaVersion);
   if (usesFormalTarget) {
     if (value.approvedProposalId !== undefined || value.resultingSnapshot !== undefined) {
       fail(`protocol ${AI_CODING_PROTOCOL_VERSION} implementation reports must use approvedTarget and resultingSnapshotArtifactId`);
@@ -444,7 +571,7 @@ function validateImplementationReport(value) {
   list(value.acceptanceResults, 'artifact.acceptanceResults', { min: 1, max: 100 }).forEach((result, index) => {
     const resultPath = `artifact.acceptanceResults[${index}]`;
     object(result, resultPath);
-    const current = value.schemaVersion === AI_CODING_PROTOCOL_VERSION;
+    const current = CONTRACT_TARGET_VERSIONS.has(value.schemaVersion);
     keys(result, new Set([current ? 'criterionId' : 'criterion', 'status', 'evidenceIds']), resultPath);
     if (current) {
       stableId(result.criterionId, `${resultPath}.criterionId`);

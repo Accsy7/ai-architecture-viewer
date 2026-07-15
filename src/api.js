@@ -1,7 +1,7 @@
 export const SCHEMA_VERSION = '3.3.0';
 export const DOCUMENT_SCHEMA_VERSION = '1.0.0';
 export const LAYOUT_SCHEMA_VERSION = '1.1.0';
-export const ANALYSIS_SCHEMA_VERSION = '2.4.0';
+export const ANALYSIS_SCHEMA_VERSION = '2.5.0';
 
 async function request(path, options = {}) {
   const response = await fetch(path, {
@@ -78,6 +78,12 @@ export const deleteDraft = (view, lane, diagram) =>
     body: JSON.stringify(laneLocks(lane)),
   });
 
+export const refreshDraftDocuments = (lane, diagram) =>
+  request(lanePath('/api/draft/refresh-documents', 'target', diagram), {
+    method: 'POST',
+    body: JSON.stringify(laneLocks(lane)),
+  });
+
 export const publishDraft = (view, lane, message, diagram) =>
   request(lanePath('/api/publish', view, diagram), {
     method: 'POST',
@@ -147,18 +153,6 @@ export const previewDocument = (documentId, section = '') => {
 };
 
 export const getAnalysis = () => request('/api/analysis');
-
-export const acceptAnalysisProposal = (proposalId, baseRevision) =>
-  request(`/api/analysis/proposals/${encodeURIComponent(proposalId)}/accept`, {
-    method: 'POST',
-    body: JSON.stringify({ schemaVersion: ANALYSIS_SCHEMA_VERSION, baseRevision, userConfirmed: true }),
-  });
-
-export const rejectAnalysisProposal = (proposalId, baseRevision) =>
-  request(`/api/analysis/proposals/${encodeURIComponent(proposalId)}/reject`, {
-    method: 'POST',
-    body: JSON.stringify({ schemaVersion: ANALYSIS_SCHEMA_VERSION, baseRevision, userConfirmed: true }),
-  });
 
 export const reviewImplementationRun = (runId, baseRevision, decision, note) =>
   request(`/api/analysis/runs/${encodeURIComponent(runId)}/review`, {

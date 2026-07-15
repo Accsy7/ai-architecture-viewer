@@ -10,7 +10,7 @@ Create a factual current-state architecture package without modifying applicatio
 ## Workflow
 
 1. Confirm the repository root and the user-authorized scope. Treat unspecified external directories, secrets, generated output, dependency caches, and customer data as out of scope.
-2. When AI Architecture Viewer MCP tools are available, call `get_project_context`, then call `create_agent_run` with task type `architecture-discovery`. Retain the returned run ID. If MCP is unavailable, continue with file artifacts and the CLI fallback below.
+2. When AI Architecture Viewer MCP tools are available, call `get_project_context`, read the compact current draft when present, then call `create_agent_run` with task type `architecture-discovery`. Retain the returned run ID and its published/draft lock. If MCP is unavailable, continue with file artifacts and the CLI fallback below.
 3. Record the workspace revision. Prefer a commit identifier when available; otherwise use a stable workspace label and state that the tree is uncommitted.
 4. Inspect entry points, manifests, build and test configuration, runtime boundaries, modules, storage, external integrations, and human or authorization gates.
 5. Support every current-state node and edge with one or more `code-fact` evidence IDs. Preserve observed `interactionModes` and `architectureLayer` values instead of inferring them from diagram position. Put uncertain interpretations in assumptions or unknowns; they must not masquerade as implemented facts.
@@ -19,8 +19,9 @@ Create a factual current-state architecture package without modifying applicatio
    - `architecture-snapshot.json`
    - `evidence-manifest.json`
 8. If `protocol/validate-artifact.cjs` is available, validate both files before submission.
-9. Submit both artifacts with `submit_architecture_snapshot`. If MCP is unavailable, run `npm run agent -- submit --run <run-id> --artifact <snapshot-path> --evidence <manifest-path>` after a run ID has been created through the viewer API or CLI.
-10. Report unknowns and conflicting evidence explicitly. Do not invent missing architecture facts.
+9. Submit both artifacts with `submit_architecture_snapshot`. The server converts net semantic differences into a patch and applies it to the exact locked current draft; stale writes are rejected. If MCP is unavailable, run `npm run agent -- submit --run <run-id> --artifact <snapshot-path> --evidence <manifest-path>` after a run ID has been created through the viewer API or CLI.
+10. Use one discovery snapshot write per run. For a follow-up refresh, reread the compact draft and create a new run automatically.
+11. Report unknowns and conflicting evidence explicitly. Do not invent missing architecture facts.
 
 ## Output rules
 
@@ -31,7 +32,7 @@ Create a factual current-state architecture package without modifying applicatio
 - Use `sourceKind: workspace-file` and `basis: code-fact` for every evidence entry referenced by the current architecture snapshot.
 - Do not edit `state.json`, `analysis.json`, viewer layout files, or any published architecture revision.
 - Treat the viewer as a handoff and review surface, not as the repository scanner. Use the coding agent's authorized repository tools for inspection.
-- Never call or simulate approval or publication. A submitted snapshot remains a candidate until the user reviews it.
+- Never call or simulate publication. A submitted snapshot may update only the locked draft, is not marked human-approved, and remains unpublished until the local user publishes the complete version.
 
 ## Completion gate
 

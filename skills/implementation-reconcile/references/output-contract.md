@@ -1,6 +1,6 @@
 # Reconciliation output contract
 
-Produce artifacts compatible with protocol version `1.3.0`.
+Produce artifacts compatible with protocol version `1.4.0`.
 
 ## implementation-report.json
 

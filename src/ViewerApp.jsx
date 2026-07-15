@@ -11,7 +11,6 @@ import {
   useReactFlow,
 } from '@xyflow/react';
 import {
-  acceptAnalysisProposal,
   getAnalysis,
   getDiagramCatalog,
   getDocuments,
@@ -26,7 +25,7 @@ import {
   publishDraft,
   putDraft,
   putViewerLayout,
-  rejectAnalysisProposal,
+  refreshDraftDocuments,
   reviewImplementationRun,
 } from './api.js';
 import {
@@ -39,6 +38,7 @@ import { resolveEdgePorts } from './routing.mjs';
 import { enrichNodesWithDocuments } from './document-model.js';
 import ArchitectureNode, { CanvasEditContext } from './components/ArchitectureNode.jsx';
 import AnalysisWorkbench from './components/AnalysisWorkbench.jsx';
+import PendingChangesLayer from './components/PendingChangesLayer.jsx';
 import GroupRegionNode from './components/GroupRegionNode.jsx';
 import DocumentLibrary from './components/DocumentLibrary.jsx';
 import {
@@ -50,6 +50,9 @@ import RevisionPanel from './components/RevisionPanel.jsx';
 import ProposalReviewDialog from './components/ProposalReviewDialog.jsx';
 import SmartArchitectureEdge from './components/SmartArchitectureEdge.jsx';
 import ViewerDetailPanel from './components/ViewerDetailPanel.jsx';
+import { I18nProvider, LanguageSwitch, useI18n } from './i18n.jsx';
+import { buildDraftChangeProjection, decorateFlowWithDraftChanges } from './pending-changes.mjs';
+import { buildReviewRecords } from './review-records.mjs';
 
 const nodeTypes = { architectureNode: ArchitectureNode, groupRegion: GroupRegionNode };
 const edgeTypes = { architectureEdge: SmartArchitectureEdge };
@@ -64,6 +67,7 @@ const DEFAULT_CONFIG = {
   eyebrow: 'PROJECT ARCHITECTURE',
   scopeNote: '用于理解、核对与讨论项目架构。',
   defaultFocusNodeId: null,
+  defaultLanguage: null,
   views: {
     current: { label: '当前架构', description: '查看当前结构与待确认修订' },
     target: { label: '目标架构', description: '查看规划中的目标结构' },
@@ -92,7 +96,7 @@ const EMPTY_REGISTRY = {
 };
 
 const EMPTY_ANALYSIS = {
-  schemaVersion: '2.4.0',
+  schemaVersion: '2.5.0',
   baseRevision: 0,
   lastUpdated: null,
   sources: [],
@@ -226,7 +230,7 @@ function buildGenericCompareGraph(currentGraph, targetGraph) {
       ...node,
       data: {
         ...node.data,
-        compareStatus: !exists ? '目标新增' : changed ? '当前已有，目标职责或状态将调整' : '当前已有，目标延续',
+        compareStatus: !exists ? 'target-new' : changed ? 'target-changed' : 'target-continued',
         compareClass: !exists ? 'compare-new' : changed ? 'compare-changed' : 'compare-current',
       },
     };
@@ -235,7 +239,7 @@ function buildGenericCompareGraph(currentGraph, targetGraph) {
     if (targetNodes.has(node.id)) continue;
     nodes.push({
       ...node,
-      data: { ...node.data, compareStatus: '仅当前架构', compareClass: 'compare-only' },
+      data: { ...node.data, compareStatus: 'current-only', compareClass: 'compare-only' },
     });
   }
   return { nodes, edges: targetGraph?.edges || [] };
@@ -295,6 +299,7 @@ function resolveNavigationLocation(diagrams = [], selectedDiagram = null) {
 
 function Viewer() {
   const { fitView } = useReactFlow();
+  const { language, t, applyProjectDefault, translateError } = useI18n();
   const [config, setConfig] = useState(DEFAULT_CONFIG);
   const [diagramCatalog, setDiagramCatalog] = useState(EMPTY_DIAGRAM_CATALOG);
   const [diagramId, setDiagramId] = useState(null);
@@ -317,6 +322,7 @@ function Viewer() {
   const [analysisLoading, setAnalysisLoading] = useState(false);
   const [analysisWorkbenchOpen, setAnalysisWorkbenchOpen] = useState(false);
   const [analysisTab, setAnalysisTab] = useState('runs');
+  const [pendingLayerOpen, setPendingLayerOpen] = useState(false);
   const [reviewProposalId, setReviewProposalId] = useState(null);
   const [analysisActionBusy, setAnalysisActionBusy] = useState(false);
   const [documentLoading, setDocumentLoading] = useState(false);
@@ -355,6 +361,7 @@ function Viewer() {
   const analysisRef = useRef(EMPTY_ANALYSIS);
   const historicalRef = useRef(null);
   const bundleSignatureRef = useRef('');
+  const initializationStartedRef = useRef(false);
   const fitAfterLoadRef = useRef(false);
   const navigationFocusRef = useRef(null);
   const draggingRef = useRef(false);
@@ -412,7 +419,11 @@ function Viewer() {
   }, [replaceEdges, replaceNodes]);
 
   const fetchViewBundle = useCallback(async (nextView, nextDiagramId = diagramRef.current) => {
-    if (!nextDiagramId) throw new Error('尚未选择架构图');
+    if (!nextDiagramId) {
+      const error = new Error('No architecture diagram selected.');
+      error.code = 'ARCHITECTURE_DIAGRAM_NOT_SELECTED';
+      throw error;
+    }
     if (nextView === 'compare') {
       const [current, target, currentLayout, targetLayout] = await Promise.all([
         getLane('current', nextDiagramId),
@@ -427,7 +438,7 @@ function Viewer() {
         meta: current.meta,
         view: 'compare',
         published: {
-          revision: `C${current.published.revision} / T${target.draft ? '草案' : target.published.revision}`,
+          revision: `C${current.published.revision} / T${target.draft ? t('common.draft') : target.published.revision}`,
           revisionId: `compare:${current.published.revisionId}:${target.draft?.draftId || target.published.revisionId}`,
           graph: buildGenericCompareGraph(currentGraph, targetGraph),
         },
@@ -453,7 +464,7 @@ function Viewer() {
       layouts: { [nextView]: nextLayout },
       signature: [nextDiagramId, laneSignature(nextLane), layoutSignature(nextLayout)].join('::'),
     };
-  }, []);
+  }, [t]);
 
   const syncBundle = useCallback((bundle, nextView, shouldFit = true) => {
     historicalRef.current = null;
@@ -479,11 +490,11 @@ function Viewer() {
       setRevisionPanelOpen(false);
       syncBundle(bundle, nextView, !quiet);
     } catch (error) {
-      showToast(error.message);
+      showToast(translateError(error));
     } finally {
       if (!quiet) setLoading(false);
     }
-  }, [fetchViewBundle, showToast, syncBundle]);
+  }, [fetchViewBundle, showToast, syncBundle, translateError]);
 
   const refreshDocuments = useCallback(async (quiet = false) => {
     if (!quiet) setDocumentLoading(true);
@@ -495,12 +506,12 @@ function Viewer() {
       replaceNodes(enrichNodesWithDocuments(nodesRef.current, normalized.documents));
       return normalized;
     } catch (error) {
-      if (!quiet) showToast(error.message);
+      if (!quiet) showToast(translateError(error));
       return registryRef.current;
     } finally {
       if (!quiet) setDocumentLoading(false);
     }
-  }, [replaceNodes, showToast]);
+  }, [replaceNodes, showToast, translateError]);
 
   const replaceAnalysis = useCallback((next) => {
     const normalized = {
@@ -523,12 +534,12 @@ function Viewer() {
     try {
       return replaceAnalysis(await getAnalysis());
     } catch (error) {
-      if (!quiet) showToast(error.message);
+      if (!quiet) showToast(translateError(error));
       return analysisRef.current;
     } finally {
       if (!quiet) setAnalysisLoading(false);
     }
-  }, [replaceAnalysis, showToast]);
+  }, [replaceAnalysis, showToast, translateError]);
 
   const refreshSkills = useCallback(async (quiet = false) => {
     try {
@@ -537,12 +548,14 @@ function Viewer() {
       setSkillCatalog(normalized);
       return normalized;
     } catch (error) {
-      if (!quiet) showToast(error.message);
+      if (!quiet) showToast(translateError(error));
       return EMPTY_SKILL_CATALOG;
     }
-  }, [showToast]);
+  }, [showToast, translateError]);
 
   useEffect(() => {
+    if (initializationStartedRef.current) return;
+    initializationStartedRef.current = true;
     Promise.all([getViewerConfig(), getDiagramCatalog()]).then(([nextConfig, nextCatalog]) => {
       const normalizedConfig = {
         ...DEFAULT_CONFIG,
@@ -555,9 +568,12 @@ function Viewer() {
         diagrams: nextCatalog.diagrams || [],
       };
       if (!normalizedCatalog.defaultDiagramId || !normalizedCatalog.diagrams.length) {
-        throw new Error('项目尚未配置可查看的架构图');
+        const error = new Error('The project has no configured architecture diagram.');
+        error.code = 'ARCHITECTURE_CATALOG_EMPTY';
+        throw error;
       }
       configRef.current = normalizedConfig;
+      applyProjectDefault(normalizedConfig.defaultLanguage);
       diagramCatalogRef.current = normalizedCatalog;
       diagramRef.current = normalizedCatalog.defaultDiagramId;
       setConfig(normalizedConfig);
@@ -566,12 +582,17 @@ function Viewer() {
       setCatalogReady(true);
     }).catch((error) => {
       setLoading(false);
-      showToast(error.message);
+      showToast(translateError(error));
     });
-  }, [showToast]);
+  }, [applyProjectDefault, showToast, translateError]);
 
   useEffect(() => {
-    if (catalogReady) loadView('current', false, diagramRef.current);
+    if (catalogReady && !bundleSignatureRef.current) loadView('current', false, diagramRef.current);
+  }, [catalogReady, loadView]);
+  useEffect(() => {
+    if (catalogReady && bundleSignatureRef.current && viewRef.current === 'compare') {
+      loadView('compare', true, diagramRef.current);
+    }
   }, [catalogReady, loadView]);
   useEffect(() => { refreshDocuments(); }, [refreshDocuments]);
   useEffect(() => { refreshAnalysis(); }, [refreshAnalysis]);
@@ -591,14 +612,14 @@ function Viewer() {
         const bundle = await fetchViewBundle(viewRef.current);
         if (bundle.signature !== bundleSignatureRef.current) {
           syncBundle(bundle, viewRef.current, false);
-          showToast('本地架构与排版已同步');
+          showToast(t('shell.localStateSynced'));
         }
       } catch {
         // 保持上一次可读状态，下一轮继续尝试本地同步。
       }
     }, 2000);
     return () => window.clearInterval(timer);
-  }, [fetchViewBundle, showToast, syncBundle]);
+  }, [fetchViewBundle, showToast, syncBundle, t]);
 
   useEffect(() => {
     const timer = window.setInterval(async () => {
@@ -694,7 +715,7 @@ function Viewer() {
     replaceNodes(applyNodeChanges(allowed, nodesRef.current));
   }, [replaceNodes]);
 
-  const saveLayoutChanges = useCallback(async ({ positions = {}, containers, message = '排版已保存；架构内容没有改变' }) => {
+  const saveLayoutChanges = useCallback(async ({ positions = {}, containers, message = null }) => {
     const activeView = viewRef.current;
     const activeDiagram = diagramRef.current;
     if (!['current', 'target'].includes(activeView) || historicalRef.current) return;
@@ -717,14 +738,14 @@ function Viewer() {
         });
       }
       bundleSignatureRef.current = [activeDiagram, laneSignature(laneRef.current), layoutSignature(saved)].join('::');
-      showToast(message);
+      showToast(message || t('shell.layoutSaved'));
       return saved;
     } catch (error) {
-      showToast(error.message);
+      showToast(translateError(error));
       await loadView(activeView, true, activeDiagram);
       return null;
     }
-  }, [loadView, replaceRegionPreview, showToast, updateLayouts]);
+  }, [loadView, replaceRegionPreview, showToast, t, translateError, updateLayouts]);
 
   const saveNodePosition = useCallback(async (node) => {
     const activeView = viewRef.current;
@@ -769,16 +790,16 @@ function Viewer() {
     try {
       await saveLayoutChanges({
         containers: { [groupId]: normalized },
-        message: '分组区域大小已保存；卡片归属没有改变',
+        message: t('shell.groupSizeSaved'),
       });
     } finally {
       draggingRef.current = false;
     }
-  }, [previewRegionResize, saveLayoutChanges]);
+  }, [previewRegionResize, saveLayoutChanges, t]);
 
   const openRevisionPanel = useCallback(async () => {
     if (viewRef.current === 'compare') {
-      showToast('请先选择当前架构或目标架构，再查看对应版本历史');
+      showToast(t('shell.selectLaneForHistory'));
       return;
     }
     setRevisionPanelOpen(true);
@@ -787,11 +808,16 @@ function Viewer() {
       const catalog = await getRevisions(viewRef.current, diagramRef.current);
       setRevisionCatalog({ headRevisionId: catalog.headRevisionId, revisions: catalog.revisions || [] });
     } catch (error) {
-      showToast(error.message);
+      showToast(translateError(error));
     } finally {
       setRevisionLoading(false);
     }
-  }, [showToast]);
+  }, [showToast, t, translateError]);
+
+  const openRevisionPanelFromWorkbench = useCallback(async () => {
+    setAnalysisWorkbenchOpen(false);
+    await openRevisionPanel();
+  }, [openRevisionPanel]);
 
   const inspectRevision = useCallback(async (summary) => {
     setRevisionLoading(true);
@@ -807,13 +833,13 @@ function Viewer() {
       } catch {
         setRevisionDiff({ summary: diffSummary(revision.graph, laneRef.current.published.graph) });
       }
-      showToast(`正在查看 R${revision.revision}；正式架构没有改变`);
+      showToast(t('shell.inspectingRevision', { revision: revision.revision }));
     } catch (error) {
-      showToast(error.message);
+      showToast(translateError(error));
     } finally {
       setRevisionLoading(false);
     }
-  }, [displayGraph, showToast]);
+  }, [displayGraph, showToast, t, translateError]);
 
   const returnFromHistorical = useCallback(() => loadView(viewRef.current), [loadView]);
 
@@ -830,92 +856,78 @@ function Viewer() {
       setPreview({ ...payload, title: document.title, path: payload.path || document.path });
     } catch (error) {
       setPreview(null);
-      showToast(error.message);
+      showToast(translateError(error));
     } finally {
       setPreviewLoading(false);
     }
-  }, [showToast]);
+  }, [showToast, translateError]);
 
   const openAnalysisWorkbench = useCallback(async () => {
     if (historicalRef.current || viewRef.current === 'compare') {
-      showToast('请先回到当前架构或目标架构，再打开智能体工作台');
+      showToast(t('shell.workbenchUnavailable'));
       return;
     }
     setAnalysisWorkbenchOpen(true);
-    await Promise.all([refreshAnalysis(), refreshSkills(true)]);
-  }, [refreshAnalysis, refreshSkills, showToast]);
+    const [, , catalog] = await Promise.all([
+      refreshAnalysis(),
+      refreshSkills(true),
+      getRevisions(viewRef.current, diagramRef.current),
+    ]);
+    setRevisionCatalog({ headRevisionId: catalog.headRevisionId, revisions: catalog.revisions || [] });
+  }, [refreshAnalysis, refreshSkills, showToast, t]);
+
+  const refreshAnalysisWorkbench = useCallback(async () => {
+    const [, catalog] = await Promise.all([
+      refreshAnalysis(),
+      getRevisions(viewRef.current, diagramRef.current),
+    ]);
+    setRevisionCatalog({ headRevisionId: catalog.headRevisionId, revisions: catalog.revisions || [] });
+  }, [refreshAnalysis]);
 
   const copySkillPrompt = useCallback(async (skill) => {
     if (!skill?.defaultPrompt) return;
     try {
       if (!navigator.clipboard?.writeText) throw new Error('Clipboard unavailable');
       await navigator.clipboard.writeText(skill.defaultPrompt);
-      showToast(`已复制“${skill.displayName}”调用提示`);
+      showToast(t('shell.skillPromptCopied', { name: skill.displayName }));
     } catch {
-      showToast(`无法自动复制；请让编码智能体读取 ${skill.skillPath}`);
+      showToast(t('shell.skillPromptCopyFailed', { path: skill.skillPath }));
     }
-  }, [showToast]);
+  }, [showToast, t]);
 
   const copyAgentConnection = useCallback(async () => {
-    const instructions = [
+    const instructions = (language === 'en' ? [
+      'Connect to this project\'s AI Architecture Viewer MCP service.',
+      `Start command: ${analysisRef.current.integration?.mcpCommand || 'npm run mcp'}`,
+      'Call get_project_context, then create_agent_run.',
+      'Read the compact active draft. Submit one evidence-backed semantic patch per discovery or change-plan run; create a new run for the next patch.',
+      'Current drafts require code-fact evidence. Target drafts may use user-confirmed discussion, registered design documents, code facts, or labelled agent inference.',
+      'The server applies a valid patch only to the exact locked draft. Stale writes are rejected. Never replace the complete project state.',
+      'A draft is not an executable baseline. Only the local user can publish it.',
+      'Implementation complete is only an agent claim; final implementation acceptance stays local and human.',
+    ] : [
       '请连接本项目的 AI Architecture Viewer MCP 服务。',
       `启动命令：${analysisRef.current.integration?.mcpCommand || 'npm run mcp'}`,
       '先调用 get_project_context，再调用 create_agent_run。',
-      '概念项目可从用户确认的讨论结论或 Markdown 设计材料提交目标提案，无需代码仓库。',
-      '文件依据路径必须相对于查看器配置的工作区根目录。',
-      '每条依据标明 user-confirmed、design-document、code-fact 或 agent-inference；当前架构只能引用 code-fact。',
-      '根据任务提交 architecture snapshot、change proposal 或 implementation report，并附带 evidence manifest。',
-      '实施报告中的 complete 只是智能体声明；自动架构门禁通过后仍需用户在查看器中验收。',
-      '不要自审实施结果、接受提案或发布架构；这些操作必须由用户在查看器中完成。',
-    ].join('\n');
+      '读取精简活动草稿；发现或变更规划运行每次只提交一个有依据的语义补丁，下一次补丁自动创建新运行。',
+      '当前草稿只能引用 code-fact；目标草稿可引用 user-confirmed、design-document、code-fact 或标明的 agent-inference。',
+      '服务端只把验证通过的补丁写入运行锁定的草稿；过期写入会被拒绝，禁止整份状态覆盖。',
+      '草稿不是可执行基线，只有本地用户可以发布。',
+      '实施报告中的 complete 只是智能体声明；最终实施验收仍由本地用户完成。',
+    ]).join('\n');
     try {
       if (!navigator.clipboard?.writeText) throw new Error('Clipboard unavailable');
       await navigator.clipboard.writeText(instructions);
-      showToast('已复制智能体接入说明');
+      showToast(t('shell.connectionCopied'));
     } catch {
-      showToast('无法自动复制；请运行 npm run mcp 查看接入入口');
+      showToast(t('shell.connectionCopyFailed'));
     }
-  }, [showToast]);
+  }, [language, showToast, t]);
 
   const openProposalReview = useCallback((proposal) => {
     if (!proposal?.id) return;
     setReviewProposalId(proposal.id);
   }, []);
-
-  const acceptProposal = useCallback(async (proposal) => {
-    if (!proposal?.id) return;
-    setAnalysisActionBusy(true);
-    try {
-      const result = await acceptAnalysisProposal(proposal.id, analysisRef.current.baseRevision);
-      replaceAnalysis(result.analysis);
-      setReviewProposalId(null);
-      if (proposal.view === viewRef.current && proposal.diagramId === diagramRef.current && !historicalRef.current) {
-        await loadView(viewRef.current, false, diagramRef.current);
-      }
-      showToast('提案已写入草案；正式架构尚未改变');
-    } catch (error) {
-      showToast(error.message);
-      throw error;
-    } finally {
-      setAnalysisActionBusy(false);
-    }
-  }, [loadView, replaceAnalysis, showToast]);
-
-  const rejectProposal = useCallback(async (proposal) => {
-    if (!proposal?.id) return;
-    setAnalysisActionBusy(true);
-    try {
-      const next = await rejectAnalysisProposal(proposal.id, analysisRef.current.baseRevision);
-      replaceAnalysis(next);
-      setReviewProposalId(null);
-      showToast('提案已拒绝，正式架构没有改变');
-    } catch (error) {
-      showToast(error.message);
-      throw error;
-    } finally {
-      setAnalysisActionBusy(false);
-    }
-  }, [replaceAnalysis, showToast]);
 
   const reviewImplementation = useCallback(async (run, decision, note) => {
     if (!run?.id) return;
@@ -928,18 +940,13 @@ function Viewer() {
         note,
       );
       replaceAnalysis(next);
-      const message = {
-        accepted: '实施结果已由你接受；正式目标没有改变',
-        'revision-requested': '已记录要求修订；正式目标没有改变',
-        rejected: '实施结果已拒绝；正式目标没有改变',
-      }[decision];
-      showToast(message || '人工验收结论已记录');
+      showToast(t(`shell.implementationReview.${decision}`, {}, t('shell.implementationReview.recorded')));
     } catch (error) {
-      showToast(error.message);
+      showToast(translateError(error));
     } finally {
       setAnalysisActionBusy(false);
     }
-  }, [replaceAnalysis, showToast]);
+  }, [replaceAnalysis, showToast, t, translateError]);
 
   const openEvidenceExcerpt = useCallback((evidence) => {
     if (!evidence) return;
@@ -949,27 +956,51 @@ function Viewer() {
       ? `${evidence.lineStart}–${evidence.lineEnd}`
       : evidence.lineStart;
     setPreview({
-      title: isDiscussion ? '用户讨论依据摘录' : isProjectDocument ? '注册项目文档摘录' : '资料依据摘录',
+      title: isDiscussion ? t('shell.evidence.discussion') : isProjectDocument ? t('shell.evidence.projectDocument') : t('shell.evidence.material'),
       path: isDiscussion
-        ? (evidence.sourceLabel || '用户与智能体讨论')
+        ? (evidence.sourceLabel || t('shell.evidence.discussionSource'))
         : isProjectDocument
           ? `document:${evidence.documentId}${evidence.section ? `#${evidence.section}` : ''}`
           : `${evidence.path}:${range}`,
       content: evidence.excerpt || '',
     });
     setPreviewLoading(false);
-  }, []);
+  }, [t]);
 
-  const selectedNode = nodes.find((node) => node.id === selectedNodeId) || null;
-  const selectedEdge = edges.find((edge) => edge.id === selectedEdgeId) || null;
   const readOnlyHistorical = Boolean(historicalRevision);
   const draggable = !readOnlyHistorical && view !== 'compare';
+  const draftProjection = useMemo(() => buildDraftChangeProjection({
+    publishedGraph: !readOnlyHistorical && view !== 'compare' ? lane?.published?.graph : null,
+    publishedContract: !readOnlyHistorical && view === 'target' ? lane?.published?.developmentContract : null,
+    draft: !readOnlyHistorical && view !== 'compare' ? lane?.draft : null,
+    proposals: analysis.proposals,
+    evidence: analysis.evidence,
+    diagramId,
+    view,
+  }), [analysis.evidence, analysis.proposals, diagramId, lane?.draft, lane?.published?.developmentContract, lane?.published?.graph, readOnlyHistorical, view]);
+  const canvasElements = useMemo(() => {
+    if (!draftProjection.totalCount || readOnlyHistorical || view === 'compare') return { nodes, edges };
+    const activeLayout = layouts[view] || EMPTY_LAYOUT;
+    const publishedFlow = canonicalGraphToFlow(applyPositions(lane.published.graph, activeLayout.positions));
+    const publishedNodes = enrichNodesWithDocuments(publishedFlow.nodes, registry.documents || []);
+    return decorateFlowWithDraftChanges(
+      nodes,
+      edges,
+      publishedNodes,
+      publishedFlow.edges,
+      draftProjection.items,
+    );
+  }, [draftProjection, edges, lane?.published?.graph, layouts, nodes, readOnlyHistorical, registry.documents, view]);
+  const canvasNodes = canvasElements.nodes;
+  const canvasEdges = canvasElements.edges;
+  const selectedNode = canvasNodes.find((node) => node.id === selectedNodeId) || null;
+  const selectedEdge = canvasEdges.find((edge) => edge.id === selectedEdgeId) || null;
 
   const displayEdges = useMemo(() => {
-    const routedEdges = edges.map((edge) => {
+    const routedEdges = canvasEdges.map((edge) => {
       const autoEdge = { ...edge, data: { ...edge.data, routingMode: 'auto' } };
       const styled = styleFlowEdge(autoEdge);
-      const ports = resolveEdgePorts(nodes, autoEdge);
+      const ports = resolveEdgePorts(canvasNodes, autoEdge);
       return { edge, styled, ports };
     });
     const sourceBundles = new Map();
@@ -986,7 +1017,12 @@ function Viewer() {
       const emphasized = focusSelection && related;
       const sourceBundleCount = sourceBundles.get(`${edge.source}:${ports.sourcePort}`) || 1;
       const targetBundleCount = targetBundles.get(`${edge.target}:${ports.targetPort}`) || 1;
-      const className = [styled.className, emphasized ? 'is-emphasized' : '']
+      const draftClass = edge.data?.__draftRemoval
+        ? 'is-pending-removal'
+        : edge.data?.__draftAddition
+          ? 'is-pending-addition'
+          : edge.data?.__draftChanges?.length ? 'is-pending-change' : '';
+      const className = [styled.className, draftClass, emphasized ? 'is-emphasized' : '']
         .filter(Boolean)
         .join(' ');
       return {
@@ -1004,7 +1040,7 @@ function Viewer() {
         data: {
           ...styled.data,
           routingMode: 'auto',
-          __nodes: nodes,
+          __nodes: canvasNodes,
           __sourcePort: ports.sourcePort,
           __targetPort: ports.targetPort,
           __laneIndex: edgeIndex,
@@ -1014,13 +1050,13 @@ function Viewer() {
         },
       };
     });
-  }, [edges, focusSelection, nodes, selectedEdgeId, selectedNodeId]);
+  }, [canvasEdges, canvasNodes, focusSelection, selectedEdgeId, selectedNodeId]);
 
   const architectureViews = useMemo(() => ['current', 'target', 'compare'].map((key) => [
     key,
-    config.views[key]?.label || DEFAULT_CONFIG.views[key].label,
-    config.views[key]?.description || DEFAULT_CONFIG.views[key].description,
-  ]), [config.views]);
+    t(`views.${key}.label`, {}, config.views[key]?.label || DEFAULT_CONFIG.views[key].label),
+    t(`views.${key}.description`, {}, config.views[key]?.description || DEFAULT_CONFIG.views[key].description),
+  ]), [config.views, t]);
   const selectedArchitectureView = architectureViews.find(([key]) => key === view) || architectureViews[0];
   const selectedDiagram = diagramCatalog.diagrams.find((entry) => entry.id === diagramId)
     || diagramCatalog.diagrams[0]
@@ -1080,45 +1116,25 @@ function Viewer() {
   const activeAgentRuns = analysis.runs.filter((run) => (
     run.diagramId === diagramId && run.view === view
   ));
-  const pendingAnalysisCount = activeAnalysisProposals.filter((proposal) => proposal.status === 'pending').length;
+  const analysisActivityCount = activeAgentRuns.length;
   const reviewProposal = activeAnalysisProposals.find((proposal) => proposal.id === reviewProposalId) || null;
-  const proposalReviews = activeAnalysisProposals
-    .filter((proposal) => proposal.status !== 'pending')
-    .map((proposal) => ({
-      id: proposal.id,
-      title: proposal.title,
-      summary: proposal.summary,
-      status: proposal.status,
-      reviewedAt: proposal.reviewedAt,
-      acceptedCount: proposal.status === 'accepted' ? proposal.changes.length : 0,
-      rejectedCount: proposal.status === 'rejected' ? proposal.changes.length : 0,
-      proposal,
-    }));
-  const implementationReviews = activeAgentRuns
-    .filter((run) => run.humanReview)
-    .map((run) => ({
-      id: `implementation-${run.id}`,
-      kind: 'implementation',
-      title: `实施结果验收 · ${run.agentName || run.id}`,
-      summary: run.humanReview.note,
-      decision: run.humanReview.decision,
-      reviewedAt: run.humanReview.reviewedAt,
-      reviewer: run.humanReview.reviewer,
-    }));
-  const analysisReviews = [...proposalReviews, ...implementationReviews]
-    .sort((left, right) => Date.parse(right.reviewedAt || 0) - Date.parse(left.reviewedAt || 0));
+  const analysisReviews = buildReviewRecords({
+    revisions: revisionCatalog.revisions,
+    runs: activeAgentRuns,
+    proposals: activeAnalysisProposals,
+  });
 
   const displayNodes = useMemo(() => {
     const relatedNodeIds = new Set();
     if (selectedNodeId) {
       relatedNodeIds.add(selectedNodeId);
-      edges.forEach((edge) => {
+      canvasEdges.forEach((edge) => {
         if (edge.source === selectedNodeId) relatedNodeIds.add(edge.target);
         if (edge.target === selectedNodeId) relatedNodeIds.add(edge.source);
       });
     }
     if (selectedEdgeId) {
-      const edge = edges.find((item) => item.id === selectedEdgeId);
+      const edge = canvasEdges.find((item) => item.id === selectedEdgeId);
       if (edge) {
         relatedNodeIds.add(edge.source);
         relatedNodeIds.add(edge.target);
@@ -1127,7 +1143,7 @@ function Viewer() {
     const childOwnerIds = new Set(diagramCatalog.diagrams
       .filter((entry) => entry.parentDiagramId === diagramId && entry.ownerNodeId)
       .map((entry) => entry.ownerNodeId));
-    const semanticNodes = nodes.map((node) => ({
+    const semanticNodes = canvasNodes.map((node) => ({
       ...node,
       zIndex: 2,
       data: {
@@ -1158,7 +1174,7 @@ function Viewer() {
         selected: selectedRegionId === id,
         dragHandle: '.group-region__drag-handle',
         data: {
-          label: group.label || group.group || `分组 ${index + 1}`,
+          label: group.label || group.group || t('shell.groupFallback', { index: index + 1 }),
           description: group.description || '',
           color: group.color,
           accent: group.accent,
@@ -1181,6 +1197,8 @@ function Viewer() {
     });
     return [...regionNodes, ...semanticNodes];
   }, [
+    canvasEdges,
+    canvasNodes,
     groups,
     diagramCatalog.diagrams,
     diagramId,
@@ -1195,6 +1213,7 @@ function Viewer() {
     selectedEdgeId,
     selectedNodeId,
     selectedRegionId,
+    t,
     view,
   ]);
 
@@ -1277,12 +1296,12 @@ function Viewer() {
       await saveLayoutChanges({
         positions,
         containers: { [interaction.groupId]: geometry },
-        message: '分组区域与内部卡片已整体移动；卡片归属没有改变',
+        message: t('shell.groupMoved'),
       });
     } finally {
       draggingRef.current = false;
     }
-  }, [moveCanvasNode, saveLayoutChanges, saveNodePosition]);
+  }, [moveCanvasNode, saveLayoutChanges, saveNodePosition, t]);
 
   const saveArchitectureCorrection = useCallback(async (correction) => {
     const activeLane = laneRef.current;
@@ -1293,7 +1312,7 @@ function Viewer() {
     const nextGraph = JSON.parse(JSON.stringify(baseGraph));
     const node = nextGraph.nodes.find((entry) => entry.id === correctionNodeId);
     if (!node) {
-      showToast('所选模块已经变化，请刷新后重试');
+      showToast(t('shell.selectedModuleChanged'));
       return;
     }
     node.data = { ...node.data, ...correction };
@@ -1301,12 +1320,12 @@ function Viewer() {
       await putDraft(activeView, activeLane, nextGraph, activeDiagram, { userConfirmedSemanticOverride: true });
       setCorrectionNodeId(null);
       await loadView(activeView, false, activeDiagram);
-      showToast('你的纠正已写入草案，并已标记为人工确认');
+      showToast(t('shell.correctionSaved'));
     } catch (error) {
-      showToast(error.message);
+      showToast(translateError(error));
       throw error;
     }
-  }, [correctionNodeId, loadView, showToast]);
+  }, [correctionNodeId, loadView, showToast, t, translateError]);
 
   const publishCurrentDraft = useCallback(async (message) => {
     const activeLane = laneRef.current;
@@ -1317,22 +1336,37 @@ function Viewer() {
       await publishDraft(activeView, activeLane, message, activeDiagram);
       setPublishDialogOpen(false);
       await loadView(activeView, false, activeDiagram);
-      showToast('修订已发布为新的正式架构版本');
+      showToast(t('shell.published'));
     } catch (error) {
-      showToast(error.message);
+      showToast(translateError(error));
       throw error;
     }
-  }, [loadView, showToast]);
+  }, [loadView, showToast, t, translateError]);
+
+  const refreshCurrentDraftDocuments = useCallback(async () => {
+    const activeLane = laneRef.current;
+    const activeDiagram = diagramRef.current;
+    if (!activeLane?.draft || viewRef.current !== 'target' || historicalRef.current) return;
+    try {
+      await refreshDraftDocuments(activeLane, activeDiagram);
+      setPublishDialogOpen(false);
+      await loadView('target', false, activeDiagram);
+      showToast(t('publish.documentsRefreshed'));
+    } catch (error) {
+      showToast(translateError(error));
+      throw error;
+    }
+  }, [loadView, showToast, t, translateError]);
 
   const modeText = loading || !lane
-    ? '正在加载'
+    ? t('shell.mode.loading')
     : readOnlyHistorical
-      ? `历史 R${historicalRevision.revision} · 只读`
+      ? t('shell.mode.history', { revision: historicalRevision.revision })
       : view === 'compare'
-        ? '只读差异对比'
+        ? t('shell.mode.compare')
         : lane.draft
-          ? `AI 待确认${view === 'target' ? '目标' : '当前'}方案 · 正式版 R${lane.published.revision} 未改变`
-          : `${view === 'target' ? '正式目标' : '正式当前'}架构 · R${lane.published.revision}`;
+          ? t(view === 'target' ? 'shell.mode.targetDraft' : 'shell.mode.currentDraft', { revision: lane.published.revision })
+          : t(view === 'target' ? 'shell.mode.formalTarget' : 'shell.mode.formalCurrent', { revision: lane.published.revision });
 
   const editContext = useMemo(() => ({ editable: false, onResizeEnd: () => {} }), []);
 
@@ -1345,8 +1379,9 @@ function Viewer() {
           <p>{config.scopeNote}</p>
         </div>
         <div className="top-actions">
+          <LanguageSwitch />
           <span className={`mode-badge ${lane?.draft ? 'is-draft' : ''}`}>{modeText}</span>
-          {readOnlyHistorical && <button type="button" onClick={returnFromHistorical}>返回当前工作视图</button>}
+          {readOnlyHistorical && <button type="button" onClick={returnFromHistorical}>{t('shell.returnToCurrent')}</button>}
         </div>
       </header>
 
@@ -1375,9 +1410,9 @@ function Viewer() {
                     <span className="architecture-view-name">{selectedArchitectureView[1]}</span>
                     <span className={`architecture-chevron ${architectureSelectorOpen ? 'open' : ''}`} aria-hidden="true">⌄</span>
                   </button>
-                  {readOnlyHistorical && <span className="historical-title-badge">历史 R{historicalRevision.revision} · 只读</span>}
+                  {readOnlyHistorical && <span className="historical-title-badge">{t('shell.mode.history', { revision: historicalRevision.revision })}</span>}
                   {architectureSelectorOpen && (
-                    <div className="architecture-selector-menu" role="menu" aria-label="切换架构状态">
+                    <div className="architecture-selector-menu" role="menu" aria-label={t('shell.switchArchitectureView')}>
                       {architectureViews.map(([key, label, description]) => (
                         <button
                           key={key}
@@ -1413,13 +1448,13 @@ function Viewer() {
                       setLevelSelectorOpen((open) => !open);
                     }}
                   >
-                    <span>{selectedNavigationSection?.label || '观察视角'}</span>
+                    <span>{selectedNavigationSection?.label || t('shell.viewpoint')}</span>
                     {navigationSections.length > 1 && (
                       <span className={`architecture-chevron ${levelSelectorOpen ? 'open' : ''}`} aria-hidden="true">⌄</span>
                     )}
                   </button>
                   {levelSelectorOpen && (
-                    <div className="architecture-selector-menu diagram-level-menu" role="menu" aria-label="选择架构层级">
+                    <div className="architecture-selector-menu diagram-level-menu" role="menu" aria-label={t('shell.selectArchitectureLevel')}>
                       {navigationSections.map((section) => (
                         <button
                           key={section.id}
@@ -1452,13 +1487,13 @@ function Viewer() {
                       setDiagramSelectorOpen((open) => !open);
                     }}
                   >
-                    <span>{selectedNavigationAnchor?.navigation?.label || selectedDiagram?.title || '架构图'}</span>
+                    <span>{selectedNavigationAnchor?.navigation?.label || selectedDiagram?.title || t('shell.architectureDiagram')}</span>
                     {selectedNavigationSection?.diagrams.length > 1 && (
                       <span className={`architecture-chevron ${diagramSelectorOpen ? 'open' : ''}`} aria-hidden="true">⌄</span>
                     )}
                   </button>
                   {diagramSelectorOpen && (
-                    <div className="architecture-selector-menu diagram-selector-menu" role="menu" aria-label="选择当前架构图">
+                    <div className="architecture-selector-menu diagram-selector-menu" role="menu" aria-label={t('shell.selectDiagram')}>
                       {selectedNavigationSection.diagrams.map((diagram) => (
                         <button
                           key={diagram.id}
@@ -1482,53 +1517,60 @@ function Viewer() {
                   </span>
                 ))}
               </div>
-              <div className="graph-heading-actions" aria-label="架构查看工具">
+              <div className="graph-heading-actions" aria-label={t('shell.viewerTools')}>
                 <button
                   className="analysis-entry"
                   type="button"
                   disabled={readOnlyHistorical || view === 'compare'}
                   onClick={openAnalysisWorkbench}
                 >
-                  智能体协作 <span>{pendingAnalysisCount}</span>
+                  {t('shell.agentWorkspace')} <span>{analysisActivityCount}</span>
                 </button>
                 {!readOnlyHistorical && view !== 'compare' && lane?.draft && (
                   <button className="publish-draft-entry" type="button" onClick={() => setPublishDialogOpen(true)}>
-                    审阅并发布
+                    {t('shell.reviewAndPublish')}
                   </button>
                 )}
                 <button type="button" disabled={view === 'compare'} onClick={openRevisionPanel}>
-                  版本历史 <span>{view === 'compare' ? 0 : lane ? (lane.historyCount || 0) + 1 : revisionCatalog.revisions.length}</span>
+                  {t('shell.versionHistory')} <span>{view === 'compare' ? 0 : lane ? (lane.historyCount || 0) + 1 : revisionCatalog.revisions.length}</span>
                 </button>
                 <button className="persistent-document-entry" type="button" onClick={openDocumentLibrary}>
-                  项目文档 <span>{registry.documents.length}</span>
+                  {t('shell.projectDocuments')} <span>{registry.documents.length}</span>
                 </button>
                 <button type="button" onClick={() => setInspectorCollapsed((collapsed) => !collapsed)}>
-                  {inspectorCollapsed ? '展开侧栏' : '收起侧栏'}
+                  {t(inspectorCollapsed ? 'shell.expandSidebar' : 'shell.collapseSidebar')}
                 </button>
                 <button type="button" onClick={() => setCanvasFullscreen((fullscreen) => !fullscreen)}>
-                  {canvasFullscreen ? '退出全屏' : '全屏画布'}
+                  {t(canvasFullscreen ? 'shell.exitFullscreen' : 'shell.fullscreenCanvas')}
                 </button>
               </div>
             </div>
 
+            <PendingChangesLayer
+              open={pendingLayerOpen}
+              projection={draftProjection}
+              onToggle={() => setPendingLayerOpen((open) => !open)}
+              onLocateEvidence={openEvidenceExcerpt}
+            />
+
             {readOnlyHistorical && (
               <div className="notice historical-notice">
-                <span>正在查看 {historicalRevision.revisionId}。历史画布只用于查看和比较。</span>
+                <span>{t('shell.historyNotice', { revisionId: historicalRevision.revisionId })}</span>
                 <div>
-                  <button type="button" onClick={openRevisionPanel}>打开版本历史</button>
-                  <button className="primary" type="button" onClick={returnFromHistorical}>返回当前工作视图</button>
+                  <button type="button" onClick={openRevisionPanel}>{t('shell.openVersionHistory')}</button>
+                  <button className="primary" type="button" onClick={returnFromHistorical}>{t('shell.returnToCurrent')}</button>
                 </div>
               </div>
             )}
             {readOnlyHistorical && revisionDiff && (
-              <div className="historical-diff-bar" aria-label="历史版本与当前正式版差异">
-                <strong>与当前正式版比较</strong>
+              <div className="historical-diff-bar" aria-label={t('shell.historyDiffAria')}>
+                <strong>{t('shell.compareWithFormal')}</strong>
                 {[
-                  ['结构', (revisionDiff.summary || revisionDiff.categories || {}).structural],
-                  ['说明', (revisionDiff.summary || revisionDiff.categories || {}).semantic],
-                  ['布局', (revisionDiff.summary || revisionDiff.categories || {}).layout],
-                  ['文档绑定', (revisionDiff.summary || revisionDiff.categories || {}).document],
-                  ['关系', (revisionDiff.summary || revisionDiff.categories || {}).relationship],
+                  [t('diff.structure'), (revisionDiff.summary || revisionDiff.categories || {}).structural],
+                  [t('diff.semantic'), (revisionDiff.summary || revisionDiff.categories || {}).semantic],
+                  [t('diff.layout'), (revisionDiff.summary || revisionDiff.categories || {}).layout],
+                  [t('diff.documents'), (revisionDiff.summary || revisionDiff.categories || {}).document],
+                  [t('diff.relationships'), (revisionDiff.summary || revisionDiff.categories || {}).relationship],
                 ].map(([label, value]) => <span key={label}>{label} {typeof value === 'number' ? value : 0}</span>)}
               </div>
             )}
@@ -1591,7 +1633,7 @@ function Viewer() {
                   fitView
                   fitViewOptions={{ padding: 0.18 }}
                   proOptions={{ hideAttribution: true }}
-                  aria-label={`${config.projectName} ${selectedDiagram?.title || '架构'}查看画布`}
+                  aria-label={t('shell.canvasAria', { project: config.projectName, diagram: selectedDiagram?.title || t('shell.architectureDiagram') })}
                 >
                   <Background variant={BackgroundVariant.Dots} gap={22} size={1.2} color="#cbd2cb" />
                   <Controls showInteractive={false} />
@@ -1617,7 +1659,7 @@ function Viewer() {
             <div
               className="workspace-resizer"
               role="separator"
-              aria-label="调整右侧面板宽度"
+              aria-label={t('shell.resizeSidebar')}
               aria-orientation="vertical"
               aria-valuemin="280"
               aria-valuemax="640"
@@ -1679,19 +1721,18 @@ function Viewer() {
         busy={analysisLoading || analysisActionBusy}
         onClose={() => setAnalysisWorkbenchOpen(false)}
         onTabChange={setAnalysisTab}
-        onRefresh={() => refreshAnalysis()}
+        onRefresh={refreshAnalysisWorkbench}
         onCopyConnection={copyAgentConnection}
         onOpenProposal={openProposalReview}
         onReviewImplementation={reviewImplementation}
         onCopySkillPrompt={copySkillPrompt}
+        onOpenRevisionHistory={openRevisionPanelFromWorkbench}
       />
       <ProposalReviewDialog
         open={Boolean(reviewProposal)}
         proposal={reviewProposal}
         busy={analysisActionBusy}
         onClose={() => setReviewProposalId(null)}
-        onAcceptProposal={acceptProposal}
-        onRejectProposal={rejectProposal}
         onLocateEvidence={openEvidenceExcerpt}
       />
       <DocumentPreviewDialog preview={preview} loading={previewLoading} onClose={() => { setPreview(null); setPreviewLoading(false); }} />
@@ -1704,12 +1745,15 @@ function Viewer() {
       />
       {publishDialogOpen && lane?.draft && (
         <PublishDraftDialog
-          diagramTitle={selectedDiagram?.title || '当前架构图'}
+          diagramTitle={selectedDiagram?.title || t('shell.architectureDiagram')}
           viewLabel={selectedArchitectureView[1]}
           diff={draftDiff}
+          draftGraph={lane.draft.graph}
           developmentContract={lane.draft.developmentContract}
+          changeProjection={draftProjection}
           onCancel={() => setPublishDialogOpen(false)}
           onConfirm={publishCurrentDraft}
+          onRefreshDocuments={view === 'target' ? refreshCurrentDraftDocuments : null}
         />
       )}
       <div className={`toast ${toastMessage ? 'show' : ''}`} role="status">{toastMessage}</div>
@@ -1718,5 +1762,9 @@ function Viewer() {
 }
 
 export default function ViewerApp() {
-  return <ReactFlowProvider><Viewer /></ReactFlowProvider>;
+  return (
+    <I18nProvider>
+      <ReactFlowProvider><Viewer /></ReactFlowProvider>
+    </I18nProvider>
+  );
 }

@@ -62,6 +62,11 @@ const {
   sourceTypeForPath,
 } = require('./analysis-sources.cjs');
 const { readSkillCatalog } = require('./skill-catalog.cjs');
+const {
+  AGENT_NODE_DATA_FIELDS: AGENT_NODE_DATA_FIELD_NAMES,
+  AGENT_NODE_CLEARABLE_FIELDS: AGENT_NODE_CLEARABLE_FIELD_NAMES,
+  AGENT_EDGE_DATA_FIELDS: AGENT_EDGE_DATA_FIELD_NAMES,
+} = require('./schema/agent-semantic-fields.cjs');
 
 const HOST = '127.0.0.1';
 const DEFAULT_PORT = 8800;
@@ -82,6 +87,7 @@ const PROJECT_FILES = Object.freeze({
   analysis: 'analysis.json',
 });
 const VIEWER_CONFIG_SCHEMA_VERSION = '1.0.0';
+const FORMAL_CONTRACT_PROTOCOL_VERSIONS = new Set(['1.3.0', AI_CODING_PROTOCOL_VERSION]);
 const CSP = "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'";
 const MIME_TYPES = {
   '.css': 'text/css; charset=utf-8',
@@ -99,17 +105,14 @@ const MIME_TYPES = {
   '.woff': 'font/woff',
   '.woff2': 'font/woff2',
 };
-const AGENT_NODE_DATA_FIELDS = new Set([
-  'name', 'group', 'purpose', 'technical', 'product', 'authorization', 'horizon',
-  'focus', 'buildStrategy', 'aiCollaboration', 'relatedDiagramId', 'relatedNodeId',
-  'documentRefs', 'interactionModes', 'architectureLayer',
-]);
-const AGENT_EDGE_DATA_FIELDS = new Set(['label', 'relationType', 'controlledBoundaryPosture']);
+const AGENT_NODE_DATA_FIELDS = new Set(AGENT_NODE_DATA_FIELD_NAMES);
+const AGENT_NODE_CLEARABLE_FIELDS = new Set(AGENT_NODE_CLEARABLE_FIELD_NAMES);
+const AGENT_EDGE_DATA_FIELDS = new Set(AGENT_EDGE_DATA_FIELD_NAMES);
 const RECONCILIATION_NODE_FIELDS = [
   'name', 'purpose', 'technical', 'product', 'authorization',
   'documentRefs', 'interactionModes', 'architectureLayer',
 ];
-const RECONCILIATION_EDGE_FIELDS = ['source', 'target', 'label', 'relationType', 'controlledBoundaryPosture'];
+const RECONCILIATION_EDGE_FIELDS = ['source', 'target', ...AGENT_EDGE_DATA_FIELD_NAMES];
 
 function parsePort(value) {
   const port = value === undefined || value === '' ? DEFAULT_PORT : Number(value);
@@ -247,6 +250,12 @@ function readViewerConfig(configFile) {
   const defaultFocusNodeId = raw.defaultFocusNodeId === null || raw.defaultFocusNodeId === undefined
     ? null
     : requiredConfigText(raw.defaultFocusNodeId, 'defaultFocusNodeId', 120);
+  const defaultLanguage = raw.defaultLanguage === null || raw.defaultLanguage === undefined
+    ? null
+    : requiredConfigText(raw.defaultLanguage, 'defaultLanguage', 8);
+  if (defaultLanguage !== null && !['zh', 'en'].includes(defaultLanguage)) {
+    throw new ContractError('查看器配置 defaultLanguage 只能是 zh 或 en', 'VIEWER_CONFIG_INVALID', 500);
+  }
   return {
     schemaVersion: VIEWER_CONFIG_SCHEMA_VERSION,
     projectId,
@@ -254,6 +263,7 @@ function readViewerConfig(configFile) {
     viewerName: requiredConfigText(raw.viewerName, 'viewerName', 80),
     eyebrow: requiredConfigText(raw.eyebrow, 'eyebrow', 120),
     scopeNote: requiredConfigText(raw.scopeNote, 'scopeNote', 320),
+    defaultLanguage,
     defaultFocusNodeId,
     views,
     nodeFields,
@@ -483,6 +493,8 @@ function writeAnalysis(value, analysisFile) {
 function proposalEvidenceIds(proposal) {
   const ids = new Set(proposal.evidenceIds || []);
   (proposal.changes || []).forEach((change) => (change.evidenceIds || []).forEach((id) => ids.add(id)));
+  (proposal.contractPatch?.upsert || []).forEach((criterion) => (criterion.evidenceIds || []).forEach((id) => ids.add(id)));
+  (proposal.contractPatch?.delete || []).forEach((operation) => (operation.evidenceIds || []).forEach((id) => ids.add(id)));
   return ids;
 }
 
@@ -497,6 +509,7 @@ function publicArtifactRecord(record) {
     summary.unknownCount = artifact.unknowns.length;
   } else if (artifact.artifactType === 'architecture-proposal') {
     summary.changeCount = artifact.changes.length;
+    summary.contractChangeCount = (artifact.contractPatch?.upsert?.length || 0) + (artifact.contractPatch?.delete?.length || 0);
     summary.optionCount = artifact.options.length;
     summary.decisionCount = artifact.decisionsRequired.length;
   } else if (artifact.artifactType === 'implementation-report') {
@@ -621,6 +634,7 @@ function analysisResponse(analysis) {
       artifacts: run.artifactIds.map((id) => artifactsById.get(id)).filter(Boolean).map(publicArtifactRecord),
       proposalCount: runProposals.length,
       pendingProposalCount: runProposals.filter((proposal) => proposal.status === 'pending').length,
+      draftWriteCount: runProposals.filter((proposal) => proposal.status === 'draft-applied').length,
     };
   });
   return {
@@ -1022,6 +1036,15 @@ function proposalAcceptanceCriteria(artifact) {
   });
 }
 
+function normalizeExchangeProposalChange(change) {
+  const normalized = clone(change);
+  if (
+    normalized.targetType === 'node'
+    && typeof normalized.patch?.data?.group === 'string'
+  ) normalized.patch.data.group = normalized.patch.data.group.trim();
+  return normalized;
+}
+
 function artifactEvidenceIds(artifact) {
   if (artifact.artifactType === 'architecture-snapshot') {
     return new Set([
@@ -1030,7 +1053,11 @@ function artifactEvidenceIds(artifact) {
     ]);
   }
   if (artifact.artifactType === 'architecture-proposal') {
-    return new Set(artifact.changes.flatMap((change) => change.evidenceIds));
+    return new Set([
+      ...artifact.changes.flatMap((change) => change.evidenceIds),
+      ...(artifact.contractPatch?.upsert || []).flatMap((criterion) => criterion.evidenceIds),
+      ...(artifact.contractPatch?.delete || []).flatMap((operation) => operation.evidenceIds),
+    ]);
   }
   if (artifact.artifactType === 'implementation-report') {
     return new Set([
@@ -1099,7 +1126,7 @@ function assertEvidenceBasisIntegrity(manifest) {
 }
 
 function proposalFromExchangeArtifact(artifact, run) {
-  const evidenceIds = [...new Set(artifact.changes.flatMap((change) => change.evidenceIds))];
+  const evidenceIds = [...artifactEvidenceIds(artifact)];
   return {
     id: artifact.artifactId,
     status: 'pending',
@@ -1112,11 +1139,12 @@ function proposalFromExchangeArtifact(artifact, run) {
     summary: artifact.summary,
     requestId: artifact.requestId,
     acceptanceCriteria: proposalAcceptanceCriteria(artifact),
+    contractPatch: clone(artifact.contractPatch || null),
     confidence: null,
     createdAt: artifact.createdAt,
     reviewedAt: null,
     evidenceIds,
-    changes: artifact.changes.map((change) => clone(change)),
+    changes: artifact.changes.map(normalizeExchangeProposalChange),
     application: null,
     origin: proposalOrigin(run, artifact),
   };
@@ -1546,7 +1574,7 @@ function buildImplementationReconciliation({ run, targetRevision, snapshot, repo
 function assertImplementationTarget(run, state, artifact, { registry, projectRoot }) {
   if (run.taskType !== 'implementation-reconcile') return;
   if (!run.approvedTarget) {
-    if (artifact.schemaVersion === AI_CODING_PROTOCOL_VERSION) {
+    if (FORMAL_CONTRACT_PROTOCOL_VERSIONS.has(artifact.schemaVersion)) {
       throw new ContractError(
         '旧实施运行没有正式目标锁，请创建新的 implementation-reconcile 运行',
         'AGENT_APPROVED_TARGET_LOCK_REQUIRED',
@@ -1555,7 +1583,7 @@ function assertImplementationTarget(run, state, artifact, { registry, projectRoo
     }
     return;
   }
-  if (artifact.schemaVersion !== AI_CODING_PROTOCOL_VERSION) {
+  if (!FORMAL_CONTRACT_PROTOCOL_VERSIONS.has(artifact.schemaVersion)) {
     throw new ContractError(
       `新实施运行必须使用协议 ${AI_CODING_PROTOCOL_VERSION}，旧协议不能绕过正式目标核验`,
       'AGENT_PROTOCOL_UPGRADE_REQUIRED',
@@ -1693,8 +1721,148 @@ function addArtifactRecord(next, run, artifact, submittedAt) {
   return true;
 }
 
+function proposalCanOverrideProtectedTarget(proposal, analysis, state, beforeGraph, afterGraph) {
+  if (proposal.view !== 'target') return false;
+  const protectedChanges = protectedSemanticChanges(state.meta, proposal.view, beforeGraph, afterGraph);
+  if (!protectedChanges.length) return false;
+  const evidenceById = new Map(analysis.evidence.map((evidence) => [evidence.id, evidence]));
+  return protectedChanges.every(({ nodeId }) => proposal.changes
+    .filter((change) => change.targetType === 'node' && change.targetId === nodeId)
+    .some((change) => change.evidenceIds.some((id) => evidenceById.get(id)?.basis === 'user-confirmed')));
+}
+
+function assertAgentRelatedArchitectureReferences(proposal, graph, catalog) {
+  const changedNodeIds = new Set(proposal.changes
+    .filter((change) => (
+      change.targetType === 'node'
+      && change.kind !== 'remove'
+      && (
+        Object.prototype.hasOwnProperty.call(change.patch?.data || {}, 'relatedDiagramId')
+        || Object.prototype.hasOwnProperty.call(change.patch?.data || {}, 'relatedNodeId')
+      )
+    ))
+    .map((change) => change.targetId));
+  if (!changedNodeIds.size) return;
+  const catalogById = new Map(catalog.diagrams.map((diagram) => [diagram.id, diagram]));
+  const graphByDiagramId = new Map([[proposal.diagramId, graph]]);
+  for (const nodeId of changedNodeIds) {
+    const node = graph.nodes.find((entry) => entry.id === nodeId);
+    const relatedDiagramId = node?.data?.relatedDiagramId;
+    const relatedNodeId = node?.data?.relatedNodeId;
+    if (!relatedDiagramId) continue;
+    const relatedDiagram = catalogById.get(relatedDiagramId);
+    if (!relatedDiagram) {
+      throw new ContractError(
+        '智能体补丁引用了项目目录中不存在的下钻架构图',
+        'AGENT_RELATED_DIAGRAM_NOT_FOUND',
+        422,
+        { targetId: nodeId, relatedDiagramId },
+      );
+    }
+    if (!relatedNodeId) continue;
+    if (!graphByDiagramId.has(relatedDiagramId)) {
+      const relatedLane = readState(relatedDiagram.statePath)[proposal.view];
+      graphByDiagramId.set(relatedDiagramId, relatedLane.draft?.graph || relatedLane.published.graph);
+    }
+    const relatedGraph = graphByDiagramId.get(relatedDiagramId);
+    if (!relatedGraph.nodes.some((entry) => entry.id === relatedNodeId)) {
+      throw new ContractError(
+        '智能体补丁引用的下钻目标节点在对应架构图视图中不存在',
+        'AGENT_RELATED_NODE_NOT_FOUND',
+        422,
+        { targetId: nodeId, relatedDiagramId, relatedNodeId, view: proposal.view },
+      );
+    }
+  }
+}
+
+function applyAgentProposalToDraft(proposal, analysis, state, {
+  workspaceRoot, projectRoot, registry, catalog, now,
+}) {
+  const lane = state[proposal.view];
+  const actualLaneLock = laneLockDescriptor(lane);
+  if (!proposal.laneLock || !sameLaneLock(proposal.laneLock, actualLaneLock)) {
+    throw new ContractError(
+      '智能体写入锁定的正式基线或活动草稿已经变化，请创建新运行并重新提交',
+      'AGENT_RUN_STALE',
+      409,
+      { expectedLaneLock: clone(proposal.laneLock || null), actualLaneLock },
+    );
+  }
+  if (proposal.view === 'current' && proposal.contractPatch) {
+    throw new ContractError(
+      '当前架构草稿不能携带目标开发合同条件；请在目标架构运行中提交合同补丁',
+      'AGENT_CURRENT_CONTRACT_PATCH_FORBIDDEN',
+      422,
+    );
+  }
+  assertProposalEvidenceBasisAllowed(proposal, analysis);
+  assertProposalEvidenceCurrent(proposal, analysis, { workspaceRoot, projectRoot, registry });
+  const priorDraft = lane.draft;
+  const priorContract = proposal.view === 'target' ? editableDraftContractBase(lane) : null;
+  const priorGraph = priorDraft ? priorDraft.graph : lane.published.graph;
+  const graph = applyProposalChanges(priorGraph, proposal, state);
+  assertAgentRelatedArchitectureReferences(proposal, graph, catalog);
+  assertHumanConfirmedSemantics(state.meta, proposal.view, priorGraph, graph, {
+    userConfirmedSemanticOverride: proposalCanOverrideProtectedTarget(
+      proposal,
+      analysis,
+      state,
+      priorGraph,
+      graph,
+    ),
+  });
+  validateNewDocumentBindings(priorGraph, graph, registry, projectRoot);
+  const draftId = priorDraft?.draftId || newDraftId(proposal.view);
+  const draftRevision = priorDraft ? priorDraft.draftRevision + 1 : 1;
+  const developmentContract = proposal.view === 'target'
+    ? draftDevelopmentContract(graph, {
+      draftId,
+      proposal,
+      prior: priorContract,
+      registry,
+      projectRoot,
+    })
+    : null;
+  const graphChanged = agentSemanticHash({ graph }) !== agentSemanticHash({ graph: priorGraph });
+  const criteriaChanged = proposal.view === 'target'
+    && !sameJson(
+      developmentContract?.acceptanceCriteria || [],
+      priorContract?.acceptanceCriteria || [],
+    );
+  if (!graphChanged && !criteriaChanged) {
+    throw new ContractError(
+      '该语义补丁与当前锁定草稿完全相同，没有产生可发布变化',
+      'AGENT_PATCH_NO_EFFECT',
+      422,
+      { diagramId: proposal.diagramId, view: proposal.view },
+    );
+  }
+
+  const candidateDraft = {
+    draftId,
+    draftRevision,
+    baseRevision: lane.published.revision,
+    baseRevisionId: lane.published.revisionId,
+    savedAt: now,
+    graph,
+    developmentContract,
+  };
+  const revertedToPublished = Boolean(priorDraft) && draftEquivalentToPublished(candidateDraft, lane.published, proposal.view);
+  lane.draft = revertedToPublished ? null : candidateDraft;
+  proposal.status = 'draft-applied';
+  proposal.reviewedAt = null;
+  proposal.application = {
+    draftId,
+    draftRevision,
+    appliedAt: now,
+    outcome: revertedToPublished ? 'reverted-to-published' : 'draft-updated',
+  };
+  return clone(proposal.application);
+}
+
 function submitAgentArtifact(analysis, runId, incoming, {
-  workspaceRoot, projectRoot, registry, diagram,
+  workspaceRoot, projectRoot, registry, catalog, diagram,
 }) {
   assertAgentRequest(incoming, new Set(['artifact', 'evidenceManifest']));
   const artifact = validateExchangeArtifact(incoming.artifact);
@@ -1712,14 +1880,38 @@ function submitAgentArtifact(analysis, runId, incoming, {
   let next = clone(analysis);
   const run = next.agentRuns.find((item) => item.id === runId);
   if (!run) throw new ContractError('未找到该智能体运行', 'AGENT_RUN_NOT_FOUND', 404);
+  assertRunArtifactType(run, artifact);
+  const existingArtifact = analysis.artifacts.find((record) => record.id === artifact.artifactId);
+  if (existingArtifact) {
+    if (existingArtifact.runId !== run.id || !sameJson(existingArtifact.artifact, artifact)) {
+      throw new ContractError('工件 ID 已被其他提交使用', 'AGENT_ARTIFACT_ID_CONFLICT', 409, { artifactId: artifact.artifactId });
+    }
+    if (manifest) {
+      const existingManifest = analysis.artifacts.find((record) => record.id === manifest.artifactId);
+      if (!existingManifest || existingManifest.runId !== run.id || !sameJson(existingManifest.artifact, manifest)) {
+        throw new ContractError('证据清单 ID 已被其他提交使用', 'AGENT_ARTIFACT_ID_CONFLICT', 409, { artifactId: manifest.artifactId });
+      }
+    }
+    const replayState = readState(diagram.statePath);
+    return {
+      analysis,
+      artifact,
+      proposal: analysis.proposals.find((item) => item.origin?.artifactId === artifact.artifactId) || null,
+      state: replayState,
+      originalState: clone(replayState),
+      stateChanged: false,
+      draftApplication: analysis.proposals.find((item) => item.origin?.artifactId === artifact.artifactId)?.application || null,
+      replayed: true,
+    };
+  }
   if (run.status === 'reviewed') {
     throw new ContractError('该运行已经完成审阅，请创建新的运行提交后续结果', 'AGENT_RUN_ALREADY_REVIEWED', 409);
   }
-  assertRunArtifactType(run, artifact);
   assertManifestCoversArtifact(artifact, manifest);
   assertEvidenceBasisIntegrity(manifest);
   assertEvidenceBasisAllowed(run, artifact, manifest);
   const state = readState(diagram.statePath);
+  const originalState = clone(state);
   const lane = state[run.view];
   const baselineGraph = assertAgentRunLaneLock(run, lane);
   assertImplementationTarget(run, state, artifact, { registry, projectRoot });
@@ -1742,9 +1934,14 @@ function submitAgentArtifact(analysis, runId, incoming, {
   targetRun.submittedAt ||= submittedAt;
 
   let proposal = null;
+  let draftApplication = null;
+  let stateChanged = false;
   if (artifact.artifactType === 'architecture-proposal') {
     proposal = proposalFromExchangeArtifact(artifact, targetRun);
-  } else if (artifact.artifactType === 'architecture-snapshot') {
+  } else if (
+    artifact.artifactType === 'architecture-snapshot'
+    && targetRun.taskType !== 'implementation-reconcile'
+  ) {
     proposal = snapshotProposal(artifact, targetRun, baselineGraph);
   }
   if (proposal) {
@@ -1753,8 +1950,15 @@ function submitAgentArtifact(analysis, runId, incoming, {
       throw new ContractError('提案 ID 已被其他提交使用', 'AGENT_PROPOSAL_ID_CONFLICT', 409, { proposalId: proposal.id });
     }
     if (!existingProposal) {
-      applyProposalChanges(baselineGraph, proposal, state);
+      draftApplication = applyAgentProposalToDraft(proposal, next, state, {
+        workspaceRoot,
+        projectRoot,
+        registry,
+        catalog,
+        now: submittedAt,
+      });
       next.proposals.push(proposal);
+      stateChanged = true;
     } else {
       proposal = existingProposal;
     }
@@ -1788,7 +1992,16 @@ function submitAgentArtifact(analysis, runId, incoming, {
     targetRun.humanReview = null;
   }
   validateAnalysis(next);
-  return { analysis: next, artifact, proposal };
+  return {
+    analysis: next,
+    artifact,
+    proposal,
+    state,
+    originalState,
+    stateChanged,
+    draftApplication,
+    replayed: false,
+  };
 }
 
 function architectureGateSummary(gate) {
@@ -1840,7 +2053,7 @@ function agentRunResponse(
   analysis,
   runId,
   {
-    activeTargetDraftId = null,
+    activeDraftId = null,
     includeArchitectureGateDetails = false,
     includeContractGateDetails = false,
   } = {},
@@ -1858,9 +2071,17 @@ function agentRunResponse(
       status: proposal.status,
       reviewedAt: proposal.reviewedAt,
       application: clone(proposal.application),
-      publication: proposal.view === 'target'
-        && proposal.status === 'accepted'
-        && proposal.application?.draftId === activeTargetDraftId
+      draftWrite: proposal.status === 'draft-applied'
+        ? {
+          status: proposal.application?.outcome === 'reverted-to-published'
+            ? 'reverted-to-published'
+            : 'applied-to-draft',
+          summary: proposal.summary,
+          humanApproved: false,
+        }
+        : null,
+      publication: ['draft-applied', 'accepted'].includes(proposal.status)
+        && proposal.application?.draftId === activeDraftId
         ? {
           status: 'awaiting-publication',
           summary: proposal.summary,
@@ -1994,6 +2215,74 @@ function reviewImplementationRun(analysis, runId, incoming, state, { registry, p
   return next;
 }
 
+function configuredGroupNames(state) {
+  return Array.isArray(state.meta?.groups)
+    ? state.meta.groups
+      .map((group) => typeof group?.group === 'string' ? group.group.trim() : '')
+      .filter(Boolean)
+    : [];
+}
+
+function assertAgentChangePatch(change, state, view) {
+  if (change.kind === 'remove') return;
+  const patch = isPlainObject(change.patch) ? change.patch : {};
+  const allowedPatchKeys = change.targetType === 'edge' ? new Set(['source', 'target', 'data']) : new Set(['data']);
+  const forbiddenPatchKeys = Object.keys(patch).filter((field) => !allowedPatchKeys.has(field));
+  const allowedDataFields = change.targetType === 'edge' ? AGENT_EDGE_DATA_FIELDS : AGENT_NODE_DATA_FIELDS;
+  const forbiddenDataFields = Object.keys(patch.data || {}).filter((field) => !allowedDataFields.has(field));
+  if (forbiddenPatchKeys.length || forbiddenDataFields.length) {
+    throw new ContractError(
+      '智能体补丁包含非架构语义字段；人工确认元数据、布局、端口和路由只能由本地用户维护',
+      'AGENT_PATCH_FIELD_FORBIDDEN',
+      422,
+      {
+        changeId: change.id,
+        targetType: change.targetType,
+        forbiddenPatchFields: forbiddenPatchKeys,
+        forbiddenDataFields,
+      },
+    );
+  }
+  const clearedFields = Object.entries(patch.data || {})
+    .filter(([, value]) => value === null)
+    .map(([field]) => field);
+  const invalidClears = clearedFields.filter((field) => (
+    change.targetType !== 'node'
+    || change.kind !== 'update'
+    || !AGENT_NODE_CLEARABLE_FIELDS.has(field)
+    || (view === 'target' && field === 'horizon')
+  ));
+  if (invalidClears.length) {
+    throw new ContractError(
+      '智能体只能在协议 1.4 的节点更新中显式清除可选语义字段；必填字段、关系字段和目标时间范围不能清除',
+      'AGENT_PATCH_CLEAR_INVALID',
+      422,
+      { changeId: change.id, targetId: change.targetId, invalidFields: invalidClears, view },
+    );
+  }
+  if (clearedFields.includes('relatedDiagramId') || clearedFields.includes('relatedNodeId')) {
+    if (patch.data.relatedDiagramId !== null || patch.data.relatedNodeId !== null) {
+      throw new ContractError(
+        '下钻图与下钻节点引用必须在同一次补丁中成对清除',
+        'AGENT_RELATED_REFERENCE_CLEAR_PAIR_REQUIRED',
+        422,
+        { changeId: change.id, targetId: change.targetId },
+      );
+    }
+  }
+  if (change.targetType === 'node' && typeof patch.data?.group === 'string' && patch.data.group.trim()) {
+    const allowedGroups = configuredGroupNames(state);
+    if (allowedGroups.length && !allowedGroups.includes(patch.data.group.trim())) {
+      throw new ContractError(
+        '智能体补丁指定了项目配置中不存在的架构分组',
+        'AGENT_NODE_GROUP_INVALID',
+        422,
+        { changeId: change.id, targetId: change.targetId, group: patch.data.group, allowedGroups },
+      );
+    }
+  }
+}
+
 function sourceGroupForGeneratedNode(graph, proposal, targetId, state) {
   const neighborIds = [];
   proposal.changes.forEach((change) => {
@@ -2036,6 +2325,7 @@ function applyProposalChanges(graph, proposal, state) {
     .map((change, index) => ({ change, index }))
     .sort((left, right) => proposalChangePhase(left.change) - proposalChangePhase(right.change) || left.index - right.index)
     .map(({ change }) => change);
+  changes.forEach((change) => assertAgentChangePatch(change, state, proposal.view));
   let generatedIndex = 0;
   const nodeById = () => new Map(next.nodes.map((node) => [node.id, node]));
   const edgeById = () => new Map(next.edges.map((edge) => [edge.id, edge]));
@@ -2048,6 +2338,8 @@ function applyProposalChanges(graph, proposal, state) {
         if (nodes.has(change.targetId)) {
           throw new ContractError('提案新增的节点已存在，请刷新后重新审阅', 'PROPOSAL_TARGET_CONFLICT', 409, { targetId: change.targetId });
         }
+        const nodeData = clone(change.patch.data || {});
+        const explicitGroup = typeof nodeData.group === 'string' ? nodeData.group.trim() : '';
         next.nodes.push({
           id: change.targetId,
           type: NODE_TYPE,
@@ -2055,8 +2347,8 @@ function applyProposalChanges(graph, proposal, state) {
           width: DEFAULT_NODE_WIDTH,
           height: DEFAULT_NODE_HEIGHT,
           data: {
-            ...clone(change.patch.data),
-            group: sourceGroupForGeneratedNode(next, proposal, change.targetId, state),
+            ...nodeData,
+            group: explicitGroup || sourceGroupForGeneratedNode(next, proposal, change.targetId, state),
           },
         });
         return;
@@ -2071,10 +2363,16 @@ function applyProposalChanges(graph, proposal, state) {
         next.nodes = next.nodes.filter((node) => node.id !== change.targetId);
         return;
       }
-      next.nodes = next.nodes.map((node) => node.id === change.targetId ? {
-        ...node,
-        data: { ...node.data, ...clone(change.patch.data) },
-      } : node);
+      next.nodes = next.nodes.map((node) => {
+        if (node.id !== change.targetId) return node;
+        const data = { ...node.data };
+        for (const [field, value] of Object.entries(change.patch.data || {})) {
+          if (value === null) delete data[field];
+          else data[field] = clone(value);
+        }
+        if (typeof data.group === 'string') data.group = data.group.trim();
+        return { ...node, data };
+      });
       return;
     }
 
@@ -2084,6 +2382,9 @@ function applyProposalChanges(graph, proposal, state) {
       }
       if (!nodes.has(change.patch.source) || !nodes.has(change.patch.target)) {
         throw new ContractError('新增关系引用的节点不存在', 'PROPOSAL_EDGE_NODE_MISSING', 422, { targetId: change.targetId });
+      }
+      if (change.patch.source === change.patch.target) {
+        throw new ContractError('架构关系不允许自连接', 'PROPOSAL_EDGE_SELF_LOOP', 422, { targetId: change.targetId });
       }
       next.edges.push({
         id: change.targetId,
@@ -2106,8 +2407,22 @@ function applyProposalChanges(graph, proposal, state) {
     }
     next.edges = next.edges.map((edge) => {
       if (edge.id !== change.targetId) return edge;
+      const source = change.patch.source === undefined ? edge.source : change.patch.source;
+      const target = change.patch.target === undefined ? edge.target : change.patch.target;
+      if (!nodes.has(source) || !nodes.has(target)) {
+        throw new ContractError('关系端点更新引用了不存在的节点', 'PROPOSAL_EDGE_NODE_MISSING', 422, {
+          targetId: change.targetId,
+          source,
+          target,
+        });
+      }
+      if (source === target) {
+        throw new ContractError('架构关系不允许自连接', 'PROPOSAL_EDGE_SELF_LOOP', 422, { targetId: change.targetId });
+      }
       return {
         ...edge,
+        source,
+        target,
         data: { ...edge.data, ...clone(change.patch.data || {}) },
       };
     });
@@ -2480,22 +2795,77 @@ function proposalContractSource(proposal) {
   };
 }
 
+function editableDraftContractBase(lane) {
+  if (lane.draft?.developmentContract) return lane.draft.developmentContract;
+  const published = lane.published?.developmentContract;
+  if (!published || !['executable', 'not-executable'].includes(published.status)) return null;
+  return {
+    contractId: null,
+    source: clone(published.source || null),
+    acceptanceCriteria: clone(published.acceptanceCriteria || []),
+  };
+}
+
+function comparableCriteria(contract) {
+  return clone(contract?.acceptanceCriteria || [])
+    .sort((left, right) => left.id.localeCompare(right.id));
+}
+
+function comparableDocumentBindings(contract) {
+  return clone(contract?.documents || [])
+    .map((document) => contractDocumentBinding(document))
+    .sort((left, right) => left.id.localeCompare(right.id));
+}
+
+function draftEquivalentToPublished(draft, published, view) {
+  if (agentSemanticHash({ graph: draft.graph }) !== agentSemanticHash(published)) return false;
+  if (view !== 'target') return true;
+  return sameJson(
+    comparableCriteria(draft.developmentContract),
+    comparableCriteria(published.developmentContract),
+  ) && sameJson(
+    comparableDocumentBindings(draft.developmentContract),
+    comparableDocumentBindings(published.developmentContract),
+  );
+}
+
 function draftDevelopmentContract(graph, { draftId, proposal = null, prior = null, registry, projectRoot }) {
   const acceptanceCriteriaById = new Map();
   for (const criterion of prior?.acceptanceCriteria || []) {
     acceptanceCriteriaById.set(criterion.id, clone(criterion));
   }
-  for (const criterion of proposal?.acceptanceCriteria || []) {
-    const existing = acceptanceCriteriaById.get(criterion.id);
-    if (existing && !sameJson(existing, criterion)) {
-      throw new ContractError(
-        '提案试图用同一验收条件 ID 改写活动草案合同，请使用新的稳定 ID',
-        'PROPOSAL_CONTRACT_CRITERION_CONFLICT',
-        409,
-        { criterionId: criterion.id },
-      );
+  if (proposal?.contractPatch) {
+    for (const criterion of proposal.contractPatch.upsert || []) {
+      acceptanceCriteriaById.set(criterion.id, {
+        id: criterion.id,
+        statement: criterion.statement,
+        targetRefs: clone(criterion.targetRefs),
+      });
     }
-    if (!existing) acceptanceCriteriaById.set(criterion.id, clone(criterion));
+    for (const operation of proposal.contractPatch.delete || []) {
+      if (!acceptanceCriteriaById.has(operation.id)) {
+        throw new ContractError(
+          '合同补丁试图删除活动目标草稿中不存在的验收条件',
+          'PROPOSAL_CONTRACT_CRITERION_NOT_FOUND',
+          409,
+          { criterionId: operation.id },
+        );
+      }
+      acceptanceCriteriaById.delete(operation.id);
+    }
+  } else {
+    for (const criterion of proposal?.acceptanceCriteria || []) {
+      const existing = acceptanceCriteriaById.get(criterion.id);
+      if (existing && !sameJson(existing, criterion)) {
+        throw new ContractError(
+          '旧版 acceptanceCriteria 不能用同一 ID 覆盖草稿条件；请使用显式 contractPatch.upsert',
+          'PROPOSAL_CONTRACT_CRITERION_CONFLICT',
+          409,
+          { criterionId: criterion.id },
+        );
+      }
+      if (!existing) acceptanceCriteriaById.set(criterion.id, clone(criterion));
+    }
   }
   const acceptanceCriteria = [...acceptanceCriteriaById.values()];
   const source = clone(prior?.source || (proposal ? proposalContractSource(proposal) : null));
@@ -2524,9 +2894,35 @@ function acceptanceCriteriaReferenceExistingTargets(criteria, graph) {
   return criteria.every((criterion) => criterion.targetRefs.every((ref) => valid.has(`${ref.targetType}:${ref.targetId}`)));
 }
 
-function freezeDevelopmentContract(draftContract, graph, revision, registry, projectRoot, frozenAt) {
+function assertDraftBoundDocumentsCurrent(draftContract, graph, registry, projectRoot) {
+  const expected = clone(draftContract?.documents || []);
+  let current;
+  try {
+    current = frozenDocumentIndex(graph, registry, projectRoot);
+  } catch (error) {
+    throw new ContractError(
+      '目标草稿绑定文档在审阅后发生变化；请刷新草稿合同并重新检查后再发布',
+      'DRAFT_BOUND_DOCUMENT_STALE',
+      409,
+      { causeCode: error.code || 'DOCUMENT_BINDING_UNAVAILABLE', cause: error.message },
+    );
+  }
+  const expectedBindings = expected.map((document) => contractDocumentBinding(document));
+  const currentBindings = current.map((document) => contractDocumentBinding(document));
+  if (!sameJson(expectedBindings, currentBindings)) {
+    throw new ContractError(
+      '目标草稿绑定文档在审阅后发生变化；请刷新草稿合同并重新检查后再发布',
+      'DRAFT_BOUND_DOCUMENT_STALE',
+      409,
+      { expected: expectedBindings, current: currentBindings },
+    );
+  }
+  return current;
+}
+
+function freezeDevelopmentContract(draftContract, graph, revision, registry, projectRoot, frozenAt, verifiedDocuments = null) {
   const acceptanceCriteria = clone(draftContract?.acceptanceCriteria || []);
-  const documents = frozenDocumentIndex(graph, registry, projectRoot);
+  const documents = verifiedDocuments ? clone(verifiedDocuments) : frozenDocumentIndex(graph, registry, projectRoot);
   const refsValid = acceptanceCriteriaReferenceExistingTargets(acceptanceCriteria, graph);
   const executable = acceptanceCriteria.length > 0 && refsValid;
   const frozen = {
@@ -2559,6 +2955,20 @@ function freezeDevelopmentContract(draftContract, graph, revision, registry, pro
 
 function compactDevelopmentContract(contract) {
   return contract ? clone(contract) : null;
+}
+
+function compactDraftDevelopmentContract(contract) {
+  if (!contract) return null;
+  return {
+    contractId: contract.contractId,
+    status: 'draft',
+    unpublished: true,
+    acceptanceCriteria: clone(contract.acceptanceCriteria || []),
+    targetRefs: clone(contract.targetRefs || []),
+    boundaryRefs: clone(contract.boundaryRefs || []),
+    documentIds: (contract.documents || []).map((document) => document.id),
+    executionReason: contract.executionReason || null,
+  };
 }
 
 function assertExecutableTargetContract(revision, registry, projectRoot) {
@@ -2862,6 +3272,9 @@ function createServer(options = {}) {
       : resolveAnalysisFile(undefined, projectRoot));
   const staticRoot = resolveStaticRoot(options.staticRoot || process.env.STATIC_ROOT);
   const skillsRoot = path.resolve(options.skillsRoot || path.join(ROOT, 'skills'));
+  const afterAgentDraftStateWrite = typeof options.afterAgentDraftStateWrite === 'function'
+    ? options.afterAgentDraftStateWrite
+    : null;
 
   return http.createServer(async (req, res) => {
     try {
@@ -2913,6 +3326,11 @@ function createServer(options = {}) {
               baseRevision: lane.draft.baseRevision,
               baseRevisionId: lane.draft.baseRevisionId,
               savedAt: lane.draft.savedAt,
+              representation: 'semantic-graph-v1',
+              graph: compactAgentArchitecture(lane.draft).graph,
+              developmentContract: view === 'target'
+                ? compactDraftDevelopmentContract(lane.draft.developmentContract)
+                : null,
             } : null,
           },
           documents: registry.documents.map((document) => ({
@@ -2940,7 +3358,9 @@ function createServer(options = {}) {
             projectDocumentsUseRegisteredIds: true,
             projectDocumentsCannotProveImplementation: true,
             separateWorkspaceConfigured: workspaceRoot !== projectRoot,
-            humanReviewRequired: true,
+            architectureChangesApplyToDraft: true,
+            architectureChangeHumanReviewRequired: false,
+            architecturePublicationHumanOnly: true,
             agentCanReview: false,
             agentCanApprove: false,
             agentCanPublish: false,
@@ -2968,13 +3388,13 @@ function createServer(options = {}) {
         if (!run) throw new ContractError('未找到该智能体运行', 'AGENT_RUN_NOT_FOUND', 404);
         const catalog = readArchitectureCatalog(catalogFile, stateFile, layoutFile);
         const diagram = agentDiagram(catalog, run.diagramId);
-        const activeTargetDraftId = readState(diagram.statePath).target.draft?.draftId || null;
+        const activeDraftId = readState(diagram.statePath)[run.view].draft?.draftId || null;
         const details = requestUrl.searchParams.get('details');
         if (details && !['architecture-gate', 'contract-gate', 'review-gates', 'reconciliation'].includes(details)) {
           throw new ContractError('details 只支持 architecture-gate、contract-gate 或 review-gates', 'AGENT_REQUEST_INVALID', 400);
         }
         return json(res, 200, agentRunResponse(analysis, run.id, {
-          activeTargetDraftId,
+          activeDraftId,
           includeArchitectureGateDetails: ['architecture-gate', 'review-gates', 'reconciliation'].includes(details),
           includeContractGateDetails: ['contract-gate', 'review-gates'].includes(details),
         }));
@@ -2992,21 +3412,52 @@ function createServer(options = {}) {
           workspaceRoot,
           projectRoot,
           registry: readRegistry(documentsFile),
+          catalog,
           diagram,
         });
-        const saved = writeAnalysis(result.analysis, analysisFile);
-        return json(res, 201, {
-          ...agentRunResponse(saved, run.id),
+        let saved = result.analysis;
+        if (!result.replayed) {
+          if (result.stateChanged) {
+            try {
+              writeState(result.state, diagram.statePath);
+              afterAgentDraftStateWrite?.({ runId: run.id, diagramId: diagram.id });
+              saved = writeAnalysis(result.analysis, analysisFile);
+            } catch (error) {
+              try {
+                writeState(result.originalState, diagram.statePath);
+              } catch (rollbackError) {
+                throw new ContractError(
+                  '智能体草稿写入未能完整提交，且自动回滚失败；请停止发布并检查本地状态',
+                  'AGENT_DRAFT_TRANSACTION_ROLLBACK_FAILED',
+                  500,
+                  { cause: error.message, rollbackCause: rollbackError.message },
+                );
+              }
+              throw error;
+            }
+          } else {
+            saved = writeAnalysis(result.analysis, analysisFile);
+          }
+        }
+        return json(res, result.replayed ? 200 : 201, {
+          ...agentRunResponse(saved, run.id, {
+            activeDraftId: result.state?.[run.view]?.draft?.draftId || null,
+          }),
           submission: {
             artifactId: result.artifact.artifactId,
             artifactType: result.artifact.artifactType,
             proposalId: result.proposal?.id || null,
-            requiresHumanReview: Boolean(result.proposal)
-              || result.artifact.artifactType === 'implementation-report',
+            draftApplication: clone(result.draftApplication),
+            replayed: result.replayed,
+            requiresHumanReview: result.artifact.artifactType === 'implementation-report',
+            requiresPublication: Boolean(
+              result.draftApplication
+              && result.draftApplication.outcome !== 'reverted-to-published'
+            ),
             reviewType: result.artifact.artifactType === 'implementation-report'
               ? 'implementation-result'
-              : result.proposal
-                ? 'architecture-proposal'
+              : result.draftApplication?.outcome !== 'reverted-to-published' && result.draftApplication
+                ? 'draft-publication'
                 : null,
           },
         });
@@ -3090,98 +3541,12 @@ function createServer(options = {}) {
 
       const proposalActionMatch = /^\/api\/analysis\/proposals\/([a-z0-9][a-z0-9._-]{0,79})\/(accept|reject)$/.exec(pathname);
       if (req.method === 'POST' && proposalActionMatch) {
-        const incoming = await readJsonBody(req);
-        assertAnalysisRequestShape(incoming, new Set(['schemaVersion', 'baseRevision', 'userConfirmed']));
-        if (incoming.userConfirmed !== true) {
-          throw new ContractError('提案审阅必须由用户明确确认', 'USER_CONFIRMATION_REQUIRED', 403);
-        }
-        const analysis = readAnalysis(analysisFile);
-        assertAnalysisRevision(incoming, analysis);
-        const proposal = analysis.proposals.find((item) => item.id === proposalActionMatch[1]);
-        if (!proposal) throw new ContractError('未找到该智能体提案', 'PROPOSAL_NOT_FOUND', 404);
-        if (proposal.status !== 'pending') {
-          throw new ContractError('该智能体提案已经审阅，不能重复处理', 'PROPOSAL_ALREADY_REVIEWED', 409);
-        }
-        const now = new Date().toISOString();
-        const action = proposalActionMatch[2];
-        if (action === 'reject') {
-          const next = clone(analysis);
-          const target = next.proposals.find((item) => item.id === proposal.id);
-          target.status = 'rejected';
-          target.reviewedAt = now;
-          target.application = null;
-          updateReviewedRun(next, target, now);
-          return json(res, 200, analysisResponse(writeAnalysis(next, analysisFile)));
-        }
-
-        const catalog = readArchitectureCatalog(catalogFile, stateFile, layoutFile);
-        const diagram = catalog.diagrams.find((item) => item.id === proposal.diagramId);
-        if (!diagram) throw new ContractError('提案对应的架构图已不存在', 'DIAGRAM_NOT_FOUND', 404, { diagramId: proposal.diagramId });
-        const state = readState(diagram.statePath);
-        const lane = state[proposal.view];
-        if (!proposal.laneLock) {
-          throw new ContractError(
-            '该旧提案没有活动草案锁，不能安全合并；请基于当前视图重新创建智能体运行和提案',
-            'PROPOSAL_LANE_LOCK_REQUIRED',
-            409,
-          );
-        }
-        const actualLaneLock = laneLockDescriptor(lane);
-        if (!sameLaneLock(proposal.laneLock, actualLaneLock)) {
-          throw new ContractError(
-            '提案锁定的正式基线或活动草案已经变化，请重新分析后再审阅',
-            'PROPOSAL_STALE',
-            409,
-            {
-              headRevision: lane.published.revision,
-              headRevisionId: lane.published.revisionId,
-              expectedLaneLock: clone(proposal.laneLock),
-              actualLaneLock,
-            },
-          );
-        }
-        assertProposalEvidenceBasisAllowed(proposal, analysis);
-        const registry = readRegistry(documentsFile);
-        assertProposalEvidenceCurrent(proposal, analysis, { workspaceRoot, projectRoot, registry });
-        const priorDraft = lane.draft;
-        const priorGraph = priorDraft ? priorDraft.graph : lane.published.graph;
-        const graph = applyProposalChanges(priorGraph, proposal, state);
-        assertHumanConfirmedSemantics(state.meta, proposal.view, priorGraph, graph, {
-          userConfirmedSemanticOverride: true,
-        });
-        validateNewDocumentBindings(priorGraph, graph, registry, projectRoot);
-        const draftId = priorDraft?.draftId || newDraftId(proposal.view);
-        const draftRevision = priorDraft ? priorDraft.draftRevision + 1 : 1;
-        lane.draft = {
-          draftId,
-          draftRevision,
-          baseRevision: lane.published.revision,
-          baseRevisionId: lane.published.revisionId,
-          savedAt: now,
-          graph,
-          developmentContract: proposal.view === 'target'
-            ? draftDevelopmentContract(graph, {
-              draftId,
-              proposal,
-              prior: priorDraft?.developmentContract || null,
-              registry,
-              projectRoot,
-            })
-            : null,
-        };
-        const next = clone(analysis);
-        const target = next.proposals.find((item) => item.id === proposal.id);
-        target.status = 'accepted';
-        target.reviewedAt = now;
-        target.application = { draftId, draftRevision, appliedAt: now };
-        updateReviewedRun(next, target, now);
-        validateAnalysis(next);
-        const savedState = writeState(state, diagram.statePath);
-        const savedAnalysis = writeAnalysis(next, analysisFile);
-        return json(res, 200, {
-          analysis: analysisResponse(savedAnalysis),
-          lane: responseState(savedState, proposal.view, diagram.id),
-        });
+        throw new ContractError(
+          '逐项提案审阅入口已停用；智能体变更只写入锁定草稿，用户通过发布完整草稿作最终确认',
+          'PROPOSAL_REVIEW_RETIRED',
+          410,
+          { proposalId: proposalActionMatch[1], action: proposalActionMatch[2] },
+        );
       }
 
       if (req.method === 'GET' && pathname === '/api/diagrams') {
@@ -3233,7 +3598,7 @@ function createServer(options = {}) {
         validateNewDocumentBindings(priorGraph, incoming.graph, registry, projectRoot);
         const now = new Date().toISOString();
         const draftId = lane.draft ? lane.draft.draftId : newDraftId(view);
-        const priorContract = lane.draft?.developmentContract || null;
+        const priorContract = view === 'target' ? editableDraftContractBase(lane) : null;
         lane.draft = {
           draftId,
           draftRevision: lane.draft ? lane.draft.draftRevision + 1 : 1,
@@ -3266,6 +3631,39 @@ function createServer(options = {}) {
         return json(res, 200, responseState(writeState(state, diagram.statePath), view, diagram.id));
       }
 
+      if (req.method === 'POST' && pathname === '/api/draft/refresh-documents') {
+        const view = viewFrom(requestUrl);
+        if (view !== 'target') {
+          throw new ContractError(
+            '只有目标架构草稿可以刷新开发合同的绑定文档锁',
+            'DRAFT_DOCUMENT_REFRESH_TARGET_ONLY',
+            422,
+          );
+        }
+        const incoming = await readJsonBody(req);
+        validateRevisionRequest(incoming);
+        const diagram = diagramFrom(requestUrl, readArchitectureCatalog(catalogFile, stateFile, layoutFile));
+        const state = readState(diagram.statePath);
+        const lane = state.target;
+        assertLaneLock(incoming, lane);
+        if (!lane.draft) throw new ContractError('当前没有可刷新的目标草案', 'NO_ACTIVE_DRAFT', 409);
+
+        const registry = readRegistry(documentsFile);
+        const refreshedContract = draftDevelopmentContract(lane.draft.graph, {
+          draftId: lane.draft.draftId,
+          prior: lane.draft.developmentContract,
+          registry,
+          projectRoot,
+        });
+        lane.draft = {
+          ...lane.draft,
+          draftRevision: lane.draft.draftRevision + 1,
+          savedAt: new Date().toISOString(),
+          developmentContract: refreshedContract,
+        };
+        return json(res, 200, responseState(writeState(state, diagram.statePath), view, diagram.id));
+      }
+
       if (req.method === 'POST' && pathname === '/api/publish') {
         const view = viewFrom(requestUrl);
         const incoming = await readJsonBody(req);
@@ -3276,6 +3674,10 @@ function createServer(options = {}) {
         assertLaneLock(incoming, lane);
         if (!lane.draft) throw new ContractError('当前没有可发布的草案', 'NO_ACTIVE_DRAFT', 409);
         validateGraph(lane.draft.graph, view);
+        const registry = view === 'target' ? readRegistry(documentsFile) : null;
+        const verifiedDocuments = view === 'target'
+          ? assertDraftBoundDocumentsCurrent(lane.draft.developmentContract, lane.draft.graph, registry, projectRoot)
+          : null;
         const now = new Date().toISOString();
         const prior = clone(lane.published);
         lane.history.push(prior);
@@ -3296,9 +3698,10 @@ function createServer(options = {}) {
             lane.draft.developmentContract,
             published.graph,
             published,
-            readRegistry(documentsFile),
+            registry,
             projectRoot,
             now,
+            verifiedDocuments,
           );
         }
         lane.published = published;

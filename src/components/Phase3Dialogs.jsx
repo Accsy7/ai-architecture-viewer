@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { diagnosticMessage } from '../document-model.js';
+import { evaluateDraftContract, sensitiveDraftChanges } from '../development-contract-preview.mjs';
+import { useI18n } from '../i18n.jsx';
 
 function renderInline(text) {
   return String(text || '').split(/(\*\*[^*]+\*\*|`[^`]+`)/g).filter(Boolean).map((token, index) => {
@@ -77,8 +79,9 @@ function parseMarkdown(content) {
 }
 
 function MarkdownDocument({ content }) {
+  const { t } = useI18n();
   const blocks = useMemo(() => parseMarkdown(content), [content]);
-  if (!blocks.length) return <p className="sheet-empty">文档没有可查看的文字。</p>;
+  if (!blocks.length) return <p className="sheet-empty">{t('preview.empty')}</p>;
   return (
     <article className="markdown-document">
       {blocks.map((block, index) => {
@@ -100,6 +103,7 @@ function MarkdownDocument({ content }) {
 }
 
 export function DocumentPreviewDialog({ preview, loading, onClose }) {
+  const { t } = useI18n();
   const [mode, setMode] = useState('reading');
   useEffect(() => { setMode('reading'); }, [preview?.path]);
   if (!preview && !loading) return null;
@@ -110,29 +114,29 @@ export function DocumentPreviewDialog({ preview, loading, onClose }) {
       <section className="preview-dialog" role="dialog" aria-modal="true" aria-labelledby="preview-title">
         <header className="sheet-heading">
           <div>
-            <p className="kicker">内置文档查看器</p>
-            <h2 id="preview-title">{preview?.title || '正在读取文档…'}</h2>
+            <p className="kicker">{t('preview.kicker')}</p>
+            <h2 id="preview-title">{preview?.title || t('preview.reading')}</h2>
             {preview?.path && <code>{preview.path}</code>}
           </div>
-          <button className="quiet" type="button" onClick={onClose}>关闭</button>
+          <button className="quiet" type="button" onClick={onClose}>{t('common.close')}</button>
         </header>
-        {loading ? <p className="sheet-empty">仅在你明确点击后读取这个文件…</p> : (
+        {loading ? <p className="sheet-empty">{t('preview.explicitRead')}</p> : (
           <>
             {preview?.diagnostics?.length > 0 && (
               <ul className="document-diagnostics">
-                {preview.diagnostics.map((item, index) => <li key={`${item?.code || 'preview'}-${index}`}>{diagnosticMessage(item)}</li>)}
+                {preview.diagnostics.map((item, index) => <li key={`${item?.code || 'preview'}-${index}`}>{t(`documents.diagnostic.${item?.code}`, {}, diagnosticMessage(item))}</li>)}
               </ul>
             )}
-            <div className="viewer-mode-switch" role="tablist" aria-label="文档查看模式">
-              <button type="button" role="tab" aria-selected={mode === 'reading'} className={mode === 'reading' ? 'active' : ''} onClick={() => setMode('reading')}>阅读视图</button>
-              <button type="button" role="tab" aria-selected={mode === 'source'} className={mode === 'source' ? 'active' : ''} onClick={() => setMode('source')}>纯文本</button>
+            <div className="viewer-mode-switch" role="tablist" aria-label={t('preview.modeAria')}>
+              <button type="button" role="tab" aria-selected={mode === 'reading'} className={mode === 'reading' ? 'active' : ''} onClick={() => setMode('reading')}>{t('preview.readingMode')}</button>
+              <button type="button" role="tab" aria-selected={mode === 'source'} className={mode === 'source' ? 'active' : ''} onClick={() => setMode('source')}>{t('preview.sourceMode')}</button>
             </div>
             {mode === 'reading'
               ? <MarkdownDocument content={preview?.content} />
-              : <pre className="document-preview-content">{preview?.content || '文档没有可查看的文字。'}</pre>}
+              : <pre className="document-preview-content">{preview?.content || t('preview.empty')}</pre>}
             <footer className="preview-footer">
-              <span>{preview?.sizeBytes ?? 0} 字节</span>
-              {preview?.truncated && <strong>内容较长，此处只显示安全截断的片段。</strong>}
+              <span>{t('preview.bytes', { count: preview?.sizeBytes ?? 0 })}</span>
+              {preview?.truncated && <strong>{t('preview.truncated')}</strong>}
             </footer>
           </>
         )}
@@ -155,6 +159,7 @@ export function ArchitectureCorrectionDialog({
   onCancel,
   onConfirm,
 }) {
+  const { t } = useI18n();
   const [form, setForm] = useState(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -176,13 +181,13 @@ export function ArchitectureCorrectionDialog({
   const changes = useMemo(() => {
     if (!node || !form) return [];
     return [
-      ['模块名称', node.data?.name || '', form.name],
-      ['所属分组', node.data?.group || '', form.group],
-      ['主要作用', node.data?.purpose || '', form.purpose],
-      ['产品定位', node.data?.product || '', form.product],
-      ['建设方式', inferredBuildStrategy(node.data), form.buildStrategy],
+      [t('correction.moduleName'), node.data?.name || '', form.name],
+      [t('fields.group'), node.data?.group || '', form.group],
+      [t('fields.purpose'), node.data?.purpose || '', form.purpose],
+      [t('correction.productPosition'), node.data?.product || '', form.product],
+      [t('fields.buildStrategy'), inferredBuildStrategy(node.data), form.buildStrategy],
     ].filter(([, before, after]) => String(before).trim() !== String(after).trim());
-  }, [form, node]);
+  }, [form, node, t]);
 
   if (!node || !form) return null;
   const setField = (key, value) => setForm((current) => ({ ...current, [key]: value }));
@@ -200,65 +205,65 @@ export function ArchitectureCorrectionDialog({
       <section className="architecture-correction-dialog" role="dialog" aria-modal="true" aria-labelledby="correction-title">
         <header className="sheet-heading">
           <div>
-            <p className="kicker">人工纠正 AI 理解</p>
-            <h2 id="correction-title">修订“{node.data?.name || node.id}”</h2>
+            <p className="kicker">{t('correction.kicker')}</p>
+            <h2 id="correction-title">{t('correction.title', { name: node.data?.name || node.id })}</h2>
           </div>
-          <button className="quiet" type="button" disabled={submitting} onClick={onCancel}>关闭</button>
+          <button className="quiet" type="button" disabled={submitting} onClick={onCancel}>{t('common.close')}</button>
         </header>
 
         <div className="correction-grid">
           <div className="correction-fields">
-            <label className="field"><span>模块名称</span><input value={form.name} onChange={(event) => setField('name', event.target.value)} /></label>
+            <label className="field"><span>{t('correction.moduleName')}</span><input value={form.name} onChange={(event) => setField('name', event.target.value)} /></label>
             <label className="field">
-              <span>所属分组</span>
+              <span>{t('fields.group')}</span>
               <select value={form.group} onChange={(event) => setField('group', event.target.value)}>
                 {!groupOptions.includes(form.group) && <option value={form.group}>{form.group}</option>}
                 {groupOptions.map((group) => <option value={group} key={group}>{group}</option>)}
               </select>
             </label>
-            <label className="field"><span>主要作用</span><textarea rows="5" value={form.purpose} onChange={(event) => setField('purpose', event.target.value)} /></label>
-            <label className="field"><span>产品定位 / 当前口径</span><textarea rows="3" value={form.product} onChange={(event) => setField('product', event.target.value)} /></label>
+            <label className="field"><span>{t('fields.purpose')}</span><textarea rows="5" value={form.purpose} onChange={(event) => setField('purpose', event.target.value)} /></label>
+            <label className="field"><span>{t('correction.productLabel')}</span><textarea rows="3" value={form.product} onChange={(event) => setField('product', event.target.value)} /></label>
             <label className="field">
-              <span>建设方式</span>
+              <span>{t('fields.buildStrategy')}</span>
               <select value={form.buildStrategy} onChange={(event) => setField('buildStrategy', event.target.value)}>
-                <option value="自建">自建</option>
-                <option value="现有自建">现有自建</option>
-                <option value="外部集成">外部集成</option>
-                <option value="待决定">待决定</option>
+                <option value="自建">{t('correction.strategy.selfBuilt')}</option>
+                <option value="现有自建">{t('correction.strategy.existing')}</option>
+                <option value="外部集成">{t('correction.strategy.external')}</option>
+                <option value="待决定">{t('correction.strategy.pending')}</option>
               </select>
             </label>
             <label className="field correction-note">
-              <span>为什么需要纠正（必填）</span>
+              <span>{t('correction.reason')}</span>
               <textarea
                 rows="4"
                 value={form.confirmationNote}
-                placeholder="用自然语言说明 AI 原先理解错在哪里，以及正确理解是什么"
+                placeholder={t('correction.reasonPlaceholder')}
                 onChange={(event) => setField('confirmationNote', event.target.value)}
               />
             </label>
           </div>
 
           <aside className="correction-review">
-            <p className="kicker">提交前核对</p>
-            <h3>本次会改变 {changes.length} 个字段</h3>
-            {!changes.length && <p>请先修改至少一个字段。</p>}
+            <p className="kicker">{t('correction.reviewKicker')}</p>
+            <h3>{t('correction.changeCount', { count: changes.length })}</h3>
+            {!changes.length && <p>{t('correction.changeRequired')}</p>}
             {changes.map(([label, before, after]) => (
               <article key={label}>
                 <strong>{label}</strong>
-                <span className="before">原理解：{before || '未说明'}</span>
-                <span className="after">你的纠正：{after || '未说明'}</span>
+                <span className="before">{t('correction.before')}：{before || t('details.unspecified')}</span>
+                <span className="after">{t('correction.after')}：{after || t('details.unspecified')}</span>
               </article>
             ))}
             <div className="correction-impact">
-              <strong>影响范围</strong>
-              <p>该模块现有 {relatedEdgeCount} 条关系。关系不会自动改写；如需调整关系，请继续用自然语言告诉 AI。</p>
-              <p>确认后只写入草案，并标记为“人工已确认”。正式架构必须再经过发布确认。</p>
+              <strong>{t('correction.impact')}</strong>
+              <p>{t('correction.relationshipImpact', { count: relatedEdgeCount })}</p>
+              <p>{t('correction.draftBoundary')}</p>
             </div>
           </aside>
         </div>
 
         <footer className="dialog-actions correction-actions">
-          <button className="quiet" type="button" disabled={submitting} onClick={onCancel}>取消</button>
+          <button className="quiet" type="button" disabled={submitting} onClick={onCancel}>{t('common.cancel')}</button>
           <button className="primary" type="button" disabled={!canSubmit || submitting} onClick={async () => {
             setSubmitting(true);
             try {
@@ -277,78 +282,190 @@ export function ArchitectureCorrectionDialog({
             } finally {
               setSubmitting(false);
             }
-          }}>{submitting ? '正在写入草案…' : '确认并写入草案'}</button>
+          }}>{t(submitting ? 'correction.saving' : 'correction.save')}</button>
         </footer>
       </section>
     </div>
   );
 }
 
-export function PublishDraftDialog({ diagramTitle, viewLabel, diff, developmentContract, onCancel, onConfirm }) {
+function visibleValue(value, emptyLabel) {
+  if (value === null || value === undefined || value === '') return emptyLabel;
+  if (Array.isArray(value)) return value.join(' · ');
+  if (typeof value === 'object') return JSON.stringify(value);
+  return String(value);
+}
+
+export function PublishDraftDialog({
+  diagramTitle,
+  viewLabel,
+  diff,
+  draftGraph,
+  developmentContract,
+  changeProjection,
+  onCancel,
+  onConfirm,
+  onRefreshDocuments,
+}) {
+  const { t, translateError } = useI18n();
   const [message, setMessage] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [refreshingDocuments, setRefreshingDocuments] = useState(false);
+  const [publicationError, setPublicationError] = useState(null);
   const items = [
-    ['结构', diff?.structural || 0],
-    ['说明', diff?.semantic || 0],
-    ['布局', diff?.layout || 0],
-    ['文档', diff?.document || 0],
-    ['关系', diff?.relationship || 0],
+    [t('diff.structure'), diff?.structural || 0],
+    [t('diff.semantic'), diff?.semantic || 0],
+    [t('diff.layout'), diff?.layout || 0],
+    [t('diff.documents'), diff?.document || 0],
+    [t('diff.relationships'), diff?.relationship || 0],
   ];
   const criteria = Array.isArray(developmentContract?.acceptanceCriteria)
     ? developmentContract.acceptanceCriteria
     : [];
   const documents = Array.isArray(developmentContract?.documents) ? developmentContract.documents : [];
-  const hasExecutableCriteria = criteria.length > 0;
+  const criterionChanges = (changeProjection?.items || []).filter((item) => item.targetType === 'criterion');
+  const graphChanges = (changeProjection?.items || []).filter((item) => item.targetType !== 'criterion');
+  const sensitiveChanges = sensitiveDraftChanges(graphChanges);
+  const contractPreview = evaluateDraftContract(criteria, draftGraph);
+  const hasExecutableCriteria = contractPreview.executable;
   return (
     <div className="phase3-backdrop top-layer" role="presentation" onMouseDown={(event) => {
       if (event.target === event.currentTarget && !submitting) onCancel();
     }}>
       <section className="confirm-dialog publish-draft-dialog" role="dialog" aria-modal="true" aria-labelledby="publish-title">
-        <p className="kicker">发布前最终确认</p>
-        <h2 id="publish-title">发布{diagramTitle}的{viewLabel}修订</h2>
-        <p>这会把当前完整草案变成新的正式版本，不只是发布最后一次字段修改。旧版本会完整保留。</p>
+        <p className="kicker">{t('publish.kicker')}</p>
+        <h2 id="publish-title">{t('publish.title', { diagram: diagramTitle, view: viewLabel })}</h2>
+        <p>{t('publish.description')}</p>
+        <div className="publish-net-change-summary">
+          <strong>{t('publish.netChanges')}</strong>
+          <span>{t('publish.graphChanges', { count: changeProjection?.graphChangeCount || 0 })}</span>
+          <span>{t('publish.criterionChanges', { count: changeProjection?.criterionChangeCount || 0 })}</span>
+        </div>
         <div className="publish-diff-summary">{items.map(([label, value]) => <span key={label}>{label} {value}</span>)}</div>
+        {graphChanges.length > 0 && (
+          <details className="publish-graph-changes" open>
+            <summary>{t('publish.structureChangeTitle', { count: graphChanges.length })}</summary>
+            <ol>
+              {graphChanges.map((item) => (
+                <li key={item.id}>
+                  <span className={`pending-kind is-${item.category}`}>{t(`proposal.kind.${item.kind}`)}</span>
+                  <strong>{item.label}</strong>
+                  <code>{item.targetType}:{item.targetId}</code>
+                </li>
+              ))}
+            </ol>
+          </details>
+        )}
+        {sensitiveChanges.length > 0 && (
+          <section className="publish-sensitive-changes">
+            <strong>{t('publish.sensitiveChanges')}</strong>
+            <p>{t('publish.sensitiveChangesHelp')}</p>
+            <ol>
+              {sensitiveChanges.map(({ item, field, before, after }) => (
+                <li key={`${item.id}:${field}`}>
+                  <code>{item.targetType}:{item.targetId} · {t(`fields.${field}`)}</code>
+                  <span>{visibleValue(before, t('common.none'))} → {visibleValue(after, t('common.none'))}</span>
+                </li>
+              ))}
+            </ol>
+          </section>
+        )}
         {developmentContract && (
           <section className={`publish-contract-preview ${hasExecutableCriteria ? '' : 'is-unbound'}`}>
             <div className="publish-contract-preview__heading">
-              <strong>随正式目标冻结的开发合同</strong>
-              <span>{hasExecutableCriteria ? `${criteria.length} 条验收条件` : '发布后不可启动严格实施'}</span>
+              <strong>{t('publish.contractTitle')}</strong>
+              <span>{hasExecutableCriteria ? t('publish.criteriaCount', { count: criteria.length }) : t('publish.notExecutable')}</span>
             </div>
             <p>
               {hasExecutableCriteria
-                ? `发布后，外部智能体必须逐条引用这些条件；同时锁定 ${developmentContract.boundaryRefs?.length || 0} 项权限边界和 ${documents.length} 份绑定文档。`
-                : '当前草案没有来自目标提案的可观察验收条件。你仍可发布架构版本，但它会明确标为不可执行基线。'}
+                ? t('publish.contractDescription', { boundaries: developmentContract.boundaryRefs?.length || 0, documents: documents.length })
+                : criteria.length ? t('publish.invalidReferencesDescription') : t('publish.unboundDescription')}
             </p>
+            {contractPreview.missingReferences.length > 0 && (
+              <div className="publish-contract-invalid-refs">
+                <strong>{t('publish.invalidReferencesTitle')}</strong>
+                {contractPreview.missingReferences.map((entry) => (
+                  <p key={entry.criterionId}>
+                    <code>{entry.criterionId}</code>
+                    <span>{entry.missingTargetRefs.map((reference) => `${reference.targetType}:${reference.targetId}`).join(' · ')}</span>
+                  </p>
+                ))}
+              </div>
+            )}
             {criteria.length > 0 && (
               <ol className="publish-contract-list">
                 {criteria.map((criterion) => (
                   <li key={criterion.id}>
                     <strong>{criterion.statement}</strong>
-                    <code>{criterion.id} · 约束 {criterion.targetRefs?.length || 0} 个架构项</code>
+                    <code>{t('publish.criterionRefs', { id: criterion.id, count: criterion.targetRefs?.length || 0 })}</code>
+                    <small>{(criterion.targetRefs || []).map((reference) => `${reference.targetType}:${reference.targetId}`).join(' · ') || t('common.none')}</small>
                   </li>
                 ))}
               </ol>
             )}
+            {criterionChanges.length > 0 && (
+              <section className="publish-contract-changes">
+                <strong>{t('publish.criterionChangeTitle')}</strong>
+                <ol>
+                  {criterionChanges.map((item) => (
+                    <li key={item.id}>
+                      <span className={`pending-kind is-${item.category}`}>{t(`pending.category.${item.category}`)}</span>
+                      <code>{item.targetId}</code>
+                      {item.before?.statement && <small>{t('pending.before')}：{item.before.statement}</small>}
+                      {item.after?.statement && <small>{t('pending.after')}：{item.after.statement}</small>}
+                    </li>
+                  ))}
+                </ol>
+              </section>
+            )}
             {documents.length > 0 && (
-              <div className="publish-contract-documents" aria-label="绑定文档">
-                {documents.map((document) => <span key={document.id}>{document.title} · {document.id}</span>)}
+              <div className="publish-contract-documents" aria-label={t('publish.boundDocuments')}>
+                {documents.map((document) => (
+                  <article key={document.id}>
+                    <strong>{document.title}</strong>
+                    <code>{document.id} · {document.path}</code>
+                    <small>{t(`documents.status.${document.status}`, {}, document.status)} · {t(`documents.authority.${document.authority}`, {}, document.authority)}</small>
+                  </article>
+                ))}
               </div>
             )}
           </section>
         )}
-        <label className="field"><span>本次修订说明（必填）</span><textarea rows="4" value={message} placeholder="说明本次确认了哪些结构、边界或产品判断" onChange={(event) => setMessage(event.target.value)} /></label>
+        <p className="publish-entire-draft-note">{t('publish.entireDraftNote')}</p>
+        {publicationError && (
+          <div className="publish-error" role="alert">
+            <strong>{translateError(publicationError)}</strong>
+            {publicationError.code === 'DRAFT_BOUND_DOCUMENT_STALE' && onRefreshDocuments && (
+              <>
+                <small>{t('publish.documentRefreshHelp')}</small>
+                <button className="quiet" type="button" disabled={refreshingDocuments} onClick={async () => {
+                  setRefreshingDocuments(true);
+                  try {
+                    await onRefreshDocuments();
+                  } catch (error) {
+                    setPublicationError(error);
+                  } finally {
+                    setRefreshingDocuments(false);
+                  }
+                }}>{t(refreshingDocuments ? 'publish.refreshingDocuments' : 'publish.refreshDocuments')}</button>
+              </>
+            )}
+          </div>
+        )}
+        <label className="field"><span>{t('publish.note')}</span><textarea rows="4" value={message} placeholder={t('publish.notePlaceholder')} onChange={(event) => setMessage(event.target.value)} /></label>
         <div className="dialog-actions">
-          <button className="quiet" type="button" disabled={submitting} onClick={onCancel}>继续保留草案</button>
+          <button className="quiet" type="button" disabled={submitting} onClick={onCancel}>{t('publish.keepDraft')}</button>
           <button className="primary" type="button" disabled={!message.trim() || submitting} onClick={async () => {
             setSubmitting(true);
+            setPublicationError(null);
             try {
               await onConfirm(message.trim());
-            } catch {
-              // 父级保留对话框并通过页面状态提示冲突或校验结果。
+            } catch (error) {
+              setPublicationError(error);
             } finally {
               setSubmitting(false);
             }
-          }}>{submitting ? '正在发布…' : '确认发布为正式版本'}</button>
+          }}>{t(submitting ? 'publish.publishing' : 'publish.confirm')}</button>
         </div>
       </section>
     </div>
@@ -356,6 +473,7 @@ export function PublishDraftDialog({ diagramTitle, viewLabel, diff, developmentC
 }
 
 export function RevisionRestoreDialog({ revision, onCancel, onConfirm }) {
+  const { t } = useI18n();
   const [message, setMessage] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
@@ -367,23 +485,23 @@ export function RevisionRestoreDialog({ revision, onCancel, onConfirm }) {
       if (event.target === event.currentTarget && !submitting) onCancel();
     }}>
       <section className="confirm-dialog restore-dialog" role="dialog" aria-modal="true" aria-labelledby="restore-title">
-        <h2 id="restore-title">以此版本创建新修订</h2>
+        <h2 id="restore-title">{t('restore.title')}</h2>
         <p>
-          将 R{revision.revision} 的完整架构作为新的正式版本发布。当前正式版与全部历史记录都会保留。
+          {t('restore.description', { revision: revision.revision })}
         </p>
         <label className="field restore-message">
-          <span>修订说明（必填）</span>
+          <span>{t('restore.note')}</span>
           <textarea
             rows="4"
             autoFocus
             required
             value={message}
-            placeholder="说明为什么需要恢复这个版本，以及本次修订要解决什么问题"
+            placeholder={t('restore.notePlaceholder')}
             onChange={(event) => setMessage(event.target.value)}
           />
         </label>
         <div className="dialog-actions">
-          <button className="quiet" type="button" disabled={submitting} onClick={onCancel}>取消</button>
+          <button className="quiet" type="button" disabled={submitting} onClick={onCancel}>{t('common.cancel')}</button>
           <button className="primary" type="button" disabled={!message.trim() || submitting} onClick={async () => {
             setSubmitting(true);
             try {
@@ -393,7 +511,7 @@ export function RevisionRestoreDialog({ revision, onCancel, onConfirm }) {
             } finally {
               setSubmitting(false);
             }
-          }}>{submitting ? '正在创建…' : '确认创建新修订'}</button>
+          }}>{t(submitting ? 'restore.creating' : 'restore.confirm')}</button>
         </div>
       </section>
     </div>

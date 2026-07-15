@@ -1,25 +1,22 @@
-const STAGE_LABELS = {
-  understand: '理解项目',
-  plan: '规划变更',
-  verify: '核验实施',
-};
+import { useI18n } from '../i18n.jsx';
 
 export default function SkillCatalog({ skills = [], onCopyPrompt }) {
+  const { t } = useI18n();
   return (
     <>
       <div className="analysis-section-heading">
         <div>
-          <h3>编码智能体协作 Skill</h3>
-          <p>让 Codex、Claude Code 等不同智能体使用同一套项目理解、架构规划和实施核验协议。</p>
+          <h3>{t('skills.title')}</h3>
+          <p>{t('skills.description')}</p>
         </div>
-        <span className="analysis-source-count">内置 {skills.length}</span>
+        <span className="analysis-source-count">{t('skills.builtIn', { count: skills.length })}</span>
       </div>
 
       <p className="analysis-integration-note">
-        Skill 优先通过 MCP 把候选架构与实施声明交回工作台；它不会替用户验收结果、接受提案或发布正式版本。
+        {t('skills.boundary')}
       </p>
 
-      {!skills.length && <p className="analysis-empty">暂时没有可用的协作 Skill。</p>}
+      {!skills.length && <p className="analysis-empty">{t('skills.empty')}</p>}
 
       <div className="analysis-card-list">
         {skills.map((skill) => (
@@ -29,14 +26,14 @@ export default function SkillCatalog({ skills = [], onCopyPrompt }) {
                 <strong>{skill.displayName}</strong>
                 <code>{skill.skillPath}</code>
               </div>
-              <span className="analysis-badge analysis-badge--ai">{STAGE_LABELS[skill.stage] || skill.stage}</span>
+              <span className="analysis-badge analysis-badge--ai">{t(`skills.stage.${skill.stage}`, {}, skill.stage)}</span>
             </div>
             <p>{skill.description}</p>
             <div className="analysis-meta-row">
               {(skill.outputs || []).map((output) => <span key={output}>{output}</span>)}
             </div>
             <footer className="analysis-card-actions">
-              <button className="primary" type="button" onClick={() => onCopyPrompt?.(skill)}>复制调用提示</button>
+              <button className="primary" type="button" onClick={() => onCopyPrompt?.(skill)}>{t('skills.copyPrompt')}</button>
             </footer>
           </article>
         ))}

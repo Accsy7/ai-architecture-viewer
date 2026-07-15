@@ -6,11 +6,15 @@ import {
   NODE_MIN_HEIGHT,
   NODE_MIN_WIDTH,
 } from '../graph.js';
+import { useI18n } from '../i18n.jsx';
 
 export const CanvasEditContext = createContext({ editable: false, onResizeEnd: () => {} });
 
 export default function ArchitectureNode({ id, data, selected }) {
   const { editable, onResizeEnd } = useContext(CanvasEditContext);
+  const { t } = useI18n();
+  const draftChanges = data.__draftChanges || [];
+  const draftCategory = draftChanges[0]?.category;
   const classes = [
     'architecture-node',
     data.focus ? 'is-focus' : '',
@@ -19,6 +23,9 @@ export default function ArchitectureNode({ id, data, selected }) {
     data.__mutedByFocus ? 'is-muted-by-focus' : '',
     data.__relatedByFocus ? 'is-related-by-focus' : '',
     editable ? 'is-editable' : '',
+    data.__draftAddition ? 'is-pending-addition' : '',
+    data.__draftRemoval ? 'is-pending-removal' : '',
+    draftChanges.length && !data.__draftAddition && !data.__draftRemoval ? 'is-pending-change' : '',
   ].filter(Boolean).join(' ');
 
   return (
@@ -38,21 +45,26 @@ export default function ArchitectureNode({ id, data, selected }) {
       <Handle id="bottom" className="node-handle node-handle-bottom" type="source" position={Position.Bottom} isConnectable={editable} />
       <Handle id="left" className="node-handle node-handle-left" type="source" position={Position.Left} isConnectable={editable} />
       <div className="node-badges">
-        {data.compareStatus && <span className="compare-badge">{data.compareStatus}</span>}
+        {draftChanges.length > 0 && (
+          <span className={`pending-node-badge is-${draftCategory || 'module-changed'}`}>
+            {t(`pending.category.${draftCategory || 'module-changed'}`)} · {draftChanges.length}
+          </span>
+        )}
+        {data.compareStatus && <span className="compare-badge">{t(`compare.${data.compareStatus}`, {}, data.compareStatus)}</span>}
         {data.horizon && <span className="horizon-badge">{data.horizon}</span>}
-        {data.humanConfirmed && <span className="human-confirmed-badge">人工已确认</span>}
+        {data.humanConfirmed && <span className="human-confirmed-badge" title={t('node.correctionNotPublication')}>{t('node.humanConfirmed')}</span>}
         {data.aiCollaboration && <span className="ai-collaboration-badge">AI · {data.aiCollaboration}</span>}
-        {data.__hasChildDiagram && <span className="drilldown-badge">可进入下钻架构</span>}
+        {data.__hasChildDiagram && <span className="drilldown-badge">{t('node.drilldown')}</span>}
         {data.documentCount > 0 && (
           <span className={`document-badge ${data.documentWarningCount ? 'has-warning' : ''}`}>
-            文档 {data.documentCount}{data.documentWarningCount ? ` · ${data.documentWarningCount} 项异常` : ''}
+            {t('node.documents', { count: data.documentCount })}{data.documentWarningCount ? ` · ${t('node.documentWarnings', { count: data.documentWarningCount })}` : ''}
           </span>
         )}
       </div>
       <h3>{data.name}</h3>
       <p className="node-group">{data.group}</p>
-      {data.buildStrategy && <p className="node-build-strategy">建设方式：{data.buildStrategy}</p>}
-      <div className="node-chips" aria-label="三轴状态">
+      {data.buildStrategy && <p className="node-build-strategy">{t('node.buildStrategy')}：{data.buildStrategy}</p>}
+      <div className="node-chips" aria-label={t('node.statusAxes')}>
         <span>{data.technical}</span>
         <span className="product-chip">{data.product}</span>
         <span className="authorization-chip">{data.authorization}</span>

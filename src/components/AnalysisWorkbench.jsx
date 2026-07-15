@@ -1,89 +1,37 @@
 import { useMemo, useState } from 'react';
 import '../analysis.css';
+import { useI18n } from '../i18n.jsx';
 import SkillCatalog from './SkillCatalog.jsx';
 
-const TABS = [
-  { id: 'runs', label: '运行记录' },
-  { id: 'proposals', label: '提案收件箱' },
-  { id: 'reviews', label: '审阅记录' },
-  { id: 'skills', label: '协作 Skill' },
-];
+const TABS = ['runs', 'reviews', 'skills'];
 
-const RUN_STATUS = {
-  active: '等待提交',
-  submitted: '已提交',
-  reviewed: '已审阅',
-  failed: '运行失败',
+const TONES = {
+  active: 'neutral',
+  submitted: 'draft',
+  reviewed: 'confirmed',
+  failed: 'rejected',
+  pending: 'neutral',
+  'draft-applied': 'draft',
+  accepted: 'confirmed',
+  approved: 'confirmed',
+  partially_accepted: 'draft',
+  rejected: 'rejected',
 };
 
-const TASK_TYPE = {
-  'architecture-discovery': '项目架构理解',
-  'architecture-change-plan': '架构变更规划',
-  'implementation-reconcile': '实施结果核验',
+const ARCHITECTURE_GATE_TONES = {
+  aligned: 'draft',
+  'explained-drift': 'draft',
+  'unresolved-drift': 'rejected',
 };
 
-const ARTIFACT_TYPE = {
-  'evidence-manifest': '证据清单',
-  'architecture-snapshot': '架构快照',
-  'architecture-proposal': '变更提案',
-  'implementation-report': '实施报告',
-};
-
-const PROPOSAL_STATUS = {
-  pending: '待审阅',
-  reviewing: '审阅中',
-  draft: '草案',
-  approved: '已确认',
-  accepted: '已确认',
-  partially_accepted: '部分确认',
-  rejected: '已拒绝',
-};
-
-const ARCHITECTURE_GATE_STATUS = {
-  aligned: { label: '自动架构核对未发现偏离', tone: 'draft' },
-  'explained-drift': { label: '偏离已有智能体说明', tone: 'draft' },
-  'unresolved-drift': { label: '存在未解决偏离', tone: 'rejected' },
-};
-
-const AGENT_CLAIM_STATUS = {
-  complete: { label: '智能体声称完成', tone: 'ai' },
-  partial: { label: '智能体声称部分完成', tone: 'neutral' },
-  blocked: { label: '智能体声称受阻', tone: 'rejected' },
-};
-
-const CONTRACT_GATE_STATUS = {
-  satisfied: { label: '合同条件已满足', tone: 'confirmed' },
-  'criteria-unmet': { label: '合同条件存在缺口', tone: 'rejected' },
-  'claim-incomplete': { label: '智能体未声明完整完成', tone: 'draft' },
-};
-
-const CONTRACT_CRITERION_STATUS = {
-  satisfied: { label: '已满足', tone: 'confirmed' },
-  unsatisfied: { label: '未满足', tone: 'rejected' },
-  unverified: { label: '未核验', tone: 'neutral' },
-};
-
-const HUMAN_REVIEW_STATUS = {
-  accepted: { label: '人工已接受', tone: 'confirmed' },
-  'revision-requested': { label: '人工要求修订', tone: 'draft' },
-  rejected: { label: '人工已拒绝', tone: 'rejected' },
-};
-
-const DRIFT_KIND = {
-  missing: { label: '缺失', tone: 'rejected' },
-  extra: { label: '额外', tone: 'ai' },
-  changed: { label: '已改变', tone: 'draft' },
-  unverified: { label: '未核验', tone: 'neutral' },
-};
+const AGENT_CLAIM_TONES = { complete: 'ai', partial: 'neutral', blocked: 'rejected' };
+const CONTRACT_GATE_TONES = { satisfied: 'confirmed', 'criteria-unmet': 'rejected', 'claim-incomplete': 'draft' };
+const CRITERION_TONES = { satisfied: 'confirmed', unsatisfied: 'rejected', unverified: 'neutral' };
+const HUMAN_REVIEW_TONES = { accepted: 'confirmed', 'revision-requested': 'draft', rejected: 'rejected' };
+const DRIFT_TONES = { missing: 'rejected', extra: 'ai', changed: 'draft', unverified: 'neutral' };
 
 function asList(value) {
   return Array.isArray(value) ? value : [];
-}
-
-function formatTime(value) {
-  if (!value) return '时间未记录';
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString('zh-CN', { hour12: false });
 }
 
 function formatConfidence(value) {
@@ -93,62 +41,42 @@ function formatConfidence(value) {
   return `${Math.round(numeric <= 1 ? numeric * 100 : numeric)}%`;
 }
 
-function proposalChangeCount(proposal) {
-  if (Number.isFinite(proposal.changeCount)) return proposal.changeCount;
-  return asList(proposal.changes || proposal.items).length;
-}
-
-function proposalEvidenceCount(proposal) {
-  if (Number.isFinite(proposal.evidenceCount)) return proposal.evidenceCount;
-  return asList(proposal.evidence).length;
-}
-
-function proposalStatusClass(status) {
-  if (['approved', 'accepted', 'partially_accepted'].includes(status)) return 'confirmed';
-  if (status === 'rejected') return 'rejected';
-  if (status === 'draft') return 'draft';
-  return 'pending';
-}
-
-function artifactSummary(artifact) {
-  const summary = artifact?.summary || {};
-  if (artifact?.artifactType === 'evidence-manifest') return `${summary.evidenceCount || 0} 条依据`;
-  if (artifact?.artifactType === 'architecture-snapshot') {
-    return `${summary.nodeCount || 0} 个节点 · ${summary.edgeCount || 0} 条关系`;
-  }
-  if (artifact?.artifactType === 'architecture-proposal') return `${summary.changeCount || 0} 项变更`;
-  if (artifact?.artifactType === 'implementation-report') {
-    const status = {
-      complete: '智能体声称完成',
-      partial: '智能体声称部分完成',
-      blocked: '智能体声称受阻',
-    }[summary.status] || '等待智能体声明';
-    return `${status} · 检查通过 ${summary.passedCheckCount || 0} · 偏离 ${summary.driftCount || 0}`;
-  }
-  return '已提交';
-}
-
-function StatusBadge({ status, type = 'proposal' }) {
-  const isRun = type === 'run';
-  const label = isRun ? (RUN_STATUS[status] || status || '未标记') : (PROPOSAL_STATUS[status] || status || '待审阅');
-  const tone = isRun
-    ? (status === 'reviewed' ? 'confirmed' : status === 'failed' ? 'rejected' : status === 'submitted' ? 'draft' : 'neutral')
-    : proposalStatusClass(status);
-  return <span className={`analysis-badge analysis-badge--${tone}`}>{label}</span>;
+function Badge({ tone = 'neutral', children }) {
+  return <span className={`analysis-badge analysis-badge--${tone}`}>{children}</span>;
 }
 
 function EmptyState({ children }) {
   return <p className="analysis-empty">{children}</p>;
 }
 
+function runStatus(run, t) {
+  const status = run.status || 'active';
+  return <Badge tone={TONES[status] || 'neutral'}>{t(`workbench.runStatus.${status}`, {}, status)}</Badge>;
+}
+
+function artifactSummary(artifact, t) {
+  const summary = artifact?.summary || {};
+  if (artifact?.artifactType === 'evidence-manifest') return t('workbench.artifact.evidenceSummary', { count: summary.evidenceCount || 0 });
+  if (artifact?.artifactType === 'architecture-snapshot') return t('workbench.artifact.snapshotSummary', {
+    nodes: summary.nodeCount || 0,
+    edges: summary.edgeCount || 0,
+  });
+  if (artifact?.artifactType === 'architecture-proposal') return t('workbench.artifact.patchSummary', {
+    graph: summary.changeCount || 0,
+    criteria: summary.contractChangeCount || 0,
+  });
+  if (artifact?.artifactType === 'implementation-report') return t('workbench.artifact.implementationSummary', {
+    status: t(`workbench.agentClaim.${summary.status || 'unknown'}`),
+    passed: summary.passedCheckCount || 0,
+    drift: summary.driftCount || 0,
+  });
+  return t('workbench.artifact.submitted');
+}
+
 function ReconciliationElement({ label, element }) {
+  const { t } = useI18n();
   if (!element) {
-    return (
-      <div className="analysis-reconciliation-element is-empty">
-        <span>{label}</span>
-        <p>无</p>
-      </div>
-    );
+    return <div className="analysis-reconciliation-element is-empty"><span>{label}</span><p>{t('common.none')}</p></div>;
   }
   const isEdge = element.targetType === 'edge';
   return (
@@ -156,434 +84,337 @@ function ReconciliationElement({ label, element }) {
       <span>{label}</span>
       <strong>{isEdge ? `${element.source} → ${element.target}` : element.name}</strong>
       <p>{isEdge
-        ? `${element.label} · ${element.relationType} · 边界 ${element.controlledBoundaryPosture}`
+        ? `${element.label || ''} · ${element.relationType || ''} · ${t('workbench.boundary')} ${element.controlledBoundaryPosture || ''}`
         : element.purpose}</p>
-      {!isEdge && <small>权限边界：{element.authorization}</small>}
-      {asList(element.evidenceIds).length > 0 && (
-        <code>{element.evidenceIds.join(' · ')}</code>
-      )}
+      {!isEdge && <small>{t('workbench.permissionBoundary')}：{element.authorization || t('common.notRecorded')}</small>}
+      {asList(element.evidenceIds).length > 0 && <code>{element.evidenceIds.join(' · ')}</code>}
     </div>
   );
 }
 
 function ArchitectureGatePanel({ run, busy, onReviewImplementation }) {
+  const { t, formatDateTime } = useI18n();
   const [reviewNote, setReviewNote] = useState('');
   const gate = run.architectureGate;
   if (!gate) return null;
-  const status = ARCHITECTURE_GATE_STATUS[gate.status] || {
-    label: gate.status || '等待自动核验',
-    tone: 'neutral',
-  };
-  const claim = AGENT_CLAIM_STATUS[run.agentClaim?.status] || {
-    label: run.agentClaim?.status || '智能体未声明结果',
-    tone: 'neutral',
-  };
   const contractGate = run.contractGate;
-  const contractStatus = CONTRACT_GATE_STATUS[contractGate?.status] || {
-    label: contractGate?.status || '旧运行未绑定正式合同',
-    tone: 'neutral',
-  };
   const humanReview = run.humanReview;
-  const reviewStatus = humanReview
-    ? (HUMAN_REVIEW_STATUS[humanReview.decision] || { label: humanReview.decision, tone: 'neutral' })
-    : null;
-  const counts = gate.counts || {};
+  const contractReady = Boolean(contractGate?.readyForAcceptance);
+  const acceptanceReady = Boolean(gate.readyForHumanReview && contractReady);
+  const noteReady = Boolean(reviewNote.trim());
   const drift = asList(gate.drift);
   const unsupported = asList(gate.crossCheck?.unsupported);
-  const contractCriteria = asList(contractGate?.criteria);
-  const hasDetails = Array.isArray(gate.drift);
-  const contractReady = Boolean(contractGate?.readyForAcceptance);
-  const acceptanceReady = gate.readyForHumanReview && contractReady;
-  const noteReady = Boolean(reviewNote.trim());
-  const submitReview = (decision) => {
+  const criteria = asList(contractGate?.criteria);
+  const counts = gate.counts || {};
+  const submit = (decision) => {
     if (!noteReady || busy || humanReview) return;
     onReviewImplementation?.(run, decision, reviewNote.trim());
   };
   return (
     <section className={`analysis-reconciliation analysis-reconciliation--${gate.status || 'pending'}`}>
       <div className="analysis-reconciliation__heading">
-        <div>
-          <span className="analysis-reconciliation__kicker">ARCHITECTURE + CONTRACT GATES · HUMAN REVIEW</span>
-          <strong>实施结果验收</strong>
-        </div>
-        <span className={`analysis-badge analysis-badge--${status.tone}`}>{status.label}</span>
+        <div><span className="analysis-reconciliation__kicker">ARCHITECTURE + CONTRACT GATES · HUMAN REVIEW</span><strong>{t('workbench.implementationReview')}</strong></div>
+        <Badge tone={ARCHITECTURE_GATE_TONES[gate.status] || 'neutral'}>{t(`workbench.architectureGate.${gate.status || 'pending'}`)}</Badge>
       </div>
-      <p>
-        {gate.status === 'aligned' && '自动架构核对未发现偏离（仍需人工验收）。'}
-        {gate.status === 'explained-drift' && '智能体已为偏离提供逐项说明，服务端只确认条目能够对应；说明是否合理仍待人工判断。'}
-        {gate.status === 'unresolved-drift' && '仍有未说明、未报告或未核验项，尚不能进入人工接受。'}
-      </p>
+      <p>{t(`workbench.architectureGateHelp.${gate.status || 'pending'}`)}</p>
+
       <div className="analysis-implementation-state">
         <div>
-          <span>智能体声明</span>
-          <strong className={`analysis-badge analysis-badge--${claim.tone}`}>{claim.label}</strong>
-          <small>这是智能体自报，不是最终结论。</small>
+          <span>{t('workbench.agentClaimLabel')}</span>
+          <Badge tone={AGENT_CLAIM_TONES[run.agentClaim?.status] || 'neutral'}>{t(`workbench.agentClaim.${run.agentClaim?.status || 'unknown'}`)}</Badge>
+          <small>{t('workbench.agentClaimHelp')}</small>
         </div>
         <div>
-          <span>自动架构门禁</span>
-          <strong className={`analysis-badge analysis-badge--${status.tone}`}>{status.label}</strong>
-          <small>{gate.readyForHumanReview ? '可提交给用户验收' : '需先解决自动核对问题'}</small>
+          <span>{t('workbench.architectureGateLabel')}</span>
+          <Badge tone={ARCHITECTURE_GATE_TONES[gate.status] || 'neutral'}>{t(`workbench.architectureGate.${gate.status || 'pending'}`)}</Badge>
+          <small>{t(gate.readyForHumanReview ? 'workbench.readyForHumanReview' : 'workbench.resolveArchitectureGate')}</small>
         </div>
         <div>
-          <span>正式合同门禁</span>
-          <strong className={`analysis-badge analysis-badge--${contractStatus.tone}`}>{contractStatus.label}</strong>
-          <small>{contractReady
-            ? '合同条件可进入人工验收'
-            : contractGate
-              ? '只能要求修订或拒绝'
-              : '请创建新实施运行；只能查看、要求修订或拒绝'}</small>
+          <span>{t('workbench.contractGateLabel')}</span>
+          <Badge tone={CONTRACT_GATE_TONES[contractGate?.status] || 'neutral'}>{t(`workbench.contractGate.${contractGate?.status || 'missing'}`)}</Badge>
+          <small>{t(contractReady
+            ? 'workbench.contractReady'
+            : contractGate ? 'workbench.contractNotReady' : 'workbench.legacyRunNoContract')}</small>
         </div>
         <div>
-          <span>人工验收</span>
-          {reviewStatus
-            ? <strong className={`analysis-badge analysis-badge--${reviewStatus.tone}`}>{reviewStatus.label}</strong>
-            : <strong className="analysis-badge analysis-badge--neutral">等待用户判断</strong>}
-          <small>{humanReview ? `${humanReview.reviewer} · ${formatTime(humanReview.reviewedAt)}` : '智能体不能代替用户验收'}</small>
+          <span>{t('workbench.humanReviewLabel')}</span>
+          {humanReview
+            ? <Badge tone={HUMAN_REVIEW_TONES[humanReview.decision] || 'neutral'}>{t(`workbench.humanReview.${humanReview.decision}`)}</Badge>
+            : <Badge>{t('workbench.awaitingUser')}</Badge>}
+          <small>{humanReview
+            ? `${humanReview.reviewer} · ${formatDateTime(humanReview.reviewedAt)}`
+            : t('workbench.agentCannotReview')}</small>
         </div>
       </div>
-      <div className="analysis-reconciliation-counts" aria-label="实施偏离分类统计">
-        {Object.entries(DRIFT_KIND).map(([kind, meta]) => (
-          <span key={kind}><b>{counts[kind] || 0}</b>{meta.label}</span>
+
+      <div className="analysis-reconciliation-counts" aria-label={t('workbench.driftCounts')}>
+        {['missing', 'extra', 'changed', 'unverified'].map((kind) => (
+          <span key={kind}><b>{counts[kind] || 0}</b>{t(`workbench.drift.${kind}`)}</span>
         ))}
-        <span><b>{counts.unexplained || 0}</b>未解释</span>
+        <span><b>{counts.unexplained || 0}</b>{t('workbench.unexplained')}</span>
       </div>
+
       {contractGate && (
         <section className={`analysis-contract-gate is-${contractGate.status}`}>
           <div className="analysis-contract-gate__heading">
-            <div>
-              <span>FORMAL DEVELOPMENT CONTRACT</span>
-              <strong>逐条合同履约结果</strong>
-            </div>
-            <span className={`analysis-badge analysis-badge--${contractStatus.tone}`}>{contractStatus.label}</span>
+            <div><span>FORMAL DEVELOPMENT CONTRACT</span><strong>{t('workbench.criteriaResults')}</strong></div>
+            <Badge tone={CONTRACT_GATE_TONES[contractGate.status] || 'neutral'}>{t(`workbench.contractGate.${contractGate.status}`)}</Badge>
           </div>
-          <p>
-            这里的条件原文和架构引用来自已发布正式合同；智能体只能提交状态与证据，不能改写验收条件。
-          </p>
+          <p>{t('workbench.criteriaIntegrity')}</p>
           <div className="analysis-contract-gate__counts">
-            <span><b>{contractGate.counts?.satisfied || 0}</b>已满足</span>
-            <span><b>{contractGate.counts?.unsatisfied || 0}</b>未满足</span>
-            <span><b>{contractGate.counts?.unverified || 0}</b>未核验</span>
+            {['satisfied', 'unsatisfied', 'unverified'].map((status) => (
+              <span key={status}><b>{contractGate.counts?.[status] || 0}</b>{t(`workbench.criterion.${status}`)}</span>
+            ))}
           </div>
-          {contractCriteria.length > 0 ? (
+          {criteria.length ? (
             <ol className="analysis-contract-criteria">
-              {contractCriteria.map((criterion) => {
-                const criterionStatus = CONTRACT_CRITERION_STATUS[criterion.status] || {
-                  label: criterion.status,
-                  tone: 'neutral',
-                };
-                return (
-                  <li key={criterion.criterionId}>
-                    <div>
-                      <span className={`analysis-badge analysis-badge--${criterionStatus.tone}`}>{criterionStatus.label}</span>
-                      <code>{criterion.criterionId}</code>
-                    </div>
-                    <strong>{criterion.statement}</strong>
-                    <small>
-                      架构引用：{asList(criterion.targetRefs).length
-                        ? criterion.targetRefs.map((ref) => `${ref.targetType}:${ref.targetId}`).join(' · ')
-                        : '无'}
-                    </small>
-                    <small>
-                      实施证据：{asList(criterion.evidenceIds).length ? criterion.evidenceIds.join(' · ') : '未提供'}
-                    </small>
-                  </li>
-                );
-              })}
+              {criteria.map((criterion) => (
+                <li key={criterion.criterionId}>
+                  <div><Badge tone={CRITERION_TONES[criterion.status] || 'neutral'}>{t(`workbench.criterion.${criterion.status}`)}</Badge><code>{criterion.criterionId}</code></div>
+                  <strong>{criterion.statement}</strong>
+                  <small>{t('workbench.architectureRefs')}：{asList(criterion.targetRefs).length
+                    ? criterion.targetRefs.map((ref) => `${ref.targetType}:${ref.targetId}`).join(' · ')
+                    : t('common.none')}</small>
+                  <small>{t('workbench.implementationEvidence')}：{asList(criterion.evidenceIds).length ? criterion.evidenceIds.join(' · ') : t('common.none')}</small>
+                </li>
+              ))}
             </ol>
-          ) : <small>当前是精简摘要；按需读取合同门禁详情可查看每条条件与证据。</small>}
+          ) : <small>{t('workbench.compactContract')}</small>}
         </section>
       )}
-      {!hasDetails && <small className="analysis-reconciliation__compact-note">当前为精简摘要；按需读取核验详情可查看逐项证据。</small>}
-      {hasDetails && drift.length > 0 && (
-        <div className="analysis-drift-list">
-          {drift.map((item) => {
-            const kind = DRIFT_KIND[item.kind] || { label: item.kind, tone: 'neutral' };
-            return (
-              <article className="analysis-drift-item" key={item.id}>
-                <div className="analysis-drift-item__heading">
-                  <div>
-                    <span className={`analysis-badge analysis-badge--${kind.tone}`}>{kind.label}</span>
-                    <strong>{item.targetType === 'edge' ? '关系' : '模块'} · {item.targetId}</strong>
-                  </div>
-                  <code>{item.id}</code>
-                </div>
-                <p>{item.summary}</p>
-                {asList(item.changedFields).length > 0 && (
-                  <div className="analysis-drift-fields">
-                    {item.changedFields.map((field) => <span key={field}>{field}</span>)}
-                  </div>
-                )}
-                <div className="analysis-reconciliation-elements">
-                  <ReconciliationElement label="正式目标" element={item.target} />
-                  <ReconciliationElement label="实施快照" element={item.actual} />
-                </div>
-                <div className={`analysis-drift-explanation is-${item.explanation?.status || 'unexplained'}`}>
-                  <strong>{item.explanation?.status === 'agent-provided' ? '智能体已提供解释，待人工判断' : '智能体尚未说明'}</strong>
-                  <p>{item.explanation?.summary || '实施报告没有覆盖这项服务端计算出的偏离。'}</p>
-                  {asList(item.explanation?.evidenceIds).length > 0 && (
-                    <code>{item.explanation.evidenceIds.join(' · ')}</code>
-                  )}
-                </div>
-              </article>
-            );
-          })}
-        </div>
-      )}
-      {hasDetails && !drift.length && <p className="analysis-reconciliation__aligned-note">没有检测到模块、职责、权限或关系边界偏离。</p>}
+
+      {Array.isArray(gate.drift) ? (
+        drift.length ? <div className="analysis-drift-list">
+          {drift.map((item) => (
+            <article className="analysis-drift-item" key={item.id}>
+              <div className="analysis-drift-item__heading">
+                <div><Badge tone={DRIFT_TONES[item.kind] || 'neutral'}>{t(`workbench.drift.${item.kind}`)}</Badge><strong>{t(item.targetType === 'edge' ? 'workbench.relationship' : 'workbench.module')} · {item.targetId}</strong></div>
+                <code>{item.id}</code>
+              </div>
+              <p>{item.summary}</p>
+              {asList(item.changedFields).length > 0 && <div className="analysis-drift-fields">{item.changedFields.map((field) => <span key={field}>{field}</span>)}</div>}
+              <div className="analysis-reconciliation-elements">
+                <ReconciliationElement label={t('workbench.formalTarget')} element={item.target} />
+                <ReconciliationElement label={t('workbench.implementationSnapshot')} element={item.actual} />
+              </div>
+              <div className={`analysis-drift-explanation is-${item.explanation?.status || 'unexplained'}`}>
+                <strong>{t(item.explanation?.status === 'agent-provided' ? 'workbench.agentExplanationPending' : 'workbench.noAgentExplanation')}</strong>
+                <p>{item.explanation?.summary || t('workbench.reportDoesNotCover')}</p>
+                {asList(item.explanation?.evidenceIds).length > 0 && <code>{item.explanation.evidenceIds.join(' · ')}</code>}
+              </div>
+            </article>
+          ))}
+        </div> : <p className="analysis-reconciliation__aligned-note">{t('workbench.noArchitectureDrift')}</p>
+      ) : <small className="analysis-reconciliation__compact-note">{t('workbench.compactGate')}</small>}
+
       {unsupported.length > 0 && (
         <div className="analysis-reconciliation-unsupported">
-          <strong>报告中有 {unsupported.length} 项声明无法由快照对比支持</strong>
+          <strong>{t('workbench.unsupportedClaims', { count: unsupported.length })}</strong>
           {unsupported.map((item) => <p key={item.id}>{item.kind} · {item.targetId}：{item.summary}</p>)}
         </div>
       )}
+
       {humanReview ? (
         <div className={`analysis-human-review is-${humanReview.decision}`}>
-          <div>
-            <strong>{reviewStatus.label}</strong>
-            <span>{humanReview.reviewer} · {formatTime(humanReview.reviewedAt)}</span>
-          </div>
+          <div><strong>{t(`workbench.humanReview.${humanReview.decision}`)}</strong><span>{humanReview.reviewer} · {formatDateTime(humanReview.reviewedAt)}</span></div>
           <p>{humanReview.note}</p>
-          {humanReview.decision === 'accepted' && gate.status === 'explained-drift' && (
-            <small>本次接受只表示用户知情接受这些实施偏离，不会修改正式目标。</small>
-          )}
+          {humanReview.decision === 'accepted' && gate.status === 'explained-drift' && <small>{t('workbench.acceptedDriftDoesNotChangeTarget')}</small>}
         </div>
       ) : (
         <div className="analysis-human-review-controls">
           <label>
-            <span>人工验收备注（必填）</span>
-            <textarea
-              rows="3"
-              value={reviewNote}
-              disabled={busy}
-              placeholder="记录为什么接受、拒绝或要求修订；该备注会与验收时间和结论一起保存。"
-              onChange={(event) => setReviewNote(event.target.value)}
-            />
+            <span>{t('workbench.reviewNote')}</span>
+            <textarea rows="3" value={reviewNote} disabled={busy} placeholder={t('workbench.reviewNotePlaceholder')} onChange={(event) => setReviewNote(event.target.value)} />
           </label>
           <div>
-            <button
-              className="primary"
-              type="button"
-              disabled={busy || !noteReady || !acceptanceReady}
-              title={acceptanceReady
-                ? ''
-                : !gate.readyForHumanReview
-                  ? '自动架构门禁尚未达到可人工接受状态'
-                  : '正式合同仍有缺口或智能体尚未声明完整完成，只能要求修订或拒绝'}
-              onClick={() => submitReview('accepted')}
-            >人工接受</button>
-            <button className="quiet" type="button" disabled={busy || !noteReady} onClick={() => submitReview('revision-requested')}>要求修订</button>
-            <button className="danger" type="button" disabled={busy || !noteReady} onClick={() => submitReview('rejected')}>拒绝结果</button>
+            <button className="primary" type="button" disabled={busy || !noteReady || !acceptanceReady} onClick={() => submit('accepted')}>{t('workbench.acceptImplementation')}</button>
+            <button className="quiet" type="button" disabled={busy || !noteReady} onClick={() => submit('revision-requested')}>{t('workbench.requestRevision')}</button>
+            <button className="danger" type="button" disabled={busy || !noteReady} onClick={() => submit('rejected')}>{t('workbench.rejectImplementation')}</button>
           </div>
-          <small>接受实施结果不会修改正式目标；目标变更仍须经过独立提案、接受草案与人工发布。</small>
+          <small>{t('workbench.reviewDoesNotChangeTarget')}</small>
         </div>
       )}
     </section>
   );
 }
 
-function RunList({ runs, integration, busy, onRefresh, onCopyConnection, onReviewImplementation }) {
+function DraftWriteList({ writes }) {
+  const { t, formatDateTime } = useI18n();
+  if (!writes.length) return null;
+  return (
+    <div className="analysis-artifact-list" aria-label={t('workbench.draftWrites')}>
+      {writes.map((write) => (
+        <div className="analysis-artifact-item" key={write.id}>
+          <strong>{t(write.application?.outcome === 'reverted-to-published'
+            ? 'workbench.draftRevertedToPublished'
+            : 'workbench.draftWrite')}</strong>
+          <span>{write.summary || write.title || write.id}</span>
+          <small>
+            {t('workbench.draftRevision', { revision: write.application?.draftRevision || '?' })} · {formatDateTime(write.application?.appliedAt || write.createdAt)}
+          </small>
+          <small>{t(write.application?.outcome === 'reverted-to-published'
+            ? 'workbench.draftRevertedHelp'
+            : 'workbench.writeCounts', {
+            graph: asList(write.changes).length,
+            criteria: asList(write.contractPatch?.upsert).length + asList(write.contractPatch?.delete).length,
+          })}</small>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function LegacyProposalHistory({ proposals, onOpenProposal }) {
+  const { t, formatDateTime } = useI18n();
+  const records = proposals.filter((proposal) => proposal.status !== 'draft-applied');
+  if (!records.length) return null;
+  return (
+    <section className="analysis-legacy-history">
+      <div className="analysis-section-heading">
+        <div><h3>{t('workbench.legacyHistory')}</h3><p>{t('workbench.legacyHistoryHelp')}</p></div>
+      </div>
+      <div className="analysis-card-list">
+        {records.map((proposal) => {
+          const invalidPending = proposal.status === 'pending' && !proposal.laneLock;
+          const retiredPending = proposal.status === 'pending' && proposal.laneLock;
+          return (
+            <article className="analysis-proposal-card" key={proposal.id}>
+              <div className="analysis-card-heading">
+                <div><strong>{proposal.title || t('proposal.defaultTitle')}</strong><small>{formatDateTime(proposal.createdAt)}</small></div>
+                <Badge tone={TONES[proposal.status] || 'neutral'}>{t(`workbench.proposalStatus.${proposal.status || 'pending'}`)}</Badge>
+              </div>
+              {proposal.summary && <p>{proposal.summary}</p>}
+              <div className="analysis-meta-row">
+                <span>{t('workbench.graphChanges', { count: asList(proposal.changes).length })}</span>
+                <span>{t('workbench.evidenceItems', { count: asList(proposal.evidenceIds).length })}</span>
+                {invalidPending && <span>{t('workbench.legacyNeedsRebuild')}</span>}
+                {retiredPending && <span>{t('workbench.retiredPending')}</span>}
+              </div>
+              <footer className="analysis-card-actions"><button className="quiet" type="button" onClick={() => onOpenProposal?.(proposal)}>{t('workbench.viewReadOnlyRecord')}</button></footer>
+            </article>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function RunList({ runs, proposals, integration, busy, onRefresh, onCopyConnection, onOpenProposal, onReviewImplementation }) {
+  const { t, formatDateTime } = useI18n();
   return (
     <>
       <div className="analysis-section-heading">
-        <div>
-          <h3>外部智能体运行</h3>
-          <p>Codex、Claude Code 等智能体可从代码仓库、设计文档或用户确认的讨论结论形成结构化结果，再交给这里审阅。</p>
-        </div>
-        <button className="quiet" type="button" disabled={busy} onClick={onRefresh}>{busy ? '正在刷新…' : '刷新收件箱'}</button>
+        <div><h3>{t('workbench.runsTitle')}</h3><p>{t('workbench.runsHelp')}</p></div>
+        <button className="quiet" type="button" disabled={busy} onClick={onRefresh}>{t(busy ? 'common.refreshing' : 'common.refresh')}</button>
       </div>
-
       <div className="analysis-integration-card">
         <div>
-          <span className="analysis-badge analysis-badge--ai">MCP · LOCAL</span>
-          <strong>查看器不内嵌模型，也不会自动扫描仓库</strong>
-          <p>概念项目无需代码仓库即可提交目标提案；代码项目则用代码事实描述当前架构。人工仍是唯一的接受与发布者。</p>
+          <Badge tone="ai">MCP · LOCAL</Badge>
+          <strong>{t('workbench.noEmbeddedModel')}</strong>
+          <p>{t('workbench.directDraftBoundary')}</p>
         </div>
         <div className="analysis-integration-commands">
           <code>{integration?.mcpCommand || 'npm run mcp'}</code>
           <code>{integration?.cliCommand || 'npm run agent --'}</code>
-          <button className="primary" type="button" onClick={onCopyConnection}>复制接入说明</button>
+          <button className="primary" type="button" onClick={onCopyConnection}>{t('workbench.copyConnection')}</button>
         </div>
       </div>
-
-      {!runs.length && <EmptyState>还没有智能体运行。连接 MCP 后，让智能体先调用 create_agent_run。</EmptyState>}
-
+      {!runs.length && <EmptyState>{t('workbench.noRuns')}</EmptyState>}
       <div className="analysis-card-list">
         {runs.map((run, index) => {
           const artifacts = asList(run.artifacts);
+          const writes = proposals.filter((proposal) => proposal.status === 'draft-applied' && proposal.origin?.runId === run.id);
           return (
             <article className="analysis-run-card" key={run.id || `agent-run-${index}`}>
               <div className="analysis-card-heading">
-                <div>
-                  <strong>{run.agentName || '未命名智能体'}</strong>
-                  <code>{run.id}</code>
-                </div>
-                <StatusBadge status={run.status || 'active'} type="run" />
+                <div><strong>{run.agentName || t('workbench.unnamedAgent')}</strong><code>{run.id}</code></div>
+                {runStatus(run, t)}
               </div>
               {run.summary && <p>{run.summary}</p>}
               {run.approvedTarget && (
-                <div className="analysis-target-lock">
-                  <div>
-                    <span>已锁定正式目标</span>
-                    <strong>{run.approvedTarget.diagramId} · {run.approvedTarget.revisionId}</strong>
-                  </div>
-                  <code title={run.approvedTarget.semanticHash}>{run.approvedTarget.semanticHash.slice(0, 12)}…</code>
-                </div>
+                <div className="analysis-target-lock"><div><span>{t('workbench.formalTargetLock')}</span><strong>{run.approvedTarget.diagramId} · {run.approvedTarget.revisionId}</strong></div><code title={run.approvedTarget.semanticHash}>{run.approvedTarget.semanticHash?.slice(0, 12)}…</code></div>
               )}
               {run.laneLock?.draftId && (
-                <div className="analysis-target-lock">
-                  <div>
-                    <span>已锁定活动草案</span>
-                    <strong>{run.view === 'target' ? '目标架构' : '当前架构'} · {run.laneLock.draftId}</strong>
-                  </div>
-                  <code>draft r{run.laneLock.draftRevision}</code>
-                </div>
+                <div className="analysis-target-lock"><div><span>{t('workbench.draftLock')}</span><strong>{t(run.view === 'target' ? 'views.target.label' : 'views.current.label')} · {run.laneLock.draftId}</strong></div><code>draft r{run.laneLock.draftRevision}</code></div>
               )}
               <div className="analysis-meta-row">
-                <span>{TASK_TYPE[run.taskType] || run.taskType}</span>
-                <span>{run.agentClient || '未知客户端'}</span>
-                <span>{run.view === 'target' ? '目标架构' : '当前架构'} · r{run.baseRevision}</span>
-                <span>{artifacts.length} 个工件</span>
-                <span>{run.pendingProposalCount || 0} 项待审</span>
+                <span>{t(`workbench.task.${run.taskType}`, {}, run.taskType)}</span>
+                <span>{run.agentClient || t('common.unknown')}</span>
+                <span>{t(run.view === 'target' ? 'views.target.label' : 'views.current.label')} · r{run.baseRevision}</span>
+                <span>{t('workbench.artifactCount', { count: artifacts.length })}</span>
+                <span>{t('workbench.draftWriteCount', { count: writes.length })}</span>
               </div>
               {artifacts.length > 0 && (
-                <div className="analysis-artifact-list" aria-label="本次运行提交的工件">
-                  {artifacts.map((artifact) => (
-                    <div className="analysis-artifact-item" key={artifact.id}>
-                      <strong>{ARTIFACT_TYPE[artifact.artifactType] || artifact.artifactType}</strong>
-                      <span>{artifactSummary(artifact)}</span>
-                    </div>
-                  ))}
+                <div className="analysis-artifact-list" aria-label={t('workbench.artifacts')}>
+                  {artifacts.map((artifact) => <div className="analysis-artifact-item" key={artifact.id}><strong>{t(`workbench.artifact.${artifact.artifactType}`, {}, artifact.artifactType)}</strong><span>{artifactSummary(artifact, t)}</span></div>)}
                 </div>
               )}
+              <DraftWriteList writes={writes} />
               <ArchitectureGatePanel run={run} busy={busy} onReviewImplementation={onReviewImplementation} />
-              <small className="analysis-run-time">更新于 {formatTime(run.updatedAt || run.createdAt)}</small>
+              <small className="analysis-run-time">{t('workbench.updatedAt', { time: formatDateTime(run.updatedAt || run.createdAt) })}</small>
             </article>
           );
         })}
       </div>
+      <LegacyProposalHistory proposals={proposals} onOpenProposal={onOpenProposal} />
     </>
   );
 }
 
-function ProposalList({ proposals, busy, onRefresh, onOpenProposal }) {
-  const pendingCount = proposals.filter((proposal) => ['pending', 'reviewing', 'draft'].includes(proposal.status || 'pending')).length;
+function ReviewCard({ review, onOpenProposal, onOpenRevisionHistory }) {
+  const { t, formatDateTime } = useI18n();
+  const implementation = review.kind === 'implementation';
+  const publication = review.kind === 'publication';
+  const decision = implementation || publication ? review.decision : review.status;
+  const badgeKey = implementation
+    ? `workbench.humanReview.${decision}`
+    : publication ? `workbench.publication.${decision}` : `workbench.proposalStatus.${decision}`;
+  const title = publication
+    ? t(review.decision === 'restore' ? 'workbench.restoredRevision' : 'workbench.publishedRevision', { revision: review.revision })
+    : implementation ? t('shell.implementationReviewTitle', { name: review.agentName }) : review.title;
+  return (
+    <article className={`analysis-review-card ${review.kind === 'legacy-proposal' ? 'is-legacy' : ''}`}>
+      <div className="analysis-card-heading">
+        <div><strong>{title || t('workbench.legacyProposalDecision')}</strong><small>{formatDateTime(review.reviewedAt)}</small></div>
+        <Badge tone={implementation ? (HUMAN_REVIEW_TONES[decision] || 'neutral') : publication ? 'confirmed' : (TONES[decision] || 'neutral')}>
+          {t(badgeKey)}
+        </Badge>
+      </div>
+      {review.summary && <p>{review.summary}</p>}
+      <div className="analysis-meta-row">
+        <span>{t(implementation ? 'workbench.implementationReview' : publication ? 'workbench.formalPublicationReview' : 'workbench.legacyProposalHistory')}</span>
+        {review.reviewer && <span>{review.reviewer}</span>}
+        {review.revisionId && <code>{review.revisionId}</code>}
+      </div>
+      {publication && <footer className="analysis-card-actions"><button className="quiet" type="button" onClick={onOpenRevisionHistory}>{t('workbench.openRevisionHistory')}</button></footer>}
+      {review.proposal && <footer className="analysis-card-actions"><button className="quiet" type="button" onClick={() => onOpenProposal?.(review.proposal)}>{t('workbench.viewReadOnlyRecord')}</button></footer>}
+    </article>
+  );
+}
+
+function ReviewList({ reviews, onOpenProposal, onOpenRevisionHistory }) {
+  const { t } = useI18n();
+  const currentReviews = reviews.filter((review) => review.kind !== 'legacy-proposal');
+  const legacyReviews = reviews.filter((review) => review.kind === 'legacy-proposal');
   return (
     <>
-      <div className="analysis-section-heading">
-        <div>
-          <h3>候选架构变更</h3>
-          <p>这里只接收外部智能体提交的结构化差异；正式架构仍需人工逐项确认。</p>
-        </div>
-        <button className="quiet" type="button" disabled={busy} onClick={onRefresh}>{busy ? '正在刷新…' : '刷新'}</button>
-      </div>
-
-      <div className="analysis-summary-strip">
-        <span className="analysis-badge analysis-badge--ai">智能体提交</span>
-        <strong>{pendingCount} 项待人工审阅</strong>
-        <span>提案不会直接改写正式架构</span>
-      </div>
-
-      {!proposals.length && <EmptyState>暂时没有待审提案。智能体提交架构快照或变更方案后，会出现在这里。</EmptyState>}
-
+      <div className="analysis-section-heading"><div><h3>{t('workbench.reviewsTitle')}</h3><p>{t('workbench.reviewsHelp')}</p></div></div>
+      {!reviews.length && <EmptyState>{t('workbench.noReviews')}</EmptyState>}
       <div className="analysis-card-list">
-        {proposals.map((proposal, index) => {
-          const confidence = formatConfidence(proposal.confidence);
-          const changeCount = proposalChangeCount(proposal);
-          const evidenceCount = proposalEvidenceCount(proposal);
-          const status = proposal.status || 'pending';
-          return (
-            <article className="analysis-proposal-card" key={proposal.id || `proposal-${index}`}>
-              <div className="analysis-card-heading">
-                <div>
-                  <div className="analysis-title-with-mark">
-                    <span className="analysis-ai-mark" aria-hidden="true">↗</span>
-                    <strong>{proposal.title || proposal.name || '未命名架构提案'}</strong>
-                  </div>
-                  {proposal.createdAt && <small>{formatTime(proposal.createdAt)}</small>}
-                </div>
-                <StatusBadge status={status} />
-              </div>
-              {proposal.summary && <p>{proposal.summary}</p>}
-              <div className="analysis-meta-row">
-                <span>{changeCount} 项变更</span>
-                <span>{evidenceCount} 条依据</span>
-                {proposal.origin?.agentName && <span>{proposal.origin.agentName}</span>}
-                {proposal.origin?.agentClient && <span>{proposal.origin.agentClient}</span>}
-                {proposal.laneLock?.draftId && <span>活动草案 r{proposal.laneLock.draftRevision}</span>}
-                {proposal.laneLock === undefined && <span>旧提案 · 接受前需重建</span>}
-                {confidence && <span>置信度 {confidence}</span>}
-              </div>
-              {onOpenProposal && (
-                <footer className="analysis-card-actions">
-                  <button className={['approved', 'accepted', 'rejected'].includes(status) ? 'quiet' : 'primary'} type="button" onClick={() => onOpenProposal(proposal)}>
-                    {['approved', 'accepted', 'rejected'].includes(status) ? '查看审阅结果' : '开始审阅'}
-                  </button>
-                </footer>
-              )}
-            </article>
-          );
-        })}
+        {currentReviews.map((review, index) => <ReviewCard key={review.id || `review-${index}`} review={review} onOpenRevisionHistory={onOpenRevisionHistory} />)}
       </div>
+      {legacyReviews.length > 0 && (
+        <section className="analysis-legacy-history">
+          <div className="analysis-section-heading"><div><h3>{t('workbench.legacyReviewTitle')}</h3><p>{t('workbench.legacyReviewHelp')}</p></div></div>
+          <div className="analysis-card-list">
+            {legacyReviews.map((review, index) => <ReviewCard key={review.id || `legacy-review-${index}`} review={review} onOpenProposal={onOpenProposal} />)}
+          </div>
+        </section>
+      )}
     </>
   );
 }
 
-function ReviewList({ reviews, onOpenProposal }) {
-  return (
-    <>
-      <div className="analysis-section-heading">
-        <div>
-          <h3>人工审阅记录</h3>
-          <p>保留架构提案与实施结果的接受、拒绝和要求修订记录，供后续追溯。</p>
-        </div>
-      </div>
-
-      {!reviews.length && <EmptyState>尚无审阅记录。完成提案审阅或实施结果验收后，记录会显示在这里。</EmptyState>}
-
-      <div className="analysis-card-list">
-        {reviews.map((review, index) => {
-          const isImplementation = review.kind === 'implementation';
-          const acceptedCount = review.acceptedCount ?? review.accepted ?? 0;
-          const rejectedCount = review.rejectedCount ?? review.rejected ?? 0;
-          const status = review.status || (acceptedCount > 0 ? 'approved' : 'rejected');
-          const implementationStatus = isImplementation
-            ? (HUMAN_REVIEW_STATUS[review.decision] || { label: review.decision, tone: 'neutral' })
-            : null;
-          return (
-            <article className="analysis-review-card" key={review.id || review.proposalId || `review-${index}`}>
-              <div className="analysis-card-heading">
-                <div>
-                  <strong>{review.title || review.proposalTitle || '架构提案审阅'}</strong>
-                  <small>{review.reviewedAt ? formatTime(review.reviewedAt) : '审阅时间未记录'}</small>
-                </div>
-                <span className={`analysis-badge analysis-badge--${implementationStatus?.tone || 'confirmed'}`}>
-                  {implementationStatus?.label || '人工确认'}
-                </span>
-              </div>
-              {review.summary && <p>{review.summary}</p>}
-              <div className="analysis-meta-row">
-                {isImplementation ? <span>实施结果验收</span> : <span>接受 {acceptedCount}</span>}
-                {!isImplementation && <span>拒绝 {rejectedCount}</span>}
-                {review.reviewer && <span>{review.reviewer}</span>}
-                {!isImplementation && <StatusBadge status={status} />}
-              </div>
-              {onOpenProposal && review.proposal && (
-                <footer className="analysis-card-actions">
-                  <button className="quiet" type="button" onClick={() => onOpenProposal(review.proposal)}>回看提案</button>
-                </footer>
-              )}
-            </article>
-          );
-        })}
-      </div>
-    </>
-  );
-}
-
-/**
- * A presentational inbox for external coding-agent runs, proposals, and human review.
- * It deliberately does not fetch data on its own.
- */
 export default function AnalysisWorkbench({
   open,
   runs = [],
@@ -601,70 +432,34 @@ export default function AnalysisWorkbench({
   onOpenProposal,
   onReviewImplementation,
   onCopySkillPrompt,
+  onOpenRevisionHistory,
 }) {
+  const { t } = useI18n();
   const [internalTab, setInternalTab] = useState(defaultTab);
-  const selectedTab = activeTab || internalTab;
+  const requestedTab = activeTab || internalTab;
+  const selectedTab = TABS.includes(requestedTab) ? requestedTab : 'runs';
   const agentRuns = useMemo(() => asList(runs), [runs]);
-  const candidateProposals = useMemo(() => asList(proposals), [proposals]);
+  const history = useMemo(() => asList(proposals), [proposals]);
   const reviewRecords = useMemo(() => asList(reviews), [reviews]);
   const collaborationSkills = useMemo(() => asList(skills), [skills]);
-
   if (!open) return null;
-
   const changeTab = (tabId) => {
     if (!activeTab) setInternalTab(tabId);
     onTabChange?.(tabId);
   };
-
   return (
-    <div className="phase3-backdrop analysis-backdrop" role="presentation" onMouseDown={(event) => {
-      if (event.target === event.currentTarget) onClose?.();
-    }}>
+    <div className="phase3-backdrop analysis-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose?.(); }}>
       <aside className="phase3-sheet analysis-workbench" role="dialog" aria-modal="true" aria-labelledby="analysis-workbench-title">
         <header className="sheet-heading analysis-workbench__heading">
-          <div>
-            <p className="kicker">AGENT ARCHITECTURE HANDOFF</p>
-            <h2 id="analysis-workbench-title">智能体架构工作台</h2>
-            <p>让外部编码智能体提交它对项目的架构理解，再由人审阅、修订和发布。</p>
-          </div>
-          <button className="quiet sheet-close" type="button" onClick={onClose} aria-label="关闭智能体架构工作台">关闭</button>
+          <div><p className="kicker">AGENT ARCHITECTURE HANDOFF</p><h2 id="analysis-workbench-title">{t('workbench.title')}</h2><p>{t('workbench.description')}</p></div>
+          <button className="quiet sheet-close" type="button" onClick={onClose} aria-label={t('workbench.close')}>{t('common.close')}</button>
         </header>
-
-        <div className="analysis-tabs" role="tablist" aria-label="智能体架构工作台内容">
-          {TABS.map((tab) => (
-            <button
-              key={tab.id}
-              id={`analysis-tab-${tab.id}`}
-              className={selectedTab === tab.id ? 'active' : ''}
-              type="button"
-              role="tab"
-              aria-selected={selectedTab === tab.id}
-              aria-controls={`analysis-panel-${tab.id}`}
-              onClick={() => changeTab(tab.id)}
-            >{tab.label}</button>
-          ))}
+        <div className="analysis-tabs" role="tablist" aria-label={t('workbench.tabs')}>
+          {TABS.map((tab) => <button key={tab} id={`analysis-tab-${tab}`} className={selectedTab === tab ? 'active' : ''} type="button" role="tab" aria-selected={selectedTab === tab} aria-controls={`analysis-panel-${tab}`} onClick={() => changeTab(tab)}>{t(`workbench.tab.${tab}`)}</button>)}
         </div>
-
         <section id={`analysis-panel-${selectedTab}`} role="tabpanel" aria-labelledby={`analysis-tab-${selectedTab}`} className="analysis-tab-panel">
-          {selectedTab === 'runs' && (
-            <RunList
-              runs={agentRuns}
-              integration={integration}
-              busy={busy}
-              onRefresh={onRefresh}
-              onCopyConnection={onCopyConnection}
-              onReviewImplementation={onReviewImplementation}
-            />
-          )}
-          {selectedTab === 'proposals' && (
-            <ProposalList
-              proposals={candidateProposals}
-              busy={busy}
-              onRefresh={onRefresh}
-              onOpenProposal={onOpenProposal}
-            />
-          )}
-          {selectedTab === 'reviews' && <ReviewList reviews={reviewRecords} onOpenProposal={onOpenProposal} />}
+          {selectedTab === 'runs' && <RunList runs={agentRuns} proposals={history} integration={integration} busy={busy} onRefresh={onRefresh} onCopyConnection={onCopyConnection} onOpenProposal={onOpenProposal} onReviewImplementation={onReviewImplementation} />}
+          {selectedTab === 'reviews' && <ReviewList reviews={reviewRecords} onOpenProposal={onOpenProposal} onOpenRevisionHistory={onOpenRevisionHistory} />}
           {selectedTab === 'skills' && <SkillCatalog skills={collaborationSkills} onCopyPrompt={onCopySkillPrompt} />}
         </section>
       </aside>

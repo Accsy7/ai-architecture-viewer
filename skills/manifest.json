@@ -1,6 +1,6 @@
 {
   "schemaVersion": "1.0.0",
-  "protocolVersion": "1.3.0",
+  "protocolVersion": "1.4.0",
   "skills": [
     {
       "id": "architecture-discovery",
@@ -15,10 +15,10 @@
       "id": "architecture-change-plan",
       "displayName": "架构变更规划",
       "stage": "plan",
-      "description": "由外部智能体把用户讨论、设计文档或代码事实转化为目标架构方案，并通过 MCP 送入人工审阅。",
+      "description": "由外部智能体把用户讨论、设计文档或代码事实转化为目标架构语义补丁，并通过 MCP 写入锁定草稿。",
       "skillPath": "architecture-change-plan/SKILL.md",
       "outputs": ["task-request.json", "architecture-proposal.json", "evidence-manifest.json"],
-      "defaultPrompt": "请连接本项目的 AI Architecture Viewer MCP，读取并执行 skills/architecture-change-plan/SKILL.md；概念项目可依据用户确认的讨论或 Markdown 设计材料提交目标提案，无需代码仓库；不要把目标设计表述为当前实现，也不要开始编码、接受提案或发布架构。"
+      "defaultPrompt": "请连接本项目的 AI Architecture Viewer MCP，读取并执行 skills/architecture-change-plan/SKILL.md；先读取精简活动目标草稿并创建锁定最新正式基线与草稿修订的新运行，再提交一次有依据的稳定 ID 语义补丁；概念项目可依据用户确认的讨论或登记 Markdown 设计材料，无需代码仓库；不要把目标设计表述为当前实现，不要开始编码、发布架构或验收实施。"
     },
     {
       "id": "implementation-reconcile",

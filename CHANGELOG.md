@@ -2,6 +2,57 @@
 
 All notable changes to AI Architecture Viewer are documented in this file.
 
+## [0.6.0] - 2026-07-15
+
+### Added
+
+- Direct, evidence-backed semantic writes to the exact current or target draft
+  locked by an agent run. Discovery snapshots can incrementally update current
+  drafts, target patches can update architecture and stable acceptance criteria,
+  while implementation snapshots remain reconciliation evidence only.
+- A canvas-native net-difference layer for unpublished module, relationship,
+  permission-boundary, and acceptance-criterion changes. Layout-only edits are
+  excluded, and field-level provenance conservatively distinguishes fully
+  traceable AI writes from mixed, migrated, manual, or unknown changes.
+- A restrained `中文 / English` switch for the viewer shell, persisted locally.
+  Project names, diagrams, modules, relationships, documents, evidence, and
+  user-authored content are never translated or rewritten.
+- A final publication review that lists all structural changes, highlights
+  permission and relationship-endpoint changes, validates criterion target
+  references, and shows the exact bound-document metadata to be frozen.
+- A local-only target-draft document-lock refresh action. It advances the draft
+  revision after an intentional document update but never publishes automatically;
+  the user must inspect the refreshed draft and publish again explicitly.
+
+### Changed
+
+- Publication is the sole human architecture gate. Valid agent patches write to
+  a locked draft without fabricating proposal approval; MCP still exposes no
+  publication, proposal-review, implementation-review, or approval tool.
+- The workbench now focuses on agent runs, formal publication/restoration events,
+  and final implementation reviews. v0.2–v0.5 proposal decisions remain available
+  in a clearly labelled read-only legacy-history section.
+- Exchange protocol `1.4.0` adds explicit acceptance-criterion upsert/delete
+  operations while preserving the exact validation semantics of 1.0–1.3.
+- Analysis schema `2.5.0` records atomic `draft-applied` provenance. Exact replay
+  is write-free; failed provenance persistence rolls state back.
+
+### Fixed
+
+- Agent patches now use strict node/edge semantic-field allowlists, preserve
+  valid explicit groups, validate configured group IDs, and safely support
+  stable-edge endpoint updates without touching layout, routing, or human
+  correction metadata.
+- Protocol 1.4 node updates can explicitly withdraw supported optional fields
+  with `null`, while required fields and target horizons remain protected.
+  Exact no-op patches are rejected atomically; withdrawing the final net change
+  clears the empty draft but keeps the run and provenance record.
+- Target publication rejects bound documents changed after draft review. Content,
+  path, status, authority, and bound-set changes are checked without treating a
+  verification timestamp alone as semantic staleness.
+- Clean checkouts build before the standard test suite, and the complete release
+  test command includes publication-preview and sensitive-boundary coverage.
+
 ## [0.5.1] - 2026-07-15
 
 ### Fixed

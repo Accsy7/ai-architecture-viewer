@@ -99,19 +99,20 @@ function registerTool(server, name, config, handler) {
 }
 
 const server = new McpServer(
-  { name: 'ai-architecture-viewer', version: '0.5.1' },
+  { name: 'ai-architecture-viewer', version: '0.6.0' },
   {
     instructions: [
       'Use this server as an external visual architecture handoff for coding agents.',
       'Call get_project_context before creating a run.',
       'Create a run before submitting evidence-backed artifacts.',
-      'Architecture-change runs lock both the published baseline and any active draft ID/revision so a later human acceptance cannot overwrite newer draft work.',
+      'Use one architecture patch per discovery or change-plan run. For another patch, read the compact draft again and create a new run; this advances the lock without user intervention.',
+      'Architecture-change runs lock both the published baseline and any active draft ID/revision; validated semantic patches apply directly to that locked draft and stale writes are rejected.',
       'Evidence paths must be relative to the configured code workspace root.',
       'Registered project documents are read only by documentId and optional Markdown section; they may support target design but never implementation facts.',
-      'Only a published target is an executable architecture baseline; an accepted draft still awaits human publication.',
+      'Only a locally human-published target is an executable architecture baseline; an agent-written draft always awaits publication.',
       'Implementation runs lock that published target, submit a code-fact snapshot first, and receive server-computed architecture and formal-contract gates.',
       'An implementation report status is only an agent claim; acceptance requires a complete claim, satisfied contract criteria, an eligible architecture gate, and local human review.',
-      'Agents may submit snapshots, proposals, and implementation reports, but cannot review their own result, approve, or publish architecture.',
+      'Agents may write validated changes to drafts and submit implementation reports, but cannot publish architecture or review implementation results.',
     ].join(' '),
   },
 );
@@ -141,12 +142,15 @@ registerTool(server, 'read_project_document', {
 ));
 
 registerTool(server, 'get_current_architecture', {
-  title: 'Get current published architecture',
-  description: 'Read the current published architecture as a compact semantic graph with stable IDs, responsibilities, relationships, and boundaries.',
-  inputSchema: z.object({ diagramId: z.string().optional() }),
+  title: 'Get current architecture lane',
+  description: 'Read a current or target architecture lane as compact published and active-draft semantic graphs. A target draft includes its compact unpublished development contract and stable acceptance-criterion IDs; it is never presented as an approved target.',
+  inputSchema: z.object({
+    diagramId: z.string().optional(),
+    view: z.enum(['current', 'target']).optional().describe('Defaults to current.'),
+  }),
   annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
-}, async ({ diagramId }) => {
-  const context = await viewerRequest(`/api/agent/context${query({ diagram: diagramId, view: 'current' })}`);
+}, async ({ diagramId, view = 'current' }) => {
+  const context = await viewerRequest(`/api/agent/context${query({ diagram: diagramId, view })}`);
   return {
     protocolVersion: context.protocolVersion,
     project: context.project,
@@ -155,14 +159,17 @@ registerTool(server, 'get_current_architecture', {
       title: context.selected.title,
       description: context.selected.description,
     },
+    view,
     published: context.selected.published,
+    developmentContract: context.selected.developmentContract,
+    draft: context.selected.draft,
     draftPresent: Boolean(context.selected.draft),
   };
 });
 
 registerTool(server, 'create_agent_run', {
   title: 'Create agent architecture run',
-  description: 'Create a traceable run and lock its published baseline plus any active draft ID/revision. Implementation runs additionally require and lock the exact executable published target, development contract, and bound-document hashes.',
+  description: 'Create a traceable run and lock its published baseline plus any active draft ID/revision. Use one architecture patch per discovery or change-plan run, then create a new run from the updated compact draft for the next patch. Implementation runs additionally lock the exact executable published target, contract, and document hashes.',
   inputSchema: z.object({
     agentName: z.string().min(1).max(120),
     agentClient: z.string().min(1).max(80).describe('Client identity such as codex or claude-code.'),
@@ -190,14 +197,14 @@ async function submit(runId, artifact, evidenceManifest) {
 
 registerTool(server, 'submit_architecture_snapshot', {
   title: 'Submit architecture snapshot',
-  description: 'Submit a code-fact-backed current architecture snapshot. For implementation runs this must come before the report and include relationship boundary posture. Discussion and design intent cannot prove implementation.',
+  description: 'Submit a code-fact-backed current architecture snapshot. In an architecture-discovery run, the server applies its additive stable-ID semantic diff directly to the exact locked current draft; stale writes are rejected, and this never publishes or records human approval. In an implementation-reconcile run, the snapshot remains reconciliation evidence only, must come before the report, and never writes the current draft. Discussion and design intent cannot prove implementation.',
   inputSchema: submissionSchema,
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
 }, ({ runId, artifact, evidenceManifest }) => submit(runId, artifact, evidenceManifest));
 
 registerTool(server, 'submit_change_proposal', {
-  title: 'Submit architecture change proposal',
-  description: 'Submit a target proposal backed by user confirmation, design documents, code facts, or labeled agent inference. Concept projects do not require a code repository. This does not approve, apply, or publish it.',
+  title: 'Apply architecture changes to a locked draft',
+  description: 'Submit a stable-ID semantic patch backed by user confirmation, design documents, code facts, or labeled agent inference. The server applies it directly to the run-locked draft, records provenance, and rejects stale or no-effect writes. Protocol 1.4 node updates may explicitly clear supported optional fields with null; drill-down diagram/node references clear as a pair. It never publishes or marks the change human-approved.',
   inputSchema: submissionSchema,
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
 }, ({ runId, artifact, evidenceManifest }) => submit(runId, artifact, evidenceManifest));
@@ -231,7 +238,7 @@ registerTool(server, 'get_review_status', {
 
 registerTool(server, 'get_approved_target', {
   title: 'Get published formal target baseline',
-  description: 'Read only the latest human-published target, its execution status, compact semantic graph, frozen acceptance contract, boundary references, and bound-document hashes. Accepted but unpublished drafts are excluded; legacy/unbound targets are explicitly non-executable.',
+  description: 'Read only the latest human-published target, its execution status, compact semantic graph, frozen acceptance contract, boundary references, and bound-document hashes. Every unpublished draft is excluded; legacy/unbound targets are explicitly non-executable.',
   inputSchema: z.object({ diagramId: z.string().optional() }),
   annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
 }, ({ diagramId }) => viewerRequest(`/api/agent/approved-target${query({ diagram: diagramId })}`));

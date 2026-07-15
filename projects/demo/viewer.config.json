@@ -5,6 +5,7 @@
   "viewerName": "AI Architecture Viewer",
   "eyebrow": "PUBLIC MVP · SYNTHETIC DEMO",
   "scopeNote": "A fictional support assistant used to demonstrate evidence-backed architecture proposals. No customer, production, or personal data is included.",
+  "defaultLanguage": "zh",
   "defaultFocusNodeId": "request-intake",
   "views": {
     "current": {
