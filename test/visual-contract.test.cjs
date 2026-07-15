@@ -72,6 +72,13 @@ test('header localization is reactive without entering project data or navigatio
   assert.match(app, /<p>\{localizedHeader\.scopeNote\}<\/p>/);
 });
 
+test('top bar does not repeat formal architecture status', () => {
+  const source = read('src/ViewerApp.jsx');
+  const css = read('styles.css');
+  assert.doesNotMatch(source, /mode-badge/);
+  assert.doesNotMatch(css, /\.mode-badge/);
+});
+
 test('compact draft notice excludes category chips and provenance explanations', () => {
   const source = read('src/components/PendingChangesLayer.jsx');
   const start = source.indexOf('export default function PendingChangesSummary');

@@ -1467,16 +1467,6 @@ function Viewer() {
     }
   }, [loadView, showToast, t, translateError]);
 
-  const modeText = loading || !lane
-    ? t('shell.mode.loading')
-    : readOnlyHistorical
-      ? t('shell.mode.history', { revision: historicalRevision.revision })
-      : view === 'compare'
-        ? t('shell.mode.compare')
-        : lane.draft
-          ? t(view === 'target' ? 'shell.mode.targetDraft' : 'shell.mode.currentDraft', { revision: lane.published.revision })
-          : t(view === 'target' ? 'shell.mode.formalTarget' : 'shell.mode.formalCurrent', { revision: lane.published.revision });
-
   const localizedHeader = useMemo(() => ({
     eyebrow: resolveLocalizedConfigText(
       config.eyebrow,
@@ -1507,9 +1497,6 @@ function Viewer() {
         </div>
         <div className="top-actions">
           <LanguageSwitch />
-          {(!lane?.draft || !draftProjection.totalCount || readOnlyHistorical) && (
-            <span className={`mode-badge ${lane?.draft ? 'is-draft' : ''}`}>{modeText}</span>
-          )}
           {readOnlyHistorical && <button type="button" onClick={returnFromHistorical}>{t('shell.returnToCurrent')}</button>}
         </div>
       </header>

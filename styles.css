@@ -65,14 +65,6 @@ h1, h2 { font-family: Georgia, "Songti SC", serif; font-weight: 500; }
   text-transform: uppercase;
 }
 .top-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; }
-.mode-badge {
-  padding: 7px 11px;
-  border-radius: 999px;
-  color: var(--green);
-  background: var(--green-soft);
-  font-weight: 700;
-}
-.mode-badge.is-draft { color: var(--amber); background: var(--amber-soft); }
 
 main { padding: 16px 32px 32px; }
 .view-switch {
