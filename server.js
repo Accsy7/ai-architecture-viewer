@@ -615,6 +615,8 @@ function analysisResponse(analysis) {
       mode: 'external-agent',
       protocolVersion: AI_CODING_PROTOCOL_VERSION,
       modelProviderRequired: false,
+      implementationHumanReviewRequired: true,
+      agentCanReview: false,
       agentCanApprove: false,
       agentCanPublish: false,
       mcpCommand: 'npm run mcp',
@@ -688,7 +690,9 @@ function createAgentRun(incoming, catalog) {
     approvedTarget: incoming.taskType === 'implementation-reconcile'
       ? formalTargetDescriptor(diagram.id, state.target.published)
       : null,
-    reconciliation: null,
+    agentClaim: null,
+    architectureGate: null,
+    humanReview: null,
   };
 }
 
@@ -1329,7 +1333,7 @@ function buildImplementationReconciliation({ run, targetRevision, snapshot, repo
         evidenceIds: [...new Set([...item.evidenceIds, ...explanationEvidenceIds])],
         explanation: explanation
           ? {
-            status: 'agent-explained',
+            status: 'agent-provided',
             summary: explanation.summary,
             evidenceIds: explanationEvidenceIds,
           }
@@ -1374,7 +1378,7 @@ function buildImplementationReconciliation({ run, targetRevision, snapshot, repo
     counts,
     drift: detailedDrift,
     crossCheck,
-    completionEligible: report.status === 'complete' && status !== 'unresolved-drift',
+    readyForHumanReview: status !== 'unresolved-drift',
   };
 }
 
@@ -1547,7 +1551,7 @@ function submitAgentArtifact(analysis, runId, incoming, { projectRoot, diagram }
     && targetRun.approvedTarget
     && artifact.artifactType === 'implementation-report'
   ) {
-    const reconciliation = buildImplementationReconciliation({
+    const architectureGate = buildImplementationReconciliation({
       run: targetRun,
       targetRevision: state.target.published,
       snapshot: resultingSnapshot,
@@ -1555,59 +1559,53 @@ function submitAgentArtifact(analysis, runId, incoming, { projectRoot, diagram }
       analysis: next,
       computedAt: submittedAt,
     });
-    if (artifact.status === 'complete' && !reconciliation.completionEligible) {
-      throw new ContractError(
-        '实施结果仍有未解释、未报告或未核验偏离，不能标记为完成',
-        'AGENT_IMPLEMENTATION_DRIFT_UNRESOLVED',
-        422,
-        {
-          status: reconciliation.status,
-          counts: reconciliation.counts,
-          crossCheck: reconciliation.crossCheck,
-        },
-      );
-    }
-    targetRun.reconciliation = reconciliation;
+    targetRun.agentClaim = {
+      status: artifact.status,
+      reportArtifactId: artifact.artifactId,
+      claimedAt: submittedAt,
+    };
+    targetRun.architectureGate = architectureGate;
+    targetRun.humanReview = null;
   }
   validateAnalysis(next);
   return { analysis: next, artifact, proposal };
 }
 
-function reconciliationSummary(reconciliation) {
-  if (!reconciliation) return null;
+function architectureGateSummary(gate) {
+  if (!gate) return null;
   return {
-    status: reconciliation.status,
-    targetRevisionId: reconciliation.target.revisionId,
-    snapshotArtifactId: reconciliation.snapshotArtifactId,
-    reportArtifactId: reconciliation.reportArtifactId,
-    computedAt: reconciliation.computedAt,
-    counts: clone(reconciliation.counts),
-    crossCheckMatches: reconciliation.crossCheck.matches,
-    completionEligible: reconciliation.completionEligible,
+    status: gate.status,
+    targetRevisionId: gate.target.revisionId,
+    snapshotArtifactId: gate.snapshotArtifactId,
+    reportArtifactId: gate.reportArtifactId,
+    computedAt: gate.computedAt,
+    counts: clone(gate.counts),
+    crossCheckMatches: gate.crossCheck.matches,
+    readyForHumanReview: gate.readyForHumanReview,
     detailAvailable: true,
   };
 }
 
-function publicAgentRun(run, { includeReconciliationDetails = false } = {}) {
+function publicAgentRun(run, { includeArchitectureGateDetails = false } = {}) {
   return {
     ...clone(run),
-    reconciliation: includeReconciliationDetails
-      ? clone(run.reconciliation)
-      : reconciliationSummary(run.reconciliation),
+    architectureGate: includeArchitectureGateDetails
+      ? clone(run.architectureGate)
+      : architectureGateSummary(run.architectureGate),
   };
 }
 
 function agentRunResponse(
   analysis,
   runId,
-  { activeTargetDraftId = null, includeReconciliationDetails = false } = {},
+  { activeTargetDraftId = null, includeArchitectureGateDetails = false } = {},
 ) {
   const run = analysis.agentRuns.find((item) => item.id === runId);
   if (!run) throw new ContractError('未找到该智能体运行', 'AGENT_RUN_NOT_FOUND', 404);
   return {
     protocolVersion: AI_CODING_PROTOCOL_VERSION,
     analysisRevision: analysis.baseRevision,
-    run: publicAgentRun(run, { includeReconciliationDetails }),
+    run: publicAgentRun(run, { includeArchitectureGateDetails }),
     artifacts: analysis.artifacts.filter((record) => record.runId === run.id).map(publicArtifactRecord),
     proposals: analysis.proposals.filter((proposal) => proposal.origin?.runId === run.id).map((proposal) => ({
       id: proposal.id,
@@ -1626,6 +1624,8 @@ function agentRunResponse(
     })),
     permissions: {
       canSubmit: run.status !== 'reviewed',
+      requiresHumanReview: run.taskType === 'implementation-reconcile' && Boolean(run.agentClaim),
+      agentCanReview: false,
       canApprove: false,
       canPublish: false,
     },
@@ -1637,11 +1637,69 @@ function updateReviewedRun(analysis, proposal, reviewedAt) {
   if (!runId) return;
   const run = analysis.agentRuns.find((item) => item.id === runId);
   if (!run) return;
+  if (run.taskType === 'implementation-reconcile' && !run.humanReview) {
+    run.status = 'submitted';
+    run.updatedAt = reviewedAt;
+    return;
+  }
   const hasPendingProposal = analysis.proposals.some((item) => (
     item.origin?.runId === runId && item.status === 'pending'
   ));
   if (!hasPendingProposal) run.status = 'reviewed';
   run.updatedAt = reviewedAt;
+}
+
+function reviewImplementationRun(analysis, runId, incoming, state) {
+  const run = analysis.agentRuns.find((item) => item.id === runId);
+  if (!run) throw new ContractError('未找到该智能体运行', 'AGENT_RUN_NOT_FOUND', 404);
+  if (run.taskType !== 'implementation-reconcile') {
+    throw new ContractError('只有实施核验运行可以进行实施结果验收', 'IMPLEMENTATION_REVIEW_NOT_APPLICABLE', 422);
+  }
+  if (!run.agentClaim || !run.architectureGate) {
+    throw new ContractError('实施报告和自动架构核对尚未完成', 'IMPLEMENTATION_REVIEW_NOT_READY', 409);
+  }
+  if (run.humanReview) {
+    throw new ContractError('该实施结果已经由用户验收，不能覆盖原结论', 'IMPLEMENTATION_ALREADY_REVIEWED', 409);
+  }
+  if (!['accepted', 'revision-requested', 'rejected'].includes(incoming.decision)) {
+    throw new ContractError('人工验收结论无效', 'ANALYSIS_REQUEST_INVALID', 400);
+  }
+  if (typeof incoming.note !== 'string' || !incoming.note.trim() || incoming.note.trim().length > 2000) {
+    throw new ContractError('人工验收必须填写 1–2000 字备注', 'ANALYSIS_REQUEST_INVALID', 400);
+  }
+  if (incoming.decision === 'accepted') {
+    if (!run.architectureGate.readyForHumanReview) {
+      throw new ContractError(
+        '自动架构核对仍有未解决项，不能接受；请要求修订或拒绝',
+        'IMPLEMENTATION_GATE_NOT_READY',
+        409,
+        { status: run.architectureGate.status, counts: clone(run.architectureGate.counts) },
+      );
+    }
+    const currentTarget = formalTargetDescriptor(run.diagramId, state.target.published);
+    if (!sameFormalTarget(run.approvedTarget, currentTarget)) {
+      throw new ContractError(
+        '该运行锁定的正式目标已经变化，不能作为当前目标的实施结果接受',
+        'AGENT_APPROVED_TARGET_STALE',
+        409,
+        { expected: clone(run.approvedTarget), actual: currentTarget },
+      );
+    }
+  }
+
+  const next = clone(analysis);
+  const targetRun = next.agentRuns.find((item) => item.id === runId);
+  const reviewedAt = new Date().toISOString();
+  targetRun.humanReview = {
+    decision: incoming.decision,
+    reviewer: 'local-user',
+    reviewedAt,
+    note: incoming.note.trim(),
+  };
+  targetRun.status = 'reviewed';
+  targetRun.updatedAt = reviewedAt;
+  validateAnalysis(next);
+  return next;
 }
 
 function sourceGroupForGeneratedNode(graph, proposal, targetId, state) {
@@ -2302,9 +2360,11 @@ function createServer(options = {}) {
             implementationRequiresPublishedTarget: true,
             implementationSnapshotFirst: true,
             serverComputedReconciliation: true,
+            implementationHumanReviewRequired: true,
             evidencePathsAreWorkspaceRelative: true,
             separateWorkspaceConfigured: workspaceRoot !== projectRoot,
             humanReviewRequired: true,
+            agentCanReview: false,
             agentCanApprove: false,
             agentCanPublish: false,
           },
@@ -2330,12 +2390,12 @@ function createServer(options = {}) {
         const diagram = agentDiagram(catalog, run.diagramId);
         const activeTargetDraftId = readState(diagram.statePath).target.draft?.draftId || null;
         const details = requestUrl.searchParams.get('details');
-        if (details && details !== 'reconciliation') {
-          throw new ContractError('details 只支持 reconciliation', 'AGENT_REQUEST_INVALID', 400);
+        if (details && !['architecture-gate', 'reconciliation'].includes(details)) {
+          throw new ContractError('details 只支持 architecture-gate', 'AGENT_REQUEST_INVALID', 400);
         }
         return json(res, 200, agentRunResponse(analysis, run.id, {
           activeTargetDraftId,
-          includeReconciliationDetails: details === 'reconciliation',
+          includeArchitectureGateDetails: Boolean(details),
         }));
       }
 
@@ -2355,7 +2415,13 @@ function createServer(options = {}) {
             artifactId: result.artifact.artifactId,
             artifactType: result.artifact.artifactType,
             proposalId: result.proposal?.id || null,
-            requiresHumanReview: Boolean(result.proposal),
+            requiresHumanReview: Boolean(result.proposal)
+              || result.artifact.artifactType === 'implementation-report',
+            reviewType: result.artifact.artifactType === 'implementation-report'
+              ? 'implementation-result'
+              : result.proposal
+                ? 'architecture-proposal'
+                : null,
           },
         });
       }
@@ -2402,6 +2468,26 @@ function createServer(options = {}) {
           'EMBEDDED_MODEL_REMOVED',
           410,
         );
+      }
+
+      const implementationReviewMatch = /^\/api\/analysis\/runs\/([a-z0-9][a-z0-9._-]{0,79})\/review$/.exec(pathname);
+      if (req.method === 'POST' && implementationReviewMatch) {
+        const incoming = await readJsonBody(req);
+        assertAnalysisRequestShape(incoming, new Set([
+          'schemaVersion', 'baseRevision', 'userConfirmed', 'decision', 'note',
+        ]));
+        if (incoming.userConfirmed !== true) {
+          throw new ContractError('实施结果验收必须由用户明确确认', 'USER_CONFIRMATION_REQUIRED', 403);
+        }
+        const analysis = readAnalysis(analysisFile);
+        assertAnalysisRevision(incoming, analysis);
+        const run = analysis.agentRuns.find((item) => item.id === implementationReviewMatch[1]);
+        if (!run) throw new ContractError('未找到该智能体运行', 'AGENT_RUN_NOT_FOUND', 404);
+        const catalog = readArchitectureCatalog(catalogFile, stateFile, layoutFile);
+        const diagram = agentDiagram(catalog, run.diagramId);
+        const state = readState(diagram.statePath);
+        const next = reviewImplementationRun(analysis, run.id, incoming, state);
+        return json(res, 200, analysisResponse(writeAnalysis(next, analysisFile)));
       }
 
       const proposalActionMatch = /^\/api\/analysis\/proposals\/([a-z0-9][a-z0-9._-]{0,79})\/(accept|reject)$/.exec(pathname);

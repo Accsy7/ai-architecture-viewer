@@ -107,8 +107,9 @@ const server = new McpServer(
       'Create a run before submitting evidence-backed artifacts.',
       'Evidence paths must be relative to the configured code workspace root.',
       'Only a published target is an executable architecture baseline; an accepted draft still awaits human publication.',
-      'Implementation runs lock that published target, submit a code-fact snapshot first, and rely on server-computed reconciliation before completion.',
-      'Agents may submit snapshots, proposals, and implementation reports, but cannot approve or publish architecture.',
+      'Implementation runs lock that published target, submit a code-fact snapshot first, and receive a server-computed architecture gate.',
+      'An implementation report status is only an agent claim; even an aligned architecture gate still requires local human review.',
+      'Agents may submit snapshots, proposals, and implementation reports, but cannot review their own result, approve, or publish architecture.',
     ].join(' '),
   },
 );
@@ -189,22 +190,22 @@ registerTool(server, 'submit_change_proposal', {
 
 registerTool(server, 'submit_implementation_report', {
   title: 'Submit implementation reconciliation report',
-  description: 'Submit a code-fact-backed report that references the run-locked formal target and prior resulting snapshot. The server independently computes and cross-checks drift before allowing complete status.',
+  description: 'Submit a code-fact-backed agent claim that references the run-locked formal target and prior resulting snapshot. The server independently computes the architecture gate; every result still requires local human review.',
   inputSchema: submissionSchema,
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
 }, ({ runId, artifact, evidenceManifest }) => submit(runId, artifact, evidenceManifest));
 
 registerTool(server, 'get_review_status', {
   title: 'Get review status',
-  description: 'Read compact artifact, proposal, and server-computed reconciliation status for one run. Request reconciliation details only when individual drift evidence is needed.',
+  description: 'Read the agent claim, compact server-computed architecture gate, and traceable human-review status for one run. Request gate details only when individual drift evidence is needed.',
   inputSchema: z.object({
     runId: z.string().min(1),
-    includeReconciliationDetails: z.boolean().optional(),
+    includeArchitectureGateDetails: z.boolean().optional(),
   }),
   annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
-}, ({ runId, includeReconciliationDetails }) => viewerRequest(
+}, ({ runId, includeArchitectureGateDetails }) => viewerRequest(
   `/api/agent/runs/${encodeURIComponent(runId)}${query({
-    details: includeReconciliationDetails ? 'reconciliation' : undefined,
+    details: includeArchitectureGateDetails ? 'architecture-gate' : undefined,
   })}`,
 ));
 

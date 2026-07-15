@@ -39,10 +39,22 @@ const PROPOSAL_STATUS = {
   rejected: '已拒绝',
 };
 
-const RECONCILIATION_STATUS = {
-  aligned: { label: '与正式目标一致', tone: 'confirmed' },
-  'explained-drift': { label: '存在已解释偏离', tone: 'draft' },
+const ARCHITECTURE_GATE_STATUS = {
+  aligned: { label: '自动架构核对未发现偏离', tone: 'draft' },
+  'explained-drift': { label: '偏离已有智能体说明', tone: 'draft' },
   'unresolved-drift': { label: '存在未解决偏离', tone: 'rejected' },
+};
+
+const AGENT_CLAIM_STATUS = {
+  complete: { label: '智能体声称完成', tone: 'ai' },
+  partial: { label: '智能体声称部分完成', tone: 'neutral' },
+  blocked: { label: '智能体声称受阻', tone: 'rejected' },
+};
+
+const HUMAN_REVIEW_STATUS = {
+  accepted: { label: '人工已接受', tone: 'confirmed' },
+  'revision-requested': { label: '人工要求修订', tone: 'draft' },
+  rejected: { label: '人工已拒绝', tone: 'rejected' },
 };
 
 const DRIFT_KIND = {
@@ -94,7 +106,11 @@ function artifactSummary(artifact) {
   }
   if (artifact?.artifactType === 'architecture-proposal') return `${summary.changeCount || 0} 项变更`;
   if (artifact?.artifactType === 'implementation-report') {
-    const status = { complete: '完成', partial: '部分完成', blocked: '受阻' }[summary.status] || '待核验';
+    const status = {
+      complete: '智能体声称完成',
+      partial: '智能体声称部分完成',
+      blocked: '智能体声称受阻',
+    }[summary.status] || '等待智能体声明';
     return `${status} · 检查通过 ${summary.passedCheckCount || 0} · 偏离 ${summary.driftCount || 0}`;
   }
   return '已提交';
@@ -138,31 +154,64 @@ function ReconciliationElement({ label, element }) {
   );
 }
 
-function ReconciliationPanel({ run }) {
-  const reconciliation = run.reconciliation;
-  if (!reconciliation) return null;
-  const status = RECONCILIATION_STATUS[reconciliation.status] || {
-    label: reconciliation.status || '等待核验',
+function ArchitectureGatePanel({ run, busy, onReviewImplementation }) {
+  const [reviewNote, setReviewNote] = useState('');
+  const gate = run.architectureGate;
+  if (!gate) return null;
+  const status = ARCHITECTURE_GATE_STATUS[gate.status] || {
+    label: gate.status || '等待自动核验',
     tone: 'neutral',
   };
-  const counts = reconciliation.counts || {};
-  const drift = asList(reconciliation.drift);
-  const unsupported = asList(reconciliation.crossCheck?.unsupported);
-  const hasDetails = Array.isArray(reconciliation.drift);
+  const claim = AGENT_CLAIM_STATUS[run.agentClaim?.status] || {
+    label: run.agentClaim?.status || '智能体未声明结果',
+    tone: 'neutral',
+  };
+  const humanReview = run.humanReview;
+  const reviewStatus = humanReview
+    ? (HUMAN_REVIEW_STATUS[humanReview.decision] || { label: humanReview.decision, tone: 'neutral' })
+    : null;
+  const counts = gate.counts || {};
+  const drift = asList(gate.drift);
+  const unsupported = asList(gate.crossCheck?.unsupported);
+  const hasDetails = Array.isArray(gate.drift);
+  const noteReady = Boolean(reviewNote.trim());
+  const submitReview = (decision) => {
+    if (!noteReady || busy || humanReview) return;
+    onReviewImplementation?.(run, decision, reviewNote.trim());
+  };
   return (
-    <section className={`analysis-reconciliation analysis-reconciliation--${reconciliation.status || 'pending'}`}>
+    <section className={`analysis-reconciliation analysis-reconciliation--${gate.status || 'pending'}`}>
       <div className="analysis-reconciliation__heading">
         <div>
-          <span className="analysis-reconciliation__kicker">SERVER RECONCILIATION</span>
-          <strong>实施偏离核验</strong>
+          <span className="analysis-reconciliation__kicker">ARCHITECTURE GATE · HUMAN REVIEW</span>
+          <strong>实施结果验收</strong>
         </div>
         <span className={`analysis-badge analysis-badge--${status.tone}`}>{status.label}</span>
       </div>
       <p>
-        {reconciliation.status === 'aligned' && '服务端按稳定 ID 核对后，实施快照与运行锁定的正式目标一致。'}
-        {reconciliation.status === 'explained-drift' && '偏离已由实施报告逐项解释并交叉核对；这些解释不会自动修改正式目标。'}
-        {reconciliation.status === 'unresolved-drift' && '仍有未解释、未报告或未核验项，不能显示为完成或一致。'}
+        {gate.status === 'aligned' && '自动架构核对未发现偏离（仍需人工验收）。'}
+        {gate.status === 'explained-drift' && '智能体已为偏离提供逐项说明，服务端只确认条目能够对应；说明是否合理仍待人工判断。'}
+        {gate.status === 'unresolved-drift' && '仍有未说明、未报告或未核验项，尚不能进入人工接受。'}
       </p>
+      <div className="analysis-implementation-state">
+        <div>
+          <span>智能体声明</span>
+          <strong className={`analysis-badge analysis-badge--${claim.tone}`}>{claim.label}</strong>
+          <small>这是智能体自报，不是最终结论。</small>
+        </div>
+        <div>
+          <span>自动架构门禁</span>
+          <strong className={`analysis-badge analysis-badge--${status.tone}`}>{status.label}</strong>
+          <small>{gate.readyForHumanReview ? '可提交给用户验收' : '需先解决自动核对问题'}</small>
+        </div>
+        <div>
+          <span>人工验收</span>
+          {reviewStatus
+            ? <strong className={`analysis-badge analysis-badge--${reviewStatus.tone}`}>{reviewStatus.label}</strong>
+            : <strong className="analysis-badge analysis-badge--neutral">等待用户判断</strong>}
+          <small>{humanReview ? `${humanReview.reviewer} · ${formatTime(humanReview.reviewedAt)}` : '智能体不能代替用户验收'}</small>
+        </div>
+      </div>
       <div className="analysis-reconciliation-counts" aria-label="实施偏离分类统计">
         {Object.entries(DRIFT_KIND).map(([kind, meta]) => (
           <span key={kind}><b>{counts[kind] || 0}</b>{meta.label}</span>
@@ -194,7 +243,7 @@ function ReconciliationPanel({ run }) {
                   <ReconciliationElement label="实施快照" element={item.actual} />
                 </div>
                 <div className={`analysis-drift-explanation is-${item.explanation?.status || 'unexplained'}`}>
-                  <strong>{item.explanation?.status === 'agent-explained' ? '智能体解释已核对' : '尚未解释'}</strong>
+                  <strong>{item.explanation?.status === 'agent-provided' ? '智能体已提供解释，待人工判断' : '智能体尚未说明'}</strong>
                   <p>{item.explanation?.summary || '实施报告没有覆盖这项服务端计算出的偏离。'}</p>
                   {asList(item.explanation?.evidenceIds).length > 0 && (
                     <code>{item.explanation.evidenceIds.join(' · ')}</code>
@@ -212,11 +261,48 @@ function ReconciliationPanel({ run }) {
           {unsupported.map((item) => <p key={item.id}>{item.kind} · {item.targetId}：{item.summary}</p>)}
         </div>
       )}
+      {humanReview ? (
+        <div className={`analysis-human-review is-${humanReview.decision}`}>
+          <div>
+            <strong>{reviewStatus.label}</strong>
+            <span>{humanReview.reviewer} · {formatTime(humanReview.reviewedAt)}</span>
+          </div>
+          <p>{humanReview.note}</p>
+          {humanReview.decision === 'accepted' && gate.status === 'explained-drift' && (
+            <small>本次接受只表示用户知情接受这些实施偏离，不会修改正式目标。</small>
+          )}
+        </div>
+      ) : (
+        <div className="analysis-human-review-controls">
+          <label>
+            <span>人工验收备注（必填）</span>
+            <textarea
+              rows="3"
+              value={reviewNote}
+              disabled={busy}
+              placeholder="记录为什么接受、拒绝或要求修订；该备注会与验收时间和结论一起保存。"
+              onChange={(event) => setReviewNote(event.target.value)}
+            />
+          </label>
+          <div>
+            <button
+              className="primary"
+              type="button"
+              disabled={busy || !noteReady || !gate.readyForHumanReview}
+              title={gate.readyForHumanReview ? '' : '自动架构门禁尚未达到可人工接受状态'}
+              onClick={() => submitReview('accepted')}
+            >人工接受</button>
+            <button className="quiet" type="button" disabled={busy || !noteReady} onClick={() => submitReview('revision-requested')}>要求修订</button>
+            <button className="danger" type="button" disabled={busy || !noteReady} onClick={() => submitReview('rejected')}>拒绝结果</button>
+          </div>
+          <small>接受实施结果不会修改正式目标；目标变更仍须经过独立提案、接受草案与人工发布。</small>
+        </div>
+      )}
     </section>
   );
 }
 
-function RunList({ runs, integration, busy, onRefresh, onCopyConnection }) {
+function RunList({ runs, integration, busy, onRefresh, onCopyConnection, onReviewImplementation }) {
   return (
     <>
       <div className="analysis-section-heading">
@@ -281,7 +367,7 @@ function RunList({ runs, integration, busy, onRefresh, onCopyConnection }) {
                   ))}
                 </div>
               )}
-              <ReconciliationPanel run={run} />
+              <ArchitectureGatePanel run={run} busy={busy} onReviewImplementation={onReviewImplementation} />
               <small className="analysis-run-time">更新于 {formatTime(run.updatedAt || run.createdAt)}</small>
             </article>
           );
@@ -358,17 +444,21 @@ function ReviewList({ reviews, onOpenProposal }) {
       <div className="analysis-section-heading">
         <div>
           <h3>人工审阅记录</h3>
-          <p>保留接受、拒绝和人工修订的判断，为后续发布提供可追溯依据。</p>
+          <p>保留架构提案与实施结果的接受、拒绝和要求修订记录，供后续追溯。</p>
         </div>
       </div>
 
-      {!reviews.length && <EmptyState>尚无审阅记录。完成第一项提案审阅后，记录会显示在这里。</EmptyState>}
+      {!reviews.length && <EmptyState>尚无审阅记录。完成提案审阅或实施结果验收后，记录会显示在这里。</EmptyState>}
 
       <div className="analysis-card-list">
         {reviews.map((review, index) => {
+          const isImplementation = review.kind === 'implementation';
           const acceptedCount = review.acceptedCount ?? review.accepted ?? 0;
           const rejectedCount = review.rejectedCount ?? review.rejected ?? 0;
           const status = review.status || (acceptedCount > 0 ? 'approved' : 'rejected');
+          const implementationStatus = isImplementation
+            ? (HUMAN_REVIEW_STATUS[review.decision] || { label: review.decision, tone: 'neutral' })
+            : null;
           return (
             <article className="analysis-review-card" key={review.id || review.proposalId || `review-${index}`}>
               <div className="analysis-card-heading">
@@ -376,14 +466,16 @@ function ReviewList({ reviews, onOpenProposal }) {
                   <strong>{review.title || review.proposalTitle || '架构提案审阅'}</strong>
                   <small>{review.reviewedAt ? formatTime(review.reviewedAt) : '审阅时间未记录'}</small>
                 </div>
-                <span className="analysis-badge analysis-badge--confirmed">人工确认</span>
+                <span className={`analysis-badge analysis-badge--${implementationStatus?.tone || 'confirmed'}`}>
+                  {implementationStatus?.label || '人工确认'}
+                </span>
               </div>
               {review.summary && <p>{review.summary}</p>}
               <div className="analysis-meta-row">
-                <span>接受 {acceptedCount}</span>
-                <span>拒绝 {rejectedCount}</span>
+                {isImplementation ? <span>实施结果验收</span> : <span>接受 {acceptedCount}</span>}
+                {!isImplementation && <span>拒绝 {rejectedCount}</span>}
                 {review.reviewer && <span>{review.reviewer}</span>}
-                <StatusBadge status={status} />
+                {!isImplementation && <StatusBadge status={status} />}
               </div>
               {onOpenProposal && review.proposal && (
                 <footer className="analysis-card-actions">
@@ -417,6 +509,7 @@ export default function AnalysisWorkbench({
   onRefresh,
   onCopyConnection,
   onOpenProposal,
+  onReviewImplementation,
   onCopySkillPrompt,
 }) {
   const [internalTab, setInternalTab] = useState(defaultTab);
@@ -470,6 +563,7 @@ export default function AnalysisWorkbench({
               busy={busy}
               onRefresh={onRefresh}
               onCopyConnection={onCopyConnection}
+              onReviewImplementation={onReviewImplementation}
             />
           )}
           {selectedTab === 'proposals' && (

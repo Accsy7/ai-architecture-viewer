@@ -2,7 +2,7 @@
   "schemaVersion": "1.2.0",
   "protocolVersion": "1.2.0",
   "name": "AI Architecture Viewer Coding Exchange",
-  "description": "A vendor-neutral artifact contract for handing architecture context between users, coding agents, and the viewer.",
+  "description": "A vendor-neutral artifact contract for handing architecture context and agent claims to a viewer where final implementation acceptance remains human-controlled.",
   "schema": "ai-coding-exchange.schema.json",
   "artifacts": [
     { "type": "task-request", "fileName": "task-request.json", "producedBy": "architecture-change-plan" },

@@ -27,6 +27,7 @@ import {
   putDraft,
   putViewerLayout,
   rejectAnalysisProposal,
+  reviewImplementationRun,
 } from './api.js';
 import {
   canonicalGraphToFlow,
@@ -89,7 +90,7 @@ const EMPTY_REGISTRY = {
 };
 
 const EMPTY_ANALYSIS = {
-  schemaVersion: '2.2.0',
+  schemaVersion: '2.3.0',
   baseRevision: 0,
   lastUpdated: null,
   sources: [],
@@ -862,7 +863,8 @@ function Viewer() {
       '文件依据路径必须相对于查看器配置的工作区根目录。',
       '每条依据标明 user-confirmed、design-document、code-fact 或 agent-inference；当前架构只能引用 code-fact。',
       '根据任务提交 architecture snapshot、change proposal 或 implementation report，并附带 evidence manifest。',
-      '不要接受提案或发布架构；这两步必须由用户在查看器中完成。',
+      '实施报告中的 complete 只是智能体声明；自动架构门禁通过后仍需用户在查看器中验收。',
+      '不要自审实施结果、接受提案或发布架构；这些操作必须由用户在查看器中完成。',
     ].join('\n');
     try {
       if (!navigator.clipboard?.writeText) throw new Error('Clipboard unavailable');
@@ -908,6 +910,30 @@ function Viewer() {
     } catch (error) {
       showToast(error.message);
       throw error;
+    } finally {
+      setAnalysisActionBusy(false);
+    }
+  }, [replaceAnalysis, showToast]);
+
+  const reviewImplementation = useCallback(async (run, decision, note) => {
+    if (!run?.id) return;
+    setAnalysisActionBusy(true);
+    try {
+      const next = await reviewImplementationRun(
+        run.id,
+        analysisRef.current.baseRevision,
+        decision,
+        note,
+      );
+      replaceAnalysis(next);
+      const message = {
+        accepted: '实施结果已由你接受；正式目标没有改变',
+        'revision-requested': '已记录要求修订；正式目标没有改变',
+        rejected: '实施结果已拒绝；正式目标没有改变',
+      }[decision];
+      showToast(message || '人工验收结论已记录');
+    } catch (error) {
+      showToast(error.message);
     } finally {
       setAnalysisActionBusy(false);
     }
@@ -1049,7 +1075,7 @@ function Viewer() {
   ));
   const pendingAnalysisCount = activeAnalysisProposals.filter((proposal) => proposal.status === 'pending').length;
   const reviewProposal = activeAnalysisProposals.find((proposal) => proposal.id === reviewProposalId) || null;
-  const analysisReviews = activeAnalysisProposals
+  const proposalReviews = activeAnalysisProposals
     .filter((proposal) => proposal.status !== 'pending')
     .map((proposal) => ({
       id: proposal.id,
@@ -1061,6 +1087,19 @@ function Viewer() {
       rejectedCount: proposal.status === 'rejected' ? proposal.changes.length : 0,
       proposal,
     }));
+  const implementationReviews = activeAgentRuns
+    .filter((run) => run.humanReview)
+    .map((run) => ({
+      id: `implementation-${run.id}`,
+      kind: 'implementation',
+      title: `实施结果验收 · ${run.agentName || run.id}`,
+      summary: run.humanReview.note,
+      decision: run.humanReview.decision,
+      reviewedAt: run.humanReview.reviewedAt,
+      reviewer: run.humanReview.reviewer,
+    }));
+  const analysisReviews = [...proposalReviews, ...implementationReviews]
+    .sort((left, right) => Date.parse(right.reviewedAt || 0) - Date.parse(left.reviewedAt || 0));
 
   const displayNodes = useMemo(() => {
     const relatedNodeIds = new Set();
@@ -1636,6 +1675,7 @@ function Viewer() {
         onRefresh={() => refreshAnalysis()}
         onCopyConnection={copyAgentConnection}
         onOpenProposal={openProposalReview}
+        onReviewImplementation={reviewImplementation}
         onCopySkillPrompt={copySkillPrompt}
       />
       <ProposalReviewDialog

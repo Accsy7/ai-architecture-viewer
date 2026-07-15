@@ -16,7 +16,7 @@ export default function SkillCatalog({ skills = [], onCopyPrompt }) {
       </div>
 
       <p className="analysis-integration-note">
-        Skill 优先通过 MCP 把候选架构与实施报告交回工作台；它不会自动接受提案或发布正式版本。
+        Skill 优先通过 MCP 把候选架构与实施声明交回工作台；它不会替用户验收结果、接受提案或发布正式版本。
       </p>
 
       {!skills.length && <p className="analysis-empty">暂时没有可用的协作 Skill。</p>}

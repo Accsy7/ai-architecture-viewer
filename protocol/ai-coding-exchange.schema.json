@@ -303,7 +303,10 @@
         "requestId": { "$ref": "#/$defs/stableId" },
         "approvedProposalId": { "$ref": "#/$defs/stableId" },
         "approvedTarget": { "$ref": "#/$defs/approvedTarget" },
-        "status": { "enum": ["complete", "partial", "blocked"] },
+        "status": {
+          "enum": ["complete", "partial", "blocked"],
+          "description": "The coding agent's implementation claim only. It is not a human-review decision or final project status."
+        },
         "resultingRevision": { "$ref": "#/$defs/revision" },
         "changedFiles": { "type": "array", "items": { "$ref": "#/$defs/relativePath" } },
         "tests": { "type": "array", "items": { "$ref": "#/$defs/testResult" } },

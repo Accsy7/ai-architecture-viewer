@@ -27,8 +27,10 @@ All bundled screens and data are fictional. No customer, production, or personal
 - Converts agent architecture snapshots into semantic diffs. Existing nodes omitted from a snapshot are never removed automatically.
 - Requires an implementation run to submit a complete `code-fact`-backed resulting snapshot before a report that references both that snapshot and the formal-target lock.
 - Computes `missing / extra / changed / unverified` drift on the server by stable ID, including responsibilities, authorization boundaries, relationship endpoints and types, and controlled boundary posture instead of trusting agent self-report alone.
-- Cross-checks every server result against the implementation report. Unexplained, unreported, or unverified drift blocks “complete/aligned”; explained drift never rewrites the target automatically.
-- Returns a low-context summary from `get_review_status` by default and loads per-item target, actual, evidence, and explanation detail only when requested.
+- Separates the agent claim, automatic architecture gate, and human review into three independent states. An agent claiming `complete` does not complete the project, and a passing gate only makes the result ready for human review.
+- Cross-checks every server result against the implementation report. Unexplained, unreported, or unverified drift blocks human acceptance, while an agent-provided explanation is always labeled as awaiting human judgment.
+- Requires every implementation report to be accepted, rejected, or sent back for revision in the local UI. The reviewer, time, decision, and note are recorded without rewriting the formal target.
+- Returns a low-context agent claim, architecture-gate summary, and human-review state from `get_review_status` by default, loading per-item target, actual, evidence, and explanation detail only when requested.
 - Places architecture proposals in a human inbox with per-change evidence and submitter provenance.
 - Reserves acceptance and rejection for the user. Acceptance writes only a draft; publication requires a second explicit human action.
 - Keeps current architecture, target architecture, diffs, drafts, and immutable revision history.
@@ -52,13 +54,14 @@ flowchart LR
     A --> R
     S -->|Implementation| X["Server computes drift by stable ID"]
     G --> X
-    X --> I["Submit report and cross-check claims"]
-    I --> V
+    X --> I["Submit agent claim and cross-check it"]
+    I --> J{"Human reviews implementation result"}
+    J -->|Accept / request revision / reject| V
 ```
 
 The capability boundary is explicit: the MCP server exposes no `approve` or `publish` tool. Agents investigate, reason, and submit; people decide and publish.
 
-“Explained drift” means the report accounts for a difference; it does not mean the architecture target changed. Making the code the new target still requires a target proposal, draft acceptance, and explicit human publication.
+“Explained drift” only means the agent's explanation maps to a server-computed drift item. It does not prove the explanation is reasonable, record user acceptance, or change the architecture target. Even when the automatic gate finds no architecture drift, the user must still validate the page and product experience. Making the code the new target still requires a target proposal, draft acceptance, and explicit human publication.
 
 | Basis type | Meaning | Proves current implementation? |
 | --- | --- | --- |
@@ -137,8 +140,8 @@ The client asks you to trust a new local MCP server on first use. See the [offic
 | `create_agent_run` | Create a traceable run; implementation runs lock the formal target revision and semantic hash | No |
 | `submit_architecture_snapshot` | Submit current-state understanding and evidence | No; creates candidate diffs only |
 | `submit_change_proposal` | Submit a target architecture change | No; enters the inbox only |
-| `submit_implementation_report` | Submit implementation results, checks, and drift | No |
-| `get_review_status` | Read compact review/reconciliation status and request per-drift details only when needed | No |
+| `submit_implementation_report` | Submit the agent's implementation claim, checks, and drift | No; it cannot replace human review |
+| `get_review_status` | Read the agent claim, architecture-gate summary, and human-review state; request per-drift details only when needed | No |
 | `get_approved_target` | Read the latest user-published formal target baseline as a compact semantic graph | No |
 
 Accepting a proposal only applies its changes to the target draft; it does not authorize an agent to implement that draft. `get_review_status` marks this state as `awaiting-publication`. `get_approved_target` switches to the new version only after the user explicitly publishes it, and never returns an unpublished draft as an executable target graph.
@@ -173,7 +176,7 @@ npm run protocol:validate -- ai-coding/path/to/artifact.json
 
 - `architecture-discovery`: inspect a user-authorized repository scope and submit a current architecture snapshot with evidence.
 - `architecture-change-plan`: form options, target changes, and acceptance criteria from confirmed discussion, design documents, or code facts; concept projects require no code repository.
-- `implementation-reconcile`: compare actual code with the run-locked published formal target, submit the resulting snapshot first, then submit checks, completion status, and all drift.
+- `implementation-reconcile`: compare actual code with the run-locked published formal target, submit the resulting snapshot first, then submit checks, the agent's completion claim, and all drift; the user still decides the final outcome.
 
 Skills prefer MCP and fall back to JSON files plus the CLI. They cannot accept their own proposals, alter published architecture, or approve implementation for the user.
 
@@ -187,7 +190,7 @@ The viewer, its project data package, and the inspected code repository can all 
 - `state.json` and `diagrams/`: semantic architecture, drafts, and revision history.
 - `viewer-layout.json`: presentation-only local layout.
 - `document-registry.json` and `documents/`: citable project material.
-- `analysis.json`: agent runs, exchange artifacts, evidence, and proposal reviews.
+- `analysis.json`: agent runs, exchange artifacts, evidence, automatic architecture gates, and human-review state.
 
 Load a package from outside this repository and bind evidence verification to the actual code workspace:
 
@@ -212,7 +215,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development conventions, [SECURITY.md
 
 - Default examples and documents must be fictional or explicitly authorized for public release.
 - Never commit credentials, access tokens, customer material, internal paths, or architecture data that has not been de-identified.
-- Agents may submit structured candidates only. Acceptance and publication require human actions.
+- Agents may submit structured candidates and implementation claims only. Implementation review, proposal acceptance, and architecture publication require human actions.
 - v0.4.0 binds to `127.0.0.1` only. Mutation APIs do not yet provide authentication, CSRF protection, or multi-user authorization; do not proxy the service to a LAN or the public internet.
 - Source code uses the [PolyForm Noncommercial License 1.0.0](LICENSE). It is source-available, not OSI open source. Commercial use requires separate written authorization; see [COMMERCIAL_LICENSE.en.md](COMMERCIAL_LICENSE.en.md).
 - Derivative works are allowed, but public modified versions must retain [NOTICE](NOTICE) attribution and follow [TRADEMARKS.en.md](TRADEMARKS.en.md): use a different name and logo and do not imply official status or endorsement.

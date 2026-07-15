@@ -10,7 +10,7 @@ const {
 } = require('./state-contract.cjs');
 const { validateExchangeArtifact } = require('./ai-coding-exchange-contract.cjs');
 
-const ANALYSIS_SCHEMA_VERSION = '2.2.0';
+const ANALYSIS_SCHEMA_VERSION = '2.3.0';
 const MAX_SOURCE_COUNT = 500;
 const MAX_EVIDENCE_COUNT = 5000;
 const MAX_PROPOSAL_COUNT = 500;
@@ -57,7 +57,9 @@ const CHANGE_TARGET_TYPES = new Set(['node', 'edge']);
 const RECONCILIATION_STATUSES = new Set(['aligned', 'explained-drift', 'unresolved-drift']);
 const RECONCILIATION_DRIFT_KINDS = new Set(['missing', 'extra', 'changed', 'unverified']);
 const RECONCILIATION_SOURCES = new Set(['server-computed', 'agent-declared', 'evidence-check']);
-const RECONCILIATION_EXPLANATION_STATUSES = new Set(['unexplained', 'agent-explained']);
+const RECONCILIATION_EXPLANATION_STATUSES = new Set(['unexplained', 'agent-provided']);
+const AGENT_CLAIM_STATUSES = new Set(['complete', 'partial', 'blocked']);
+const HUMAN_REVIEW_DECISIONS = new Set(['accepted', 'revision-requested', 'rejected']);
 const TARGET_HORIZONS = new Set(['近期', '后续', '远期']);
 
 const NODE_SEMANTIC_FIELDS = new Set([
@@ -467,6 +469,27 @@ function sameApprovedTarget(left, right) {
     .every((field) => left[field] === right[field]);
 }
 
+function validateAgentClaim(claim, claimPath = 'agentRun.agentClaim') {
+  if (claim === null) return claim;
+  assertObject(claim, claimPath);
+  assertKeys(claim, new Set(['status', 'reportArtifactId', 'claimedAt']), claimPath);
+  if (!AGENT_CLAIM_STATUSES.has(claim.status)) fail(`${claimPath}.status 不是支持的智能体声明状态`);
+  assertStableId(claim.reportArtifactId, `${claimPath}.reportArtifactId`);
+  assertTimestamp(claim.claimedAt, `${claimPath}.claimedAt`);
+  return claim;
+}
+
+function validateHumanReview(review, reviewPath = 'agentRun.humanReview') {
+  if (review === null) return review;
+  assertObject(review, reviewPath);
+  assertKeys(review, new Set(['decision', 'reviewer', 'reviewedAt', 'note']), reviewPath);
+  if (!HUMAN_REVIEW_DECISIONS.has(review.decision)) fail(`${reviewPath}.decision 不是支持的人工验收结论`);
+  assertText(review.reviewer, `${reviewPath}.reviewer`, { max: 120 });
+  assertTimestamp(review.reviewedAt, `${reviewPath}.reviewedAt`);
+  assertText(review.note, `${reviewPath}.note`, { max: 2000 });
+  return review;
+}
+
 function validateReconciliationEvidenceIds(value, valuePath) {
   assertArray(value, valuePath, { max: 64 });
   const ids = new Set();
@@ -515,8 +538,8 @@ function validateReconciliationExplanation(explanation, explanationPath) {
     fail(`${explanationPath}.status 不是支持的解释状态`);
   }
   if (explanation.summary !== null) assertText(explanation.summary, `${explanationPath}.summary`, { max: 1000 });
-  if (explanation.status === 'agent-explained' && explanation.summary === null) {
-    fail(`${explanationPath} 的智能体解释必须包含摘要`);
+  if (explanation.status === 'agent-provided' && explanation.summary === null) {
+    fail(`${explanationPath} 的智能体说明必须包含摘要`);
   }
   if (explanation.status === 'unexplained' && explanation.summary !== null) {
     fail(`${explanationPath} 的未解释状态不得伪造解释摘要`);
@@ -578,10 +601,10 @@ function validateReconciliationDrift(item, itemPath) {
   return item;
 }
 
-function validateReconciliation(reconciliation, reconciliationPath = 'agentRun.reconciliation') {
-  if (reconciliation === null) return reconciliation;
-  assertObject(reconciliation, reconciliationPath);
-  assertKeys(reconciliation, new Set([
+function validateArchitectureGate(gate, gatePath = 'agentRun.architectureGate') {
+  if (gate === null) return gate;
+  assertObject(gate, gatePath);
+  assertKeys(gate, new Set([
     'status',
     'target',
     'snapshotArtifactId',
@@ -590,40 +613,40 @@ function validateReconciliation(reconciliation, reconciliationPath = 'agentRun.r
     'counts',
     'drift',
     'crossCheck',
-    'completionEligible',
-  ]), reconciliationPath);
-  if (!RECONCILIATION_STATUSES.has(reconciliation.status)) {
-    fail(`${reconciliationPath}.status 不是支持的核验状态`);
+    'readyForHumanReview',
+  ]), gatePath);
+  if (!RECONCILIATION_STATUSES.has(gate.status)) {
+    fail(`${gatePath}.status 不是支持的架构门禁状态`);
   }
-  validateApprovedTarget(reconciliation.target, `${reconciliationPath}.target`);
-  if (reconciliation.target === null) fail(`${reconciliationPath}.target 必须锁定正式目标`);
-  assertStableId(reconciliation.snapshotArtifactId, `${reconciliationPath}.snapshotArtifactId`);
-  assertStableId(reconciliation.reportArtifactId, `${reconciliationPath}.reportArtifactId`);
-  assertTimestamp(reconciliation.computedAt, `${reconciliationPath}.computedAt`);
-  assertObject(reconciliation.counts, `${reconciliationPath}.counts`);
+  validateApprovedTarget(gate.target, `${gatePath}.target`);
+  if (gate.target === null) fail(`${gatePath}.target 必须锁定正式目标`);
+  assertStableId(gate.snapshotArtifactId, `${gatePath}.snapshotArtifactId`);
+  assertStableId(gate.reportArtifactId, `${gatePath}.reportArtifactId`);
+  assertTimestamp(gate.computedAt, `${gatePath}.computedAt`);
+  assertObject(gate.counts, `${gatePath}.counts`);
   const countKeys = ['missing', 'extra', 'changed', 'unverified', 'unexplained', 'unreported', 'unsupported'];
-  assertKeys(reconciliation.counts, new Set(countKeys), `${reconciliationPath}.counts`);
-  countKeys.forEach((key) => assertBaseRevision(reconciliation.counts[key], `${reconciliationPath}.counts.${key}`));
+  assertKeys(gate.counts, new Set(countKeys), `${gatePath}.counts`);
+  countKeys.forEach((key) => assertBaseRevision(gate.counts[key], `${gatePath}.counts.${key}`));
 
-  assertArray(reconciliation.drift, `${reconciliationPath}.drift`, { max: 2000 });
+  assertArray(gate.drift, `${gatePath}.drift`, { max: 2000 });
   const driftIds = new Set();
-  reconciliation.drift.forEach((item, index) => {
-    validateReconciliationDrift(item, `${reconciliationPath}.drift[${index}]`);
-    if (driftIds.has(item.id)) fail(`${reconciliationPath}.drift 不得包含重复偏离 ID ${item.id}`);
+  gate.drift.forEach((item, index) => {
+    validateReconciliationDrift(item, `${gatePath}.drift[${index}]`);
+    if (driftIds.has(item.id)) fail(`${gatePath}.drift 不得包含重复偏离 ID ${item.id}`);
     driftIds.add(item.id);
   });
 
-  assertObject(reconciliation.crossCheck, `${reconciliationPath}.crossCheck`);
-  assertKeys(reconciliation.crossCheck, new Set(['matches', 'unreported', 'unsupported']), `${reconciliationPath}.crossCheck`);
-  if (typeof reconciliation.crossCheck.matches !== 'boolean') fail(`${reconciliationPath}.crossCheck.matches 必须是布尔值`);
-  assertArray(reconciliation.crossCheck.unreported, `${reconciliationPath}.crossCheck.unreported`, { max: 2000 });
-  reconciliation.crossCheck.unreported.forEach((id, index) => {
-    assertStableId(id, `${reconciliationPath}.crossCheck.unreported[${index}]`);
-    if (!driftIds.has(id)) fail(`${reconciliationPath}.crossCheck.unreported 引用了未知偏离 ${id}`);
+  assertObject(gate.crossCheck, `${gatePath}.crossCheck`);
+  assertKeys(gate.crossCheck, new Set(['matches', 'unreported', 'unsupported']), `${gatePath}.crossCheck`);
+  if (typeof gate.crossCheck.matches !== 'boolean') fail(`${gatePath}.crossCheck.matches 必须是布尔值`);
+  assertArray(gate.crossCheck.unreported, `${gatePath}.crossCheck.unreported`, { max: 2000 });
+  gate.crossCheck.unreported.forEach((id, index) => {
+    assertStableId(id, `${gatePath}.crossCheck.unreported[${index}]`);
+    if (!driftIds.has(id)) fail(`${gatePath}.crossCheck.unreported 引用了未知偏离 ${id}`);
   });
-  assertArray(reconciliation.crossCheck.unsupported, `${reconciliationPath}.crossCheck.unsupported`, { max: 100 });
-  reconciliation.crossCheck.unsupported.forEach((item, index) => {
-    const itemPath = `${reconciliationPath}.crossCheck.unsupported[${index}]`;
+  assertArray(gate.crossCheck.unsupported, `${gatePath}.crossCheck.unsupported`, { max: 100 });
+  gate.crossCheck.unsupported.forEach((item, index) => {
+    const itemPath = `${gatePath}.crossCheck.unsupported[${index}]`;
     assertObject(item, itemPath);
     assertKeys(item, new Set(['id', 'kind', 'targetId', 'summary']), itemPath);
     assertStableId(item.id, `${itemPath}.id`);
@@ -633,22 +656,22 @@ function validateReconciliation(reconciliation, reconciliationPath = 'agentRun.r
   });
 
   const expectedCounts = {
-    missing: reconciliation.drift.filter((item) => item.kind === 'missing').length,
-    extra: reconciliation.drift.filter((item) => item.kind === 'extra').length,
-    changed: reconciliation.drift.filter((item) => item.kind === 'changed').length,
-    unverified: reconciliation.drift.filter((item) => item.kind === 'unverified').length,
-    unexplained: reconciliation.drift.filter((item) => item.explanation.status === 'unexplained').length,
-    unreported: reconciliation.crossCheck.unreported.length,
-    unsupported: reconciliation.crossCheck.unsupported.length,
+    missing: gate.drift.filter((item) => item.kind === 'missing').length,
+    extra: gate.drift.filter((item) => item.kind === 'extra').length,
+    changed: gate.drift.filter((item) => item.kind === 'changed').length,
+    unverified: gate.drift.filter((item) => item.kind === 'unverified').length,
+    unexplained: gate.drift.filter((item) => item.explanation.status === 'unexplained').length,
+    unreported: gate.crossCheck.unreported.length,
+    unsupported: gate.crossCheck.unsupported.length,
   };
   countKeys.forEach((key) => {
-    if (reconciliation.counts[key] !== expectedCounts[key]) {
-      fail(`${reconciliationPath}.counts.${key} 与偏离明细不一致`);
+    if (gate.counts[key] !== expectedCounts[key]) {
+      fail(`${gatePath}.counts.${key} 与偏离明细不一致`);
     }
   });
   const crossCheckMatches = !expectedCounts.unreported && !expectedCounts.unsupported;
-  if (reconciliation.crossCheck.matches !== crossCheckMatches) {
-    fail(`${reconciliationPath}.crossCheck.matches 与交叉核验明细不一致`);
+  if (gate.crossCheck.matches !== crossCheckMatches) {
+    fail(`${gatePath}.crossCheck.matches 与交叉核验明细不一致`);
   }
   const unresolved = Boolean(
     expectedCounts.unverified
@@ -656,23 +679,25 @@ function validateReconciliation(reconciliation, reconciliationPath = 'agentRun.r
     || expectedCounts.unreported
     || expectedCounts.unsupported
   );
-  if (reconciliation.status === 'aligned' && reconciliation.drift.length) {
-    fail(`${reconciliationPath} 的 aligned 状态不得包含偏离`);
+  if (gate.status === 'aligned' && gate.drift.length) {
+    fail(`${gatePath} 的 aligned 状态不得包含偏离`);
   }
-  if (reconciliation.status === 'explained-drift' && (!reconciliation.drift.length || unresolved)) {
-    fail(`${reconciliationPath} 的 explained-drift 状态只能包含已解释且已交叉核对的偏离`);
+  if (gate.status === 'explained-drift' && (!gate.drift.length || unresolved)) {
+    fail(`${gatePath} 的 explained-drift 状态只能包含智能体已说明且已交叉对应的偏离`);
   }
-  if (reconciliation.status === 'unresolved-drift' && !unresolved) {
-    fail(`${reconciliationPath} 的 unresolved-drift 状态必须包含未解决项`);
+  if (gate.status === 'unresolved-drift' && !unresolved) {
+    fail(`${gatePath} 的 unresolved-drift 状态必须包含未解决项`);
   }
-  if (typeof reconciliation.completionEligible !== 'boolean') {
-    fail(`${reconciliationPath}.completionEligible 必须是布尔值`);
+  if (typeof gate.readyForHumanReview !== 'boolean') {
+    fail(`${gatePath}.readyForHumanReview 必须是布尔值`);
   }
-  if (reconciliation.completionEligible && reconciliation.status === 'unresolved-drift') {
-    fail(`${reconciliationPath} 存在未解决偏离时不得标记可完成`);
+  if (gate.readyForHumanReview !== (gate.status !== 'unresolved-drift')) {
+    fail(`${gatePath}.readyForHumanReview 必须与自动架构门禁状态一致`);
   }
-  return reconciliation;
+  return gate;
 }
+
+const validateReconciliation = validateArchitectureGate;
 
 function validateAgentRun(run, runPath = 'agentRun') {
   assertObject(run, runPath);
@@ -692,7 +717,9 @@ function validateAgentRun(run, runPath = 'agentRun') {
     'summary',
     'artifactIds',
     'approvedTarget',
-    'reconciliation',
+    'agentClaim',
+    'architectureGate',
+    'humanReview',
   ]), runPath);
   assertStableId(run.id, `${runPath}.id`);
   assertText(run.agentName, `${runPath}.agentName`, { max: 120 });
@@ -715,15 +742,38 @@ function validateAgentRun(run, runPath = 'agentRun') {
     artifactIds.add(id);
   });
   validateApprovedTarget(run.approvedTarget, `${runPath}.approvedTarget`);
-  validateReconciliation(run.reconciliation, `${runPath}.reconciliation`);
-  if (run.taskType !== 'implementation-reconcile' && (run.approvedTarget !== null || run.reconciliation !== null)) {
-    fail(`${runPath} 只有 implementation-reconcile 运行可以包含正式目标锁和实施核验`);
+  validateAgentClaim(run.agentClaim, `${runPath}.agentClaim`);
+  validateArchitectureGate(run.architectureGate, `${runPath}.architectureGate`);
+  validateHumanReview(run.humanReview, `${runPath}.humanReview`);
+  if (
+    run.taskType !== 'implementation-reconcile'
+    && (run.approvedTarget !== null || run.agentClaim !== null || run.architectureGate !== null || run.humanReview !== null)
+  ) {
+    fail(`${runPath} 只有 implementation-reconcile 运行可以包含正式目标锁、智能体声明、架构门禁和人工验收`);
   }
   if (run.approvedTarget && run.approvedTarget.diagramId !== run.diagramId) {
     fail(`${runPath}.approvedTarget.diagramId 必须与运行架构图一致`);
   }
-  if (run.reconciliation && !sameApprovedTarget(run.approvedTarget, run.reconciliation.target)) {
-    fail(`${runPath}.reconciliation.target 必须与运行锁定的正式目标一致`);
+  if (run.architectureGate && !sameApprovedTarget(run.approvedTarget, run.architectureGate.target)) {
+    fail(`${runPath}.architectureGate.target 必须与运行锁定的正式目标一致`);
+  }
+  if (run.architectureGate && !run.agentClaim) {
+    fail(`${runPath}.architectureGate 必须对应一份智能体实施声明`);
+  }
+  if (run.agentClaim && run.architectureGate && run.agentClaim.reportArtifactId !== run.architectureGate.reportArtifactId) {
+    fail(`${runPath}.agentClaim 与 architectureGate 必须引用同一实施报告`);
+  }
+  if (run.humanReview && (!run.agentClaim || !run.architectureGate)) {
+    fail(`${runPath}.humanReview 必须对应已经计算的自动架构门禁`);
+  }
+  if (run.humanReview?.decision === 'accepted' && !run.architectureGate.readyForHumanReview) {
+    fail(`${runPath} 的自动架构门禁未通过时不得记录人工接受`);
+  }
+  if (run.humanReview && run.status !== 'reviewed') {
+    fail(`${runPath} 已有人工验收结论时运行状态必须是 reviewed`);
+  }
+  if (run.taskType === 'implementation-reconcile' && run.agentClaim && !run.humanReview && run.status === 'reviewed') {
+    fail(`${runPath} 未经人工验收的实施运行不得标记为 reviewed`);
   }
   if (Date.parse(run.updatedAt) < Date.parse(run.createdAt)) fail(`${runPath}.updatedAt 不得早于 createdAt`);
   if (run.status === 'active' && run.submittedAt !== null) fail(`${runPath} 的活动运行不得包含 submittedAt`);
@@ -861,14 +911,23 @@ function validateAnalysis(analysis) {
         fail(`analysis.agentRuns[${index}].artifactIds 引用了不属于该运行的工件 ${artifactId}`);
       }
     });
-    if (run.reconciliation) {
-      const snapshot = artifactsById.get(run.reconciliation.snapshotArtifactId);
-      const report = artifactsById.get(run.reconciliation.reportArtifactId);
+    if (run.agentClaim) {
+      const report = artifactsById.get(run.agentClaim.reportArtifactId);
+      if (!report || report.runId !== run.id || report.artifactType !== 'implementation-report') {
+        fail(`analysis.agentRuns[${index}].agentClaim.reportArtifactId 必须引用该运行的实施报告`);
+      }
+      if (report.artifact.status !== run.agentClaim.status) {
+        fail(`analysis.agentRuns[${index}].agentClaim.status 必须与实施报告声明一致`);
+      }
+    }
+    if (run.architectureGate) {
+      const snapshot = artifactsById.get(run.architectureGate.snapshotArtifactId);
+      const report = artifactsById.get(run.architectureGate.reportArtifactId);
       if (!snapshot || snapshot.runId !== run.id || snapshot.artifactType !== 'architecture-snapshot') {
-        fail(`analysis.agentRuns[${index}].reconciliation.snapshotArtifactId 必须引用该运行的架构快照`);
+        fail(`analysis.agentRuns[${index}].architectureGate.snapshotArtifactId 必须引用该运行的架构快照`);
       }
       if (!report || report.runId !== run.id || report.artifactType !== 'implementation-report') {
-        fail(`analysis.agentRuns[${index}].reconciliation.reportArtifactId 必须引用该运行的实施报告`);
+        fail(`analysis.agentRuns[${index}].architectureGate.reportArtifactId 必须引用该运行的实施报告`);
       }
     }
   });
@@ -933,7 +992,7 @@ function migrateAnalysis(value) {
     validateAnalysis(incoming);
     return incoming;
   }
-  if (!['1.0.0', '2.0.0', '2.1.0'].includes(incoming?.schemaVersion)) {
+  if (!['1.0.0', '2.0.0', '2.1.0', '2.2.0'].includes(incoming?.schemaVersion)) {
     fail(
       `analysis.schemaVersion 无法迁移到 ${ANALYSIS_SCHEMA_VERSION}`,
       'ANALYSIS_SCHEMA_VERSION_MISMATCH',
@@ -964,23 +1023,57 @@ function migrateAnalysis(value) {
       basis,
     };
   });
+  const incomingArtifacts = incoming.schemaVersion === '1.0.0' ? [] : (incoming.artifacts || []);
+  const reportsByRun = new Map(incomingArtifacts
+    .filter((record) => record.artifactType === 'implementation-report')
+    .map((record) => [record.runId, record]));
   const migratedRuns = incoming.schemaVersion === '1.0.0'
     ? []
-    : (incoming.agentRuns || []).map((run) => ({
-      ...run,
-      approvedTarget: run.approvedTarget || null,
-      reconciliation: run.reconciliation || null,
-    }));
+    : (incoming.agentRuns || []).map((run) => {
+      const { reconciliation: legacyReconciliation, ...rest } = run;
+      const report = reportsByRun.get(run.id);
+      const legacyGate = run.architectureGate || legacyReconciliation || null;
+      const architectureGate = legacyGate
+        ? {
+          ...legacyGate,
+          drift: legacyGate.drift.map((item) => ({
+            ...item,
+            explanation: {
+              ...item.explanation,
+              status: item.explanation.status === 'agent-explained'
+                ? 'agent-provided'
+                : item.explanation.status,
+            },
+          })),
+          readyForHumanReview: legacyGate.status !== 'unresolved-drift',
+        }
+        : null;
+      if (architectureGate) delete architectureGate.completionEligible;
+      return {
+        ...rest,
+        status: run.taskType === 'implementation-reconcile' && report && !run.humanReview
+          ? 'submitted'
+          : run.status,
+        approvedTarget: run.approvedTarget || null,
+        agentClaim: run.agentClaim || (report ? {
+          status: report.artifact.status,
+          reportArtifactId: report.id,
+          claimedAt: report.submittedAt,
+        } : null),
+        architectureGate,
+        humanReview: run.humanReview || null,
+      };
+    });
   const migrated = {
     ...incoming,
     schemaVersion: ANALYSIS_SCHEMA_VERSION,
     sources: migratedSources,
     evidence: migratedEvidence,
     agentRuns: migratedRuns,
-    artifacts: incoming.schemaVersion === '1.0.0' ? [] : (incoming.artifacts || []),
+    artifacts: incomingArtifacts,
     proposals: (incoming.proposals || []).map((proposal) => ({ ...proposal, origin: null })),
   };
-  if (['2.0.0', '2.1.0'].includes(incoming.schemaVersion)) migrated.proposals = incoming.proposals || [];
+  if (['2.0.0', '2.1.0', '2.2.0'].includes(incoming.schemaVersion)) migrated.proposals = incoming.proposals || [];
   validateAnalysis(migrated);
   return migrated;
 }
@@ -1002,12 +1095,14 @@ function createEmptyAnalysis(now = new Date().toISOString()) {
 
 module.exports = {
   ANALYSIS_SCHEMA_VERSION,
+  AGENT_CLAIM_STATUSES,
   AGENT_RUN_STATUSES,
   AGENT_TASK_TYPES,
   CHANGE_KINDS,
   CHANGE_TARGET_TYPES,
   CONFIDENCE_LEVELS,
   EVIDENCE_BASES,
+  HUMAN_REVIEW_DECISIONS,
   MAX_CHANGES_PER_PROPOSAL,
   MAX_EVIDENCE_COUNT,
   MAX_EVIDENCE_EXCERPT_CHARS,
@@ -1024,10 +1119,13 @@ module.exports = {
   migrateAnalysis,
   validateAnalysis,
   validateApprovedTarget,
+  validateArchitectureGate,
+  validateAgentClaim,
   validateAgentArtifact,
   validateAgentRun,
   validateApplication,
   validateEvidence,
+  validateHumanReview,
   validateProposal,
   validateProposalChange,
   validateReconciliation,

@@ -176,7 +176,9 @@ test('analysis contract migrates v0.2 and v0.3 runs without losing proposal prov
   assert.equal(migrated.proposals[0].origin.runId, 'run-one');
   assert.equal(migrated.agentRuns.length, 1);
   assert.equal(migrated.agentRuns[0].approvedTarget, null);
-  assert.equal(migrated.agentRuns[0].reconciliation, null);
+  assert.equal(migrated.agentRuns[0].agentClaim, null);
+  assert.equal(migrated.agentRuns[0].architectureGate, null);
+  assert.equal(migrated.agentRuns[0].humanReview, null);
   assert.equal(migrated.artifacts.length, 1);
   assert.equal(migrated.evidence[0].basis, 'design-document');
 
@@ -185,8 +187,64 @@ test('analysis contract migrates v0.2 and v0.3 runs without losing proposal prov
   const migratedV03 = migrateAnalysis(v03);
   assert.equal(migratedV03.schemaVersion, ANALYSIS_SCHEMA_VERSION);
   assert.equal(migratedV03.agentRuns[0].approvedTarget, null);
-  assert.equal(migratedV03.agentRuns[0].reconciliation, null);
+  assert.equal(migratedV03.agentRuns[0].agentClaim, null);
+  assert.equal(migratedV03.agentRuns[0].architectureGate, null);
+  assert.equal(migratedV03.agentRuns[0].humanReview, null);
   assert.equal(migratedV03.proposals[0].origin.runId, 'run-one');
+});
+
+test('analysis contract migrates the pre-review v0.4 reconciliation into separate governance states', () => {
+  const legacy = validAnalysis();
+  legacy.schemaVersion = '2.2.0';
+  legacy.proposals = [];
+  const snapshot = structuredClone(require('../skills/implementation-reconcile/assets/architecture-snapshot.template.json'));
+  const report = structuredClone(require('../skills/implementation-reconcile/assets/implementation-report.template.json'));
+  const approvedTarget = structuredClone(report.approvedTarget);
+  legacy.agentRuns = [{
+    id: 'run-legacy-v04',
+    agentName: 'Codex',
+    agentClient: 'codex',
+    taskType: 'implementation-reconcile',
+    status: 'submitted',
+    diagramId: approvedTarget.diagramId,
+    view: 'current',
+    baseRevision: 3,
+    baseRevisionId: 'current-r3',
+    createdAt: NOW,
+    updatedAt: NOW,
+    submittedAt: NOW,
+    summary: null,
+    artifactIds: [snapshot.artifactId, report.artifactId],
+    approvedTarget,
+    reconciliation: {
+      status: 'aligned',
+      target: structuredClone(approvedTarget),
+      snapshotArtifactId: snapshot.artifactId,
+      reportArtifactId: report.artifactId,
+      computedAt: NOW,
+      counts: { missing: 0, extra: 0, changed: 0, unverified: 0, unexplained: 0, unreported: 0, unsupported: 0 },
+      drift: [],
+      crossCheck: { matches: true, unreported: [], unsupported: [] },
+      completionEligible: false,
+    },
+  }];
+  legacy.artifacts = [
+    { id: snapshot.artifactId, runId: 'run-legacy-v04', artifactType: snapshot.artifactType, submittedAt: NOW, artifact: snapshot },
+    { id: report.artifactId, runId: 'run-legacy-v04', artifactType: report.artifactType, submittedAt: NOW, artifact: report },
+  ];
+
+  const migrated = migrateAnalysis(legacy);
+  const run = migrated.agentRuns[0];
+  assert.equal(migrated.schemaVersion, ANALYSIS_SCHEMA_VERSION);
+  assert.equal(Object.hasOwn(run, 'reconciliation'), false);
+  assert.deepEqual(run.agentClaim, {
+    status: 'partial',
+    reportArtifactId: report.artifactId,
+    claimedAt: NOW,
+  });
+  assert.equal(run.architectureGate.status, 'aligned');
+  assert.equal(run.architectureGate.readyForHumanReview, true);
+  assert.equal(run.humanReview, null);
 });
 
 test('analysis contract stores discussion evidence without pretending it has a file location', () => {

@@ -18,6 +18,12 @@ All notable changes to AI Architecture Viewer are documented in this file.
   results.
 - Detailed reconciliation cards in the existing agent workbench and compact,
   opt-in MCP review details to reduce repeated agent context.
+- Separate `agentClaim`, `architectureGate`, and `humanReview` states so an
+  agent report or passing automatic comparison cannot impersonate user
+  acceptance.
+- Local human accept, revision-request, and reject actions with immutable
+  reviewer, timestamp, decision, and note records. No equivalent MCP mutation
+  tool is exposed.
 
 ### Protocol and compatibility
 
@@ -27,13 +33,18 @@ All notable changes to AI Architecture Viewer are documented in this file.
 - New implementation runs require a code-fact snapshot before their report and
   reject stale target locks. Stored v0.2/v0.3 analysis data and protocol 1.0/1.1
   artifacts remain readable through migration.
+- Analysis schema `2.3.0` also migrates the pre-review `2.2.0`
+  `reconciliation` shape into the three explicit governance states.
 - Snapshot relationships can now carry `controlledBoundaryPosture`; protocol
   1.2 implementation snapshots require it for boundary-aware comparison.
 
 ### Governance
 
-- An explained deviation remains distinct from alignment and never rewrites the
-  published target. MCP still exposes no approval or publication capability.
+- An agent-provided explanation means only that a report entry maps to computed
+  drift. Aligned and explained-drift gates become ready for human review, never
+  final completion on their own.
+- Human acceptance of an explained deviation never rewrites the published
+  target. MCP still exposes no review, approval, or publication capability.
 
 ## [0.3.0] - 2026-07-15
 

@@ -385,11 +385,27 @@ async function createRun(baseUrl, overrides = {}) {
   return result.payload.run;
 }
 
+async function reviewImplementation(baseUrl, runId, decision, note) {
+  const current = await request(baseUrl, '/api/analysis');
+  return request(baseUrl, `/api/analysis/runs/${runId}/review`, {
+    method: 'POST',
+    body: body({
+      schemaVersion: ANALYSIS_SCHEMA_VERSION,
+      baseRevision: current.payload.baseRevision,
+      userConfirmed: true,
+      decision,
+      note,
+    }),
+  });
+}
+
 test('agent APIs expose local context without a model provider or approval capability', async (t) => {
   const fixture = await startFixture(t);
   const context = await request(fixture.baseUrl, '/api/agent/context?view=current');
   assert.equal(context.response.status, 200, JSON.stringify(context.payload));
   assert.equal(context.payload.workflow.createRunFirst, true);
+  assert.equal(context.payload.workflow.implementationHumanReviewRequired, true);
+  assert.equal(context.payload.workflow.agentCanReview, false);
   assert.equal(context.payload.workflow.agentCanApprove, false);
   assert.equal(context.payload.workflow.agentCanPublish, false);
   assert.equal(context.payload.selected.published.revision, 1);
@@ -404,6 +420,8 @@ test('agent APIs expose local context without a model provider or approval capab
   assert.equal(analysis.payload.schemaVersion, ANALYSIS_SCHEMA_VERSION);
   assert.equal(analysis.payload.integration.mode, 'external-agent');
   assert.equal(analysis.payload.integration.modelProviderRequired, false);
+  assert.equal(analysis.payload.integration.implementationHumanReviewRequired, true);
+  assert.equal(analysis.payload.integration.agentCanReview, false);
   assert.equal(Object.hasOwn(analysis.payload, 'provider'), false);
 });
 
@@ -711,7 +729,7 @@ test('agent runs reject mismatched artifact types and incomplete evidence manife
   assert.equal(incomplete.payload.code, 'AGENT_EVIDENCE_MANIFEST_INCOMPLETE');
 });
 
-test('implementation runs lock the published target and complete only after an aligned code-fact snapshot', async (t) => {
+test('an aligned implementation reaches human review but cannot complete itself', async (t) => {
   const fixture = await startFixture(t, { targetFromCurrent: true });
   const run = await createRun(fixture.baseUrl, {
     taskType: 'implementation-reconcile',
@@ -747,7 +765,8 @@ test('implementation runs lock the published target and complete only after an a
     }),
   });
   assert.equal(submitted.response.status, 201, JSON.stringify(submitted.payload));
-  assert.equal(submitted.payload.submission.requiresHumanReview, false);
+  assert.equal(submitted.payload.submission.requiresHumanReview, true);
+  assert.equal(submitted.payload.submission.reviewType, 'implementation-result');
   assert.equal(submitted.payload.proposals.length, 0);
   const report = submitted.payload.artifacts.find((artifact) => artifact.artifactType === 'implementation-report');
   assert.deepEqual(report.summary, {
@@ -760,17 +779,59 @@ test('implementation runs lock the published target and complete only after an a
     driftCount: 0,
     unresolvedCount: 0,
   });
-  assert.equal(submitted.payload.run.reconciliation.status, 'aligned');
-  assert.equal(submitted.payload.run.reconciliation.completionEligible, true);
-  assert.equal('drift' in submitted.payload.run.reconciliation, false, 'default review response stays compact');
+  assert.deepEqual(submitted.payload.run.agentClaim, {
+    status: 'complete',
+    reportArtifactId: reportArtifact.artifactId,
+    claimedAt: submitted.payload.run.agentClaim.claimedAt,
+  });
+  assert.equal(submitted.payload.run.architectureGate.status, 'aligned');
+  assert.equal(submitted.payload.run.architectureGate.readyForHumanReview, true);
+  assert.equal(submitted.payload.run.humanReview, null);
+  assert.equal(submitted.payload.run.status, 'submitted');
+  assert.equal(submitted.payload.permissions.requiresHumanReview, true);
+  assert.equal(submitted.payload.permissions.agentCanReview, false);
+  assert.equal('drift' in submitted.payload.run.architectureGate, false, 'default review response stays compact');
 
-  const detailed = await request(fixture.baseUrl, `/api/agent/runs/${run.id}?details=reconciliation`);
-  assert.equal(detailed.payload.run.reconciliation.status, 'aligned');
-  assert.deepEqual(detailed.payload.run.reconciliation.drift, []);
-  assert.equal(detailed.payload.run.reconciliation.crossCheck.matches, true);
+  const detailed = await request(fixture.baseUrl, `/api/agent/runs/${run.id}?details=architecture-gate`);
+  assert.equal(detailed.payload.run.architectureGate.status, 'aligned');
+  assert.deepEqual(detailed.payload.run.architectureGate.drift, []);
+  assert.equal(detailed.payload.run.architectureGate.crossCheck.matches, true);
+
+  const analysisBeforeReview = await request(fixture.baseUrl, '/api/analysis');
+  const unconfirmed = await request(fixture.baseUrl, `/api/analysis/runs/${run.id}/review`, {
+    method: 'POST',
+    body: body({
+      schemaVersion: ANALYSIS_SCHEMA_VERSION,
+      baseRevision: analysisBeforeReview.payload.baseRevision,
+      userConfirmed: false,
+      decision: 'accepted',
+      note: 'This must not be accepted without an explicit local-user confirmation.',
+    }),
+  });
+  assert.equal(unconfirmed.response.status, 403);
+  assert.equal(unconfirmed.payload.code, 'USER_CONFIRMATION_REQUIRED');
+
+  const reviewed = await reviewImplementation(
+    fixture.baseUrl,
+    run.id,
+    'accepted',
+    'The user reviewed the architecture gate and accepts this implementation result.',
+  );
+  assert.equal(reviewed.response.status, 200, JSON.stringify(reviewed.payload));
+  const reviewedRun = reviewed.payload.runs.find((item) => item.id === run.id);
+  assert.equal(reviewedRun.status, 'reviewed');
+  assert.equal(reviewedRun.humanReview.decision, 'accepted');
+  assert.equal(reviewedRun.humanReview.reviewer, 'local-user');
+  assert.match(reviewedRun.humanReview.reviewedAt, /^\d{4}-\d{2}-\d{2}T/);
+
+  const reviewStatus = await request(fixture.baseUrl, `/api/agent/runs/${run.id}`);
+  assert.equal(reviewStatus.payload.run.agentClaim.status, 'complete');
+  assert.equal(reviewStatus.payload.run.architectureGate.status, 'aligned');
+  assert.equal('drift' in reviewStatus.payload.run.architectureGate, false);
+  assert.equal(reviewStatus.payload.run.humanReview.decision, 'accepted');
 });
 
-test('server reconciliation saves missing, extra, semantic, boundary, and unverified drift with explanations', async (t) => {
+test('the architecture gate saves missing, extra, semantic, boundary, and unverified drift with agent explanations pending human judgment', async (t) => {
   const fixture = await startFixture(t, { targetFromCurrent: true });
   const run = await createRun(fixture.baseUrl, {
     taskType: 'implementation-reconcile',
@@ -818,11 +879,13 @@ test('server reconciliation saves missing, extra, semantic, boundary, and unveri
     }),
   });
   assert.equal(reportSubmitted.response.status, 201, JSON.stringify(reportSubmitted.payload));
+  assert.equal(reportSubmitted.payload.submission.requiresHumanReview, true);
+  assert.equal(reportSubmitted.payload.run.humanReview, null);
 
-  const detailed = await request(fixture.baseUrl, `/api/agent/runs/${run.id}?details=reconciliation`);
-  const reconciliation = detailed.payload.run.reconciliation;
-  assert.equal(reconciliation.status, 'unresolved-drift');
-  assert.deepEqual(reconciliation.counts, {
+  const detailed = await request(fixture.baseUrl, `/api/agent/runs/${run.id}?details=architecture-gate`);
+  const architectureGate = detailed.payload.run.architectureGate;
+  assert.equal(architectureGate.status, 'unresolved-drift');
+  assert.deepEqual(architectureGate.counts, {
     missing: 1,
     extra: 1,
     changed: 2,
@@ -831,11 +894,11 @@ test('server reconciliation saves missing, extra, semantic, boundary, and unveri
     unreported: 0,
     unsupported: 0,
   });
-  assert.equal(reconciliation.crossCheck.matches, true);
-  assert.equal(reconciliation.completionEligible, false);
-  assert.equal(reconciliation.drift.every((item) => item.id.startsWith('drift-')), true);
-  assert.equal(reconciliation.drift.every((item) => item.explanation.status === 'agent-explained'), true);
-  const boundaryDrift = reconciliation.drift.find((item) => item.targetId === 'edge-processing-output');
+  assert.equal(architectureGate.crossCheck.matches, true);
+  assert.equal(architectureGate.readyForHumanReview, false);
+  assert.equal(architectureGate.drift.every((item) => item.id.startsWith('drift-')), true);
+  assert.equal(architectureGate.drift.every((item) => item.explanation.status === 'agent-provided'), true);
+  const boundaryDrift = architectureGate.drift.find((item) => item.targetId === 'edge-processing-output');
   assert.equal(boundaryDrift.targetType, 'edge');
   assert.deepEqual(boundaryDrift.changedFields, ['controlledBoundaryPosture']);
   assert.equal(boundaryDrift.target.controlledBoundaryPosture, 'blocked');
@@ -843,15 +906,15 @@ test('server reconciliation saves missing, extra, semantic, boundary, and unveri
   assert.ok(boundaryDrift.evidenceIds.includes('evidence-service-behavior'));
 
   const analysis = await request(fixture.baseUrl, '/api/analysis');
-  const stored = analysis.payload.runs.find((item) => item.id === run.id).reconciliation;
+  const stored = analysis.payload.runs.find((item) => item.id === run.id).architectureGate;
   assert.equal(stored.drift.length, 5, 'the local human workspace receives full drift detail');
 });
 
-test('a complete implementation report is rejected when server-computed drift is not reported', async (t) => {
+test('an agent complete claim cannot bypass an unresolved architecture gate or human acceptance', async (t) => {
   const fixture = await startFixture(t, { targetFromCurrent: true });
   const run = await createRun(fixture.baseUrl, { taskType: 'implementation-reconcile', view: 'current' });
-  const approved = await request(fixture.baseUrl, '/api/agent/approved-target');
-  const snapshot = implementationSnapshot(approved.payload.architecture, { artifactId: 'snapshot-unreported-v12' });
+  const approvedBefore = await request(fixture.baseUrl, '/api/agent/approved-target');
+  const snapshot = implementationSnapshot(approvedBefore.payload.architecture, { artifactId: 'snapshot-unreported-v12' });
   snapshot.nodes.find((node) => node.id === 'processing-module').purpose = 'An implementation purpose that differs from the formal target.';
   const snapshotSubmitted = await request(fixture.baseUrl, `/api/agent/runs/${run.id}/artifacts`, {
     method: 'POST',
@@ -862,20 +925,46 @@ test('a complete implementation report is rejected when server-computed drift is
   });
   assert.equal(snapshotSubmitted.response.status, 201);
 
-  const rejected = await request(fixture.baseUrl, `/api/agent/runs/${run.id}/artifacts`, {
+  const submitted = await request(fixture.baseUrl, `/api/agent/runs/${run.id}/artifacts`, {
     method: 'POST',
     body: body({
       artifact: implementationReportV12(run, snapshot, { status: 'complete' }),
       evidenceManifest: implementationEvidenceManifest(fixture.sourceContent, { artifactId: 'evidence-unreported-report' }),
     }),
   });
-  assert.equal(rejected.response.status, 422);
-  assert.equal(rejected.payload.code, 'AGENT_IMPLEMENTATION_DRIFT_UNRESOLVED');
-  assert.equal(rejected.payload.details.counts.changed, 1);
-  assert.equal(rejected.payload.details.counts.unreported, 1);
+  assert.equal(submitted.response.status, 201, JSON.stringify(submitted.payload));
+  assert.equal(submitted.payload.run.agentClaim.status, 'complete');
+  assert.equal(submitted.payload.run.architectureGate.status, 'unresolved-drift');
+  assert.equal(submitted.payload.run.architectureGate.readyForHumanReview, false);
+  assert.equal(submitted.payload.run.architectureGate.counts.changed, 1);
+  assert.equal(submitted.payload.run.architectureGate.counts.unreported, 1);
+  assert.equal(submitted.payload.run.humanReview, null);
+
+  const cannotAccept = await reviewImplementation(
+    fixture.baseUrl,
+    run.id,
+    'accepted',
+    'The user must not be able to accept an unresolved automatic architecture gate.',
+  );
+  assert.equal(cannotAccept.response.status, 409);
+  assert.equal(cannotAccept.payload.code, 'IMPLEMENTATION_GATE_NOT_READY');
+
+  const revisionRequested = await reviewImplementation(
+    fixture.baseUrl,
+    run.id,
+    'revision-requested',
+    'Explain and reconcile the server-computed responsibility drift before acceptance.',
+  );
+  assert.equal(revisionRequested.response.status, 200, JSON.stringify(revisionRequested.payload));
+  const reviewedRun = revisionRequested.payload.runs.find((item) => item.id === run.id);
+  assert.equal(reviewedRun.humanReview.decision, 'revision-requested');
+  assert.equal(reviewedRun.status, 'reviewed');
+
+  const approvedAfter = await request(fixture.baseUrl, '/api/agent/approved-target');
+  assert.deepEqual(approvedAfter.payload.formalBaseline, approvedBefore.payload.formalBaseline);
 });
 
-test('fully explained drift can complete implementation without being mislabeled as target alignment', async (t) => {
+test('fully agent-described drift only becomes ready until a user explicitly accepts it', async (t) => {
   const fixture = await startFixture(t, { targetFromCurrent: true });
   const run = await createRun(fixture.baseUrl, { taskType: 'implementation-reconcile', view: 'current' });
   const approvedBefore = await request(fixture.baseUrl, '/api/agent/approved-target');
@@ -900,16 +989,38 @@ test('fully explained drift can complete implementation without being mislabeled
       evidenceIds: ['evidence-service-behavior'],
     }],
   });
-  const accepted = await request(fixture.baseUrl, `/api/agent/runs/${run.id}/artifacts`, {
+  const submitted = await request(fixture.baseUrl, `/api/agent/runs/${run.id}/artifacts`, {
     method: 'POST',
     body: body({
       artifact: report,
       evidenceManifest: implementationEvidenceManifest(fixture.sourceContent, { artifactId: 'evidence-explained-report' }),
     }),
   });
-  assert.equal(accepted.response.status, 201, JSON.stringify(accepted.payload));
-  assert.equal(accepted.payload.run.reconciliation.status, 'explained-drift');
-  assert.equal(accepted.payload.run.reconciliation.completionEligible, true);
+  assert.equal(submitted.response.status, 201, JSON.stringify(submitted.payload));
+  assert.equal(submitted.payload.submission.requiresHumanReview, true);
+  assert.equal(submitted.payload.run.agentClaim.status, 'complete');
+  assert.equal(submitted.payload.run.architectureGate.status, 'explained-drift');
+  assert.equal(submitted.payload.run.architectureGate.readyForHumanReview, true);
+  assert.equal(submitted.payload.run.humanReview, null);
+  assert.equal(submitted.payload.run.status, 'submitted');
+
+  const detailedBeforeReview = await request(fixture.baseUrl, `/api/agent/runs/${run.id}?details=architecture-gate`);
+  assert.equal(
+    detailedBeforeReview.payload.run.architectureGate.drift[0].explanation.status,
+    'agent-provided',
+  );
+
+  const humanAccepted = await reviewImplementation(
+    fixture.baseUrl,
+    run.id,
+    'accepted',
+    'The user knowingly accepts this implementation deviation for this run only.',
+  );
+  assert.equal(humanAccepted.response.status, 200, JSON.stringify(humanAccepted.payload));
+  const reviewedRun = humanAccepted.payload.runs.find((item) => item.id === run.id);
+  assert.equal(reviewedRun.humanReview.decision, 'accepted');
+  assert.equal(reviewedRun.humanReview.note, 'The user knowingly accepts this implementation deviation for this run only.');
+  assert.equal(reviewedRun.status, 'reviewed');
 
   const approvedAfter = await request(fixture.baseUrl, '/api/agent/approved-target');
   assert.deepEqual(approvedAfter.payload.formalBaseline, approvedBefore.payload.formalBaseline);
@@ -918,6 +1029,47 @@ test('fully explained drift can complete implementation without being mislabeled
     approvedBefore.payload.architecture.graph.nodes.find((node) => node.id === 'processing-module').data.purpose,
     'an explained implementation deviation must not rewrite the formal target',
   );
+});
+
+test('a local human rejection is traceable and never changes the formal target', async (t) => {
+  const fixture = await startFixture(t, { targetFromCurrent: true });
+  const run = await createRun(fixture.baseUrl, { taskType: 'implementation-reconcile', view: 'current' });
+  const approvedBefore = await request(fixture.baseUrl, '/api/agent/approved-target');
+  const snapshot = implementationSnapshot(approvedBefore.payload.architecture, { artifactId: 'snapshot-human-reject-v12' });
+  const snapshotSubmitted = await request(fixture.baseUrl, `/api/agent/runs/${run.id}/artifacts`, {
+    method: 'POST',
+    body: body({
+      artifact: snapshot,
+      evidenceManifest: implementationEvidenceManifest(fixture.sourceContent, { artifactId: 'evidence-human-reject-snapshot' }),
+    }),
+  });
+  assert.equal(snapshotSubmitted.response.status, 201);
+  const reportSubmitted = await request(fixture.baseUrl, `/api/agent/runs/${run.id}/artifacts`, {
+    method: 'POST',
+    body: body({
+      artifact: implementationReportV12(run, snapshot, { artifactId: 'report-human-reject-v12', status: 'complete' }),
+      evidenceManifest: implementationEvidenceManifest(fixture.sourceContent, { artifactId: 'evidence-human-reject-report' }),
+    }),
+  });
+  assert.equal(reportSubmitted.response.status, 201, JSON.stringify(reportSubmitted.payload));
+  assert.equal(reportSubmitted.payload.run.architectureGate.status, 'aligned');
+  assert.equal(reportSubmitted.payload.run.humanReview, null);
+
+  const rejected = await reviewImplementation(
+    fixture.baseUrl,
+    run.id,
+    'rejected',
+    'The architecture graph aligns, but the user rejects the actual product experience.',
+  );
+  assert.equal(rejected.response.status, 200, JSON.stringify(rejected.payload));
+  const reviewedRun = rejected.payload.runs.find((item) => item.id === run.id);
+  assert.equal(reviewedRun.humanReview.decision, 'rejected');
+  assert.equal(reviewedRun.humanReview.reviewer, 'local-user');
+  assert.equal(reviewedRun.status, 'reviewed');
+
+  const approvedAfter = await request(fixture.baseUrl, '/api/agent/approved-target');
+  assert.deepEqual(approvedAfter.payload.formalBaseline, approvedBefore.payload.formalBaseline);
+  assert.deepEqual(approvedAfter.payload.architecture, approvedBefore.payload.architecture);
 });
 
 test('implementation reports require a snapshot first and stale formal target locks cannot submit', async (t) => {

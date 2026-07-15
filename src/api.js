@@ -1,7 +1,7 @@
 export const SCHEMA_VERSION = '3.1.0';
 export const DOCUMENT_SCHEMA_VERSION = '1.0.0';
 export const LAYOUT_SCHEMA_VERSION = '1.1.0';
-export const ANALYSIS_SCHEMA_VERSION = '2.2.0';
+export const ANALYSIS_SCHEMA_VERSION = '2.3.0';
 
 async function request(path, options = {}) {
   const response = await fetch(path, {
@@ -158,4 +158,16 @@ export const rejectAnalysisProposal = (proposalId, baseRevision) =>
   request(`/api/analysis/proposals/${encodeURIComponent(proposalId)}/reject`, {
     method: 'POST',
     body: JSON.stringify({ schemaVersion: ANALYSIS_SCHEMA_VERSION, baseRevision, userConfirmed: true }),
+  });
+
+export const reviewImplementationRun = (runId, baseRevision, decision, note) =>
+  request(`/api/analysis/runs/${encodeURIComponent(runId)}/review`, {
+    method: 'POST',
+    body: JSON.stringify({
+      schemaVersion: ANALYSIS_SCHEMA_VERSION,
+      baseRevision,
+      userConfirmed: true,
+      decision,
+      note,
+    }),
   });

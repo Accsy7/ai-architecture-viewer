@@ -1,4 +1,4 @@
 interface:
   display_name: "Implementation Reconciliation"
   short_description: "Submit implementation evidence and drift via MCP"
-  default_prompt: "Use $implementation-reconcile to compare the code with the run-locked published formal target, submit the code-fact snapshot first, and then submit the observed reconciliation report through MCP."
+  default_prompt: "Use $implementation-reconcile to compare the code with the run-locked published formal target, submit the code-fact snapshot first, then submit the observed report through MCP, and leave the final implementation decision to local human review."
