@@ -8,6 +8,8 @@ const messages = {
     'language.chinese': '中文',
     'language.english': 'English',
     'language.switch': '界面语言',
+    'language.switchToEnglish': '切换到英文界面',
+    'language.switchToChinese': '切换到中文界面',
     'common.close': '关闭',
     'common.cancel': '取消',
     'common.confirm': '确认',
@@ -474,6 +476,11 @@ const messages = {
     'views.compare.label': '差异对比',
     'views.compare.description': '比较当前架构与目标方案',
     'pending.title': '未发布草稿变化',
+    'pending.compactCurrent': '未发布当前草稿 · {count} 项变化',
+    'pending.compactTarget': '未发布目标草稿 · {count} 项变化',
+    'pending.group.modules': '模块变化',
+    'pending.group.relationships': '关系与权限边界',
+    'pending.group.criteria': '验收条件',
     'pending.noticeAllAgent': 'AI 修改了 {count} 项，尚未发布',
     'pending.noticeMixed': '草稿共 {total} 项未发布：AI 完整可追溯 {agent} 项，混合来源 {mixed} 项',
     'pending.noticeSplit': '图变化 {graph} 项 · 验收条件变化 {criteria} 项',
@@ -560,6 +567,8 @@ const messages = {
     'language.chinese': '中文',
     'language.english': 'English',
     'language.switch': 'Interface language',
+    'language.switchToEnglish': 'Switch to English',
+    'language.switchToChinese': 'Switch to Chinese',
     'common.close': 'Close',
     'common.cancel': 'Cancel',
     'common.confirm': 'Confirm',
@@ -1026,6 +1035,11 @@ const messages = {
     'views.compare.label': 'Compare',
     'views.compare.description': 'Compare the current architecture and target design',
     'pending.title': 'Unpublished draft changes',
+    'pending.compactCurrent': 'Unpublished current draft · {count} changes',
+    'pending.compactTarget': 'Unpublished target draft · {count} changes',
+    'pending.group.modules': 'Module changes',
+    'pending.group.relationships': 'Relationships and permission boundaries',
+    'pending.group.criteria': 'Acceptance criteria',
     'pending.noticeAllAgent': 'AI changed {count} items; they are not published',
     'pending.noticeMixed': 'The draft has {total} unpublished changes: {agent} fully traceable to AI and {mixed} mixed-source',
     'pending.noticeSplit': '{graph} graph changes · {criteria} acceptance-criterion changes',
@@ -1217,14 +1231,15 @@ export function useI18n() {
 
 export function LanguageSwitch() {
   const { language, setLanguage, t } = useI18n();
+  const nextLanguage = language === 'zh' ? 'en' : 'zh';
   return (
     <nav className="language-switch" aria-label={t('language.switch')}>
-      <button type="button" className={language === 'zh' ? 'active' : ''} aria-pressed={language === 'zh'} onClick={() => setLanguage('zh')}>
-        {t('language.chinese')}
-      </button>
-      <span aria-hidden="true">/</span>
-      <button type="button" className={language === 'en' ? 'active' : ''} aria-pressed={language === 'en'} onClick={() => setLanguage('en')}>
-        {t('language.english')}
+      <button
+        type="button"
+        aria-label={t(nextLanguage === 'en' ? 'language.switchToEnglish' : 'language.switchToChinese')}
+        onClick={() => setLanguage(nextLanguage)}
+      >
+        {t(nextLanguage === 'en' ? 'language.english' : 'language.chinese')}
       </button>
     </nav>
   );

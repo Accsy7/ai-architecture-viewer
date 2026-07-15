@@ -2,6 +2,31 @@
 
 All notable changes to AI Architecture Viewer are documented in this file.
 
+## [0.6.1] - 2026-07-15
+
+### Changed
+
+- Reduced the unpublished-draft banner to one line with only change inspection
+  and final publication actions. Category counts, provenance, fields, and
+  evidence now open in the existing right inspector instead of overlaying the
+  canvas.
+- Replaced the two-option language control with one quiet alternate-language
+  text button while retaining persistence, diagram/view identity, and the rule
+  that project-owned content is never translated.
+- Restored normal card backgrounds and borders for draft changes. Additions and
+  modifications use a narrow marker and small badge; removals remain readable
+  with restrained opacity.
+- Set the non-fullscreen desktop workspace to a fixed 880px height shared by the
+  canvas and inspector. Fullscreen remains viewport-bound.
+
+### Fixed
+
+- Current canonical reads now prefer `meta.groups` and, only when it is absent,
+  expose a lossless clone of legacy `meta.capabilityDomains` as groups. The
+  legacy field and every custom property remain intact, stable `node.data.group`
+  controls membership, and saved container geometry still controls region
+  position and size.
+
 ## [0.6.0] - 2026-07-15
 
 ### Added

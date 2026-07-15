@@ -3,7 +3,7 @@
 [简体中文](README.md)
 
 [![CI](https://github.com/Accsy7/ai-architecture-viewer/actions/workflows/ci.yml/badge.svg)](https://github.com/Accsy7/ai-architecture-viewer/actions/workflows/ci.yml)
-![Version: v0.6.0](https://img.shields.io/badge/version-v0.6.0-2f6f5e)
+![Version: v0.6.1](https://img.shields.io/badge/version-v0.6.1-2f6f5e)
 [![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-7c6f64)](LICENSE)
 
 > **License:** Source code is available only for the noncommercial purposes defined by the [PolyForm Noncommercial License 1.0.0](LICENSE). Derivative versions must retain the attribution in [NOTICE](NOTICE) and follow the [Project Name and Brand Usage Policy](TRADEMARKS.en.md).
@@ -16,7 +16,7 @@ It does not embed a model, require a model API key, or scan a repository on an a
 
 All bundled screens and data are fictional. No customer, production, or personal data is included.
 
-## What the v0.6.0 MVP does
+## What the v0.6.1 MVP does
 
 - Lets external agents read published stable IDs, responsibilities, relationships, and boundaries as a compact semantic graph without retransmitting layout data.
 - Supports concept projects without a code repository by accepting target-architecture semantic patches backed by user-confirmed discussion or Markdown design material.
@@ -37,10 +37,11 @@ All bundled screens and data are fictional. No customer, production, or personal
 - Returns a low-context agent claim, architecture-gate summary, and human-review state from `get_review_status` by default, loading per-item target, actual, evidence, and explanation detail only when requested.
 - Locks both the published baseline and active draft ID/revision for discovery and change-planning runs. A validated stable-ID semantic patch writes directly to that exact draft; a changed draft or formal baseline returns an explicit stale result and never overwrites concurrent work.
 - Protocol 1.4 node updates may use explicit `null` to withdraw supported optional semantic fields. Required fields, edge fields, and target horizons cannot be cleared, while drill-down diagram/node references clear as a pair. Exact no-effect patches are rejected atomically; withdrawing the final net change clears the zero-difference draft while retaining the run and provenance record.
-- Renders the draft's net module, relationship, permission-boundary, and acceptance-criterion differences directly on the canvas. Field-level provenance is conservative, and layout moves never count as semantic changes.
+- Keeps the draft's net difference in a one-line canvas summary. Opening it temporarily reuses the existing right inspector and groups modules, relationships/permission boundaries, and acceptance criteria; fields, provenance, and evidence no longer overlay the canvas. Layout moves never count as semantic changes.
 - Retains v0.2–v0.5 proposal decisions as read-only history. They are no longer a normal action surface and are never auto-applied to a draft or formal version.
 - Shows all structural changes, sensitive boundaries, relationship rewires, criteria, target references, and bound documents before publication. If a reviewed document changes, publication is rejected until a local user refreshes the document lock and reviews again.
-- Provides a quiet `中文 / English` switch that persists locally. It translates only the viewer shell, never project names, diagrams, modules, relationships, documents, evidence, or user-authored text.
+- Shows one quiet alternate-language button: Chinese mode displays `English`, and English mode displays `中文`. The choice persists locally and translates only the viewer shell, never project names, diagrams, modules, relationships, documents, evidence, or user-authored text.
+- Uses a fixed 880px non-fullscreen desktop workspace shared by the canvas and inspector. Projects that only have legacy `meta.capabilityDomains` expose those definitions losslessly as regions, while stable node `group` values continue to control membership.
 - Keeps current architecture, target architecture, diffs, drafts, and immutable revision history.
 - Bundles three portable skills for a consistent understand–plan–verify handoff.
 
@@ -224,7 +225,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development conventions, [SECURITY.md
 - Default examples and documents must be fictional or explicitly authorized for public release.
 - Never commit credentials, access tokens, customer material, internal paths, or architecture data that has not been de-identified.
 - Agents may submit structured semantic patches to locked drafts and implementation claims only. Architecture publication and implementation review are local-user actions.
-- v0.6.0 binds to `127.0.0.1` only. Mutation APIs do not yet provide authentication, CSRF protection, or multi-user authorization; do not proxy the service to a LAN or the public internet.
+- v0.6.1 binds to `127.0.0.1` only. Mutation APIs do not yet provide authentication, CSRF protection, or multi-user authorization; do not proxy the service to a LAN or the public internet.
 - Source code uses the [PolyForm Noncommercial License 1.0.0](LICENSE). It is source-available, not OSI open source. Commercial use requires separate written authorization; see [COMMERCIAL_LICENSE.en.md](COMMERCIAL_LICENSE.en.md).
 - Derivative works are allowed, but public modified versions must retain [NOTICE](NOTICE) attribution and follow [TRADEMARKS.en.md](TRADEMARKS.en.md): use a different name and logo and do not imply official status or endorsement.
 - Third-party dependencies remain subject to their own licenses.

@@ -38,7 +38,7 @@ import { resolveEdgePorts } from './routing.mjs';
 import { enrichNodesWithDocuments } from './document-model.js';
 import ArchitectureNode, { CanvasEditContext } from './components/ArchitectureNode.jsx';
 import AnalysisWorkbench from './components/AnalysisWorkbench.jsx';
-import PendingChangesLayer from './components/PendingChangesLayer.jsx';
+import PendingChangesLayer, { PendingChangesInspector } from './components/PendingChangesLayer.jsx';
 import GroupRegionNode from './components/GroupRegionNode.jsx';
 import DocumentLibrary from './components/DocumentLibrary.jsx';
 import {
@@ -53,6 +53,16 @@ import ViewerDetailPanel from './components/ViewerDetailPanel.jsx';
 import { I18nProvider, LanguageSwitch, useI18n } from './i18n.jsx';
 import { buildDraftChangeProjection, decorateFlowWithDraftChanges } from './pending-changes.mjs';
 import { buildReviewRecords } from './review-records.mjs';
+import {
+  buildGroupRegionNodes,
+  expandGeometryToContainNode,
+  finiteNumber,
+  groupGeometry,
+  REGION_MIN_HEIGHT,
+  REGION_MIN_WIDTH,
+  REGION_NODE_PREFIX,
+  sameGeometry,
+} from './group-regions.mjs';
 
 const nodeTypes = { architectureNode: ArchitectureNode, groupRegion: GroupRegionNode };
 const edgeTypes = { architectureEdge: SmartArchitectureEdge };
@@ -133,48 +143,6 @@ const EMPTY_DIAGRAM_CATALOG = {
   defaultDiagramId: null,
   diagrams: [],
 };
-
-const REGION_NODE_PREFIX = 'group-region-';
-const REGION_MIN_WIDTH = 300;
-const REGION_MIN_HEIGHT = 210;
-const REGION_CARD_PADDING = 28;
-const REGION_HEADER_CLEARANCE = 92;
-
-const finiteNumber = (value, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback;
-const nodeWidth = (node) => finiteNumber(node?.measured?.width, finiteNumber(node?.width, finiteNumber(node?.style?.width, 260)));
-const nodeHeight = (node) => finiteNumber(node?.measured?.height, finiteNumber(node?.height, finiteNumber(node?.style?.height, 150)));
-const regionNodeId = (groupId) => `${REGION_NODE_PREFIX}${groupId}`;
-
-function groupGeometry(group, layout, preview = {}) {
-  const stored = preview[group.id] || layout?.containers?.[group.id] || {};
-  return {
-    x: finiteNumber(stored.x, finiteNumber(group.position?.x, 0)),
-    y: finiteNumber(stored.y, finiteNumber(group.position?.y, 0)),
-    width: Math.max(REGION_MIN_WIDTH, finiteNumber(stored.width, finiteNumber(group.width, 340))),
-    height: Math.max(REGION_MIN_HEIGHT, finiteNumber(stored.height, finiteNumber(group.height, 520))),
-  };
-}
-
-function expandGeometryToContainNode(geometry, node) {
-  const left = finiteNumber(node.position?.x);
-  const top = finiteNumber(node.position?.y);
-  const right = left + nodeWidth(node);
-  const bottom = top + nodeHeight(node);
-  const nextLeft = Math.min(geometry.x, left - REGION_CARD_PADDING);
-  const nextTop = Math.min(geometry.y, top - REGION_HEADER_CLEARANCE);
-  const nextRight = Math.max(geometry.x + geometry.width, right + REGION_CARD_PADDING);
-  const nextBottom = Math.max(geometry.y + geometry.height, bottom + REGION_CARD_PADDING);
-  return {
-    x: nextLeft,
-    y: nextTop,
-    width: Math.max(REGION_MIN_WIDTH, nextRight - nextLeft),
-    height: Math.max(REGION_MIN_HEIGHT, nextBottom - nextTop),
-  };
-}
-
-function sameGeometry(left, right) {
-  return ['x', 'y', 'width', 'height'].every((key) => Math.abs(finiteNumber(left?.[key]) - finiteNumber(right?.[key])) < 0.01);
-}
 
 const laneSignature = (lane) => [
   lane?.meta?.lastUpdated,
@@ -978,6 +946,17 @@ function Viewer() {
     diagramId,
     view,
   }), [analysis.evidence, analysis.proposals, diagramId, lane?.draft, lane?.published?.developmentContract, lane?.published?.graph, readOnlyHistorical, view]);
+  useEffect(() => {
+    if (!draftProjection.totalCount) setPendingLayerOpen(false);
+  }, [draftProjection.totalCount]);
+  const togglePendingChanges = useCallback(() => {
+    if (pendingLayerOpen) {
+      setPendingLayerOpen(false);
+      return;
+    }
+    setInspectorCollapsed(false);
+    setPendingLayerOpen(true);
+  }, [pendingLayerOpen]);
   const canvasElements = useMemo(() => {
     if (!draftProjection.totalCount || readOnlyHistorical || view === 'compare') return { nodes, edges };
     const activeLayout = layouts[view] || EMPTY_LAYOUT;
@@ -1155,45 +1134,16 @@ function Viewer() {
     }));
     const layoutView = view === 'compare' ? 'target' : view;
     const activeLayout = layouts[layoutView] || EMPTY_LAYOUT;
-    const regionNodes = groups.flatMap((group, index) => {
-      const childNodes = semanticNodes.filter((node) => node.data?.group === group.group);
-      if (!childNodes.length) return [];
-      const geometry = groupGeometry(group, activeLayout, regionPreview);
-      const minimumRight = Math.max(...childNodes.map((node) => node.position.x + nodeWidth(node) + REGION_CARD_PADDING));
-      const minimumBottom = Math.max(...childNodes.map((node) => node.position.y + nodeHeight(node) + REGION_CARD_PADDING));
-      const minWidth = Math.max(REGION_MIN_WIDTH, minimumRight - geometry.x);
-      const minHeight = Math.max(REGION_MIN_HEIGHT, minimumBottom - geometry.y);
-      const id = regionNodeId(group.id || String(index));
-      return [{
-        id,
-        type: 'groupRegion',
-        position: { x: geometry.x, y: geometry.y },
-        width: geometry.width,
-        height: geometry.height,
-        style: { width: geometry.width, height: geometry.height },
-        selected: selectedRegionId === id,
-        dragHandle: '.group-region__drag-handle',
-        data: {
-          label: group.label || group.group || t('shell.groupFallback', { index: index + 1 }),
-          description: group.description || '',
-          color: group.color,
-          accent: group.accent,
-          level: group.level || 'L1',
-          __groupId: group.id,
-          __group: group.group,
-          __resizable: draggable,
-          __minWidth: minWidth,
-          __minHeight: minHeight,
-          __onResize: previewRegionResize,
-          __onResizeEnd: saveRegionResize,
-        },
-        draggable,
-        selectable: true,
-        connectable: false,
-        deletable: false,
-        focusable: true,
-        zIndex: -1,
-      }];
+    const regionNodes = buildGroupRegionNodes({
+      groups,
+      semanticNodes,
+      layout: activeLayout,
+      preview: regionPreview,
+      selectedRegionId,
+      draggable,
+      fallbackLabel: (index) => t('shell.groupFallback', { index: index + 1 }),
+      onResize: previewRegionResize,
+      onResizeEnd: saveRegionResize,
     });
     return [...regionNodes, ...semanticNodes];
   }, [
@@ -1380,7 +1330,9 @@ function Viewer() {
         </div>
         <div className="top-actions">
           <LanguageSwitch />
-          <span className={`mode-badge ${lane?.draft ? 'is-draft' : ''}`}>{modeText}</span>
+          {(!lane?.draft || !draftProjection.totalCount || readOnlyHistorical) && (
+            <span className={`mode-badge ${lane?.draft ? 'is-draft' : ''}`}>{modeText}</span>
+          )}
           {readOnlyHistorical && <button type="button" onClick={returnFromHistorical}>{t('shell.returnToCurrent')}</button>}
         </div>
       </header>
@@ -1526,18 +1478,16 @@ function Viewer() {
                 >
                   {t('shell.agentWorkspace')} <span>{analysisActivityCount}</span>
                 </button>
-                {!readOnlyHistorical && view !== 'compare' && lane?.draft && (
-                  <button className="publish-draft-entry" type="button" onClick={() => setPublishDialogOpen(true)}>
-                    {t('shell.reviewAndPublish')}
-                  </button>
-                )}
                 <button type="button" disabled={view === 'compare'} onClick={openRevisionPanel}>
                   {t('shell.versionHistory')} <span>{view === 'compare' ? 0 : lane ? (lane.historyCount || 0) + 1 : revisionCatalog.revisions.length}</span>
                 </button>
                 <button className="persistent-document-entry" type="button" onClick={openDocumentLibrary}>
                   {t('shell.projectDocuments')} <span>{registry.documents.length}</span>
                 </button>
-                <button type="button" onClick={() => setInspectorCollapsed((collapsed) => !collapsed)}>
+                <button type="button" onClick={() => {
+                  if (!inspectorCollapsed) setPendingLayerOpen(false);
+                  setInspectorCollapsed((collapsed) => !collapsed);
+                }}>
                   {t(inspectorCollapsed ? 'shell.expandSidebar' : 'shell.collapseSidebar')}
                 </button>
                 <button type="button" onClick={() => setCanvasFullscreen((fullscreen) => !fullscreen)}>
@@ -1549,8 +1499,9 @@ function Viewer() {
             <PendingChangesLayer
               open={pendingLayerOpen}
               projection={draftProjection}
-              onToggle={() => setPendingLayerOpen((open) => !open)}
-              onLocateEvidence={openEvidenceExcerpt}
+              view={view}
+              onToggle={togglePendingChanges}
+              onPublish={!readOnlyHistorical && view !== 'compare' && lane?.draft ? () => setPublishDialogOpen(true) : null}
             />
 
             {readOnlyHistorical && (
@@ -1669,22 +1620,30 @@ function Viewer() {
           )}
 
           {!inspectorCollapsed && (
-            <ViewerDetailPanel
-              selectedNode={selectedNode}
-              selectedEdge={selectedEdge}
-              nodes={nodes}
-              edges={edges}
-              documents={registry.documents}
-              nodeFields={config.nodeFields}
-              onSelectEdge={(id) => { setSelectedNodeId(null); setSelectedEdgeId(id); setFocusSelection(true); }}
-              onPreviewDocument={openDocumentPreview}
-              childDiagram={selectedChildDiagram}
-              relatedDiagram={selectedRelatedDiagram}
-              onOpenChild={selectDiagram}
-              onOpenRelated={selectDiagram}
-              canCorrect={!readOnlyHistorical && view !== 'compare'}
-              onCorrectNode={() => setCorrectionNodeId(selectedNode.id)}
-            />
+            pendingLayerOpen && draftProjection.totalCount ? (
+              <PendingChangesInspector
+                projection={draftProjection}
+                onClose={() => setPendingLayerOpen(false)}
+                onLocateEvidence={openEvidenceExcerpt}
+              />
+            ) : (
+              <ViewerDetailPanel
+                selectedNode={selectedNode}
+                selectedEdge={selectedEdge}
+                nodes={nodes}
+                edges={edges}
+                documents={registry.documents}
+                nodeFields={config.nodeFields}
+                onSelectEdge={(id) => { setSelectedNodeId(null); setSelectedEdgeId(id); setFocusSelection(true); }}
+                onPreviewDocument={openDocumentPreview}
+                childDiagram={selectedChildDiagram}
+                relatedDiagram={selectedRelatedDiagram}
+                onOpenChild={selectDiagram}
+                onOpenRelated={selectDiagram}
+                canCorrect={!readOnlyHistorical && view !== 'compare'}
+                onCorrectNode={() => setCorrectionNodeId(selectedNode.id)}
+              />
+            )
           )}
         </section>
       </main>

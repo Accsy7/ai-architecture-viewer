@@ -99,7 +99,7 @@ function registerTool(server, name, config, handler) {
 }
 
 const server = new McpServer(
-  { name: 'ai-architecture-viewer', version: '0.6.0' },
+  { name: 'ai-architecture-viewer', version: '0.6.1' },
   {
     instructions: [
       'Use this server as an external visual architecture handoff for coding agents.',

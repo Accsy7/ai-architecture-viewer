@@ -698,6 +698,13 @@ function normalizeCanonicalLane(lane, view) {
   }
 }
 
+function normalizeCanonicalMeta(meta) {
+  if (!Array.isArray(meta.groups) && Array.isArray(meta.capabilityDomains)) {
+    meta.groups = clone(meta.capabilityDomains);
+  }
+  return meta;
+}
+
 function v2Published(value, view) {
   if (value.revision !== undefined && value.graph) return clone(value);
   return {
@@ -757,6 +764,7 @@ function migrateLane(lane, view) {
 function migrateLegacyState(legacy) {
   if (legacy && legacy.schemaVersion === SCHEMA_VERSION) {
     const canonical = clone(legacy);
+    normalizeCanonicalMeta(canonical.meta);
     ['current', 'target'].forEach((view) => {
       normalizeCanonicalLane(canonical[view], view);
     });
@@ -766,6 +774,7 @@ function migrateLegacyState(legacy) {
   if (legacy && PREVIOUS_CANONICAL_SCHEMA_VERSIONS.has(legacy.schemaVersion)) {
     const canonical = clone(legacy);
     canonical.schemaVersion = SCHEMA_VERSION;
+    normalizeCanonicalMeta(canonical.meta);
     ['current', 'target'].forEach((view) => {
       normalizeCanonicalLane(canonical[view], view);
     });
@@ -784,7 +793,7 @@ function migrateLegacyState(legacy) {
   }
   const canonical = {
     schemaVersion: SCHEMA_VERSION,
-    meta: clone(legacy.meta),
+    meta: normalizeCanonicalMeta(clone(legacy.meta)),
     current: migrateLane(legacy.current, 'current'),
     target: migrateLane(legacy.target, 'target'),
   };

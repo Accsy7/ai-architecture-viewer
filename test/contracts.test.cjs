@@ -249,6 +249,33 @@ test('layout contract derives and guards generic group containers', () => {
   }), (error) => error instanceof LayoutContractError && error.code === 'UNKNOWN_LAYOUT_CONTAINER');
 });
 
+test('canonical reads preserve groups and safely expose legacy capability domains as groups', () => {
+  const canonical = migrateLegacyState(readJson(path.join(FIXTURES, 'generic-state-legacy.json')));
+  delete canonical.meta.groups;
+  canonical.meta.capabilityDomains = Array.from({ length: 7 }, (_, index) => ({
+    id: `domain-${index + 1}`,
+    group: `Capability ${index + 1}`,
+    label: `Domain ${index + 1}`,
+    description: `Legacy capability domain ${index + 1}`,
+    position: { x: index * 400, y: 20 },
+    width: 360,
+    height: 420,
+    legacyMarker: `keep-${index + 1}`,
+  }));
+
+  const migrated = migrateLegacyState(canonical);
+  assert.deepEqual(migrated.meta.groups, canonical.meta.capabilityDomains);
+  assert.deepEqual(migrated.meta.capabilityDomains, canonical.meta.capabilityDomains);
+  assert.notEqual(migrated.meta.groups, migrated.meta.capabilityDomains);
+  assert.equal(migrated.meta.groups.length, 7);
+  assert.equal(migrated.meta.groups[4].legacyMarker, 'keep-5');
+  assert.equal(canonical.meta.groups, undefined, 'reading compatibility must not mutate the source object');
+
+  const explicit = structuredClone(canonical);
+  explicit.meta.groups = [];
+  assert.deepEqual(migrateLegacyState(explicit).meta.groups, [], 'an explicit canonical groups array always wins');
+});
+
 test('an explicitly selected project directory is resolved without global state', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'viewer-project-'));
   try {

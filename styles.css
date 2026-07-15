@@ -92,14 +92,15 @@ main { padding: 16px 32px 32px; }
 .workspace {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 350px;
-  min-height: 700px;
+  height: 880px;
+  min-height: 880px;
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 15px;
   background: var(--panel);
   box-shadow: var(--shadow);
 }
-.graph-area { min-width: 0; padding: 18px; border-right: 1px solid var(--line); }
+.graph-area { display: flex; min-width: 0; min-height: 0; flex-direction: column; padding: 18px; border-right: 1px solid var(--line); }
 .graph-heading {
   display: flex;
   align-items: center;
@@ -121,7 +122,9 @@ main { padding: 16px 32px 32px; }
 .density-hint { color: var(--muted); border-color: var(--line); background: #f6f7f4; }
 .canvas-shell {
   position: relative;
-  height: 630px;
+  min-height: 0;
+  height: auto;
+  flex: 1;
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 12px;
@@ -329,7 +332,8 @@ main { padding: 16px 32px 32px; }
 
 .inspector {
   min-width: 0;
-  max-height: 700px;
+  height: 100%;
+  max-height: none;
   overflow: auto;
   padding: 22px;
   background: #fcfcfa;
