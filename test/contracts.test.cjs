@@ -69,6 +69,23 @@ test('previous canonical state gains routing metadata without changing semantic 
   validateState(migrated);
 });
 
+test('state 3.2 interaction modes and architecture layers migrate without semantic loss', () => {
+  const previous = migrateLegacyState(readJson(path.join(FIXTURES, 'generic-state-legacy.json')));
+  previous.schemaVersion = '3.2.0';
+  for (const view of ['current', 'target']) {
+    for (const revision of [...previous[view].history, previous[view].published]) delete revision.developmentContract;
+    if (previous[view].draft) delete previous[view].draft.developmentContract;
+  }
+  previous.current.published.graph.nodes[0].data.interactionModes = ['human-ui', 'system-service'];
+  previous.current.published.graph.nodes[0].data.architectureLayer = 'application-layer';
+  const migrated = migrateLegacyState(previous);
+  assert.equal(migrated.schemaVersion, SCHEMA_VERSION);
+  assert.deepEqual(migrated.current.published.graph.nodes[0].data.interactionModes, ['human-ui', 'system-service']);
+  assert.equal(migrated.current.published.graph.nodes[0].data.architectureLayer, 'application-layer');
+  assert.equal(migrated.target.published.developmentContract.status, 'legacy-unbound');
+  assert.equal(migrated.target.published.developmentContract.target.semanticHash, null);
+});
+
 test('state and graph contracts reject drift, duplicate identities and invalid target data', () => {
   const canonical = migrateLegacyState(readJson(path.join(FIXTURES, 'generic-state-legacy.json')));
   const wrongVersion = structuredClone(canonical);

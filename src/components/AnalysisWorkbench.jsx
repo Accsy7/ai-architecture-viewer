@@ -51,6 +51,18 @@ const AGENT_CLAIM_STATUS = {
   blocked: { label: '智能体声称受阻', tone: 'rejected' },
 };
 
+const CONTRACT_GATE_STATUS = {
+  satisfied: { label: '合同条件已满足', tone: 'confirmed' },
+  'criteria-unmet': { label: '合同条件存在缺口', tone: 'rejected' },
+  'claim-incomplete': { label: '智能体未声明完整完成', tone: 'draft' },
+};
+
+const CONTRACT_CRITERION_STATUS = {
+  satisfied: { label: '已满足', tone: 'confirmed' },
+  unsatisfied: { label: '未满足', tone: 'rejected' },
+  unverified: { label: '未核验', tone: 'neutral' },
+};
+
 const HUMAN_REVIEW_STATUS = {
   accepted: { label: '人工已接受', tone: 'confirmed' },
   'revision-requested': { label: '人工要求修订', tone: 'draft' },
@@ -166,6 +178,11 @@ function ArchitectureGatePanel({ run, busy, onReviewImplementation }) {
     label: run.agentClaim?.status || '智能体未声明结果',
     tone: 'neutral',
   };
+  const contractGate = run.contractGate;
+  const contractStatus = CONTRACT_GATE_STATUS[contractGate?.status] || {
+    label: contractGate?.status || '旧运行未绑定正式合同',
+    tone: 'neutral',
+  };
   const humanReview = run.humanReview;
   const reviewStatus = humanReview
     ? (HUMAN_REVIEW_STATUS[humanReview.decision] || { label: humanReview.decision, tone: 'neutral' })
@@ -173,7 +190,10 @@ function ArchitectureGatePanel({ run, busy, onReviewImplementation }) {
   const counts = gate.counts || {};
   const drift = asList(gate.drift);
   const unsupported = asList(gate.crossCheck?.unsupported);
+  const contractCriteria = asList(contractGate?.criteria);
   const hasDetails = Array.isArray(gate.drift);
+  const contractReady = Boolean(contractGate?.readyForAcceptance);
+  const acceptanceReady = gate.readyForHumanReview && contractReady;
   const noteReady = Boolean(reviewNote.trim());
   const submitReview = (decision) => {
     if (!noteReady || busy || humanReview) return;
@@ -183,7 +203,7 @@ function ArchitectureGatePanel({ run, busy, onReviewImplementation }) {
     <section className={`analysis-reconciliation analysis-reconciliation--${gate.status || 'pending'}`}>
       <div className="analysis-reconciliation__heading">
         <div>
-          <span className="analysis-reconciliation__kicker">ARCHITECTURE GATE · HUMAN REVIEW</span>
+          <span className="analysis-reconciliation__kicker">ARCHITECTURE + CONTRACT GATES · HUMAN REVIEW</span>
           <strong>实施结果验收</strong>
         </div>
         <span className={`analysis-badge analysis-badge--${status.tone}`}>{status.label}</span>
@@ -205,6 +225,15 @@ function ArchitectureGatePanel({ run, busy, onReviewImplementation }) {
           <small>{gate.readyForHumanReview ? '可提交给用户验收' : '需先解决自动核对问题'}</small>
         </div>
         <div>
+          <span>正式合同门禁</span>
+          <strong className={`analysis-badge analysis-badge--${contractStatus.tone}`}>{contractStatus.label}</strong>
+          <small>{contractReady
+            ? '合同条件可进入人工验收'
+            : contractGate
+              ? '只能要求修订或拒绝'
+              : '请创建新实施运行；只能查看、要求修订或拒绝'}</small>
+        </div>
+        <div>
           <span>人工验收</span>
           {reviewStatus
             ? <strong className={`analysis-badge analysis-badge--${reviewStatus.tone}`}>{reviewStatus.label}</strong>
@@ -218,6 +247,52 @@ function ArchitectureGatePanel({ run, busy, onReviewImplementation }) {
         ))}
         <span><b>{counts.unexplained || 0}</b>未解释</span>
       </div>
+      {contractGate && (
+        <section className={`analysis-contract-gate is-${contractGate.status}`}>
+          <div className="analysis-contract-gate__heading">
+            <div>
+              <span>FORMAL DEVELOPMENT CONTRACT</span>
+              <strong>逐条合同履约结果</strong>
+            </div>
+            <span className={`analysis-badge analysis-badge--${contractStatus.tone}`}>{contractStatus.label}</span>
+          </div>
+          <p>
+            这里的条件原文和架构引用来自已发布正式合同；智能体只能提交状态与证据，不能改写验收条件。
+          </p>
+          <div className="analysis-contract-gate__counts">
+            <span><b>{contractGate.counts?.satisfied || 0}</b>已满足</span>
+            <span><b>{contractGate.counts?.unsatisfied || 0}</b>未满足</span>
+            <span><b>{contractGate.counts?.unverified || 0}</b>未核验</span>
+          </div>
+          {contractCriteria.length > 0 ? (
+            <ol className="analysis-contract-criteria">
+              {contractCriteria.map((criterion) => {
+                const criterionStatus = CONTRACT_CRITERION_STATUS[criterion.status] || {
+                  label: criterion.status,
+                  tone: 'neutral',
+                };
+                return (
+                  <li key={criterion.criterionId}>
+                    <div>
+                      <span className={`analysis-badge analysis-badge--${criterionStatus.tone}`}>{criterionStatus.label}</span>
+                      <code>{criterion.criterionId}</code>
+                    </div>
+                    <strong>{criterion.statement}</strong>
+                    <small>
+                      架构引用：{asList(criterion.targetRefs).length
+                        ? criterion.targetRefs.map((ref) => `${ref.targetType}:${ref.targetId}`).join(' · ')
+                        : '无'}
+                    </small>
+                    <small>
+                      实施证据：{asList(criterion.evidenceIds).length ? criterion.evidenceIds.join(' · ') : '未提供'}
+                    </small>
+                  </li>
+                );
+              })}
+            </ol>
+          ) : <small>当前是精简摘要；按需读取合同门禁详情可查看每条条件与证据。</small>}
+        </section>
+      )}
       {!hasDetails && <small className="analysis-reconciliation__compact-note">当前为精简摘要；按需读取核验详情可查看逐项证据。</small>}
       {hasDetails && drift.length > 0 && (
         <div className="analysis-drift-list">
@@ -288,8 +363,12 @@ function ArchitectureGatePanel({ run, busy, onReviewImplementation }) {
             <button
               className="primary"
               type="button"
-              disabled={busy || !noteReady || !gate.readyForHumanReview}
-              title={gate.readyForHumanReview ? '' : '自动架构门禁尚未达到可人工接受状态'}
+              disabled={busy || !noteReady || !acceptanceReady}
+              title={acceptanceReady
+                ? ''
+                : !gate.readyForHumanReview
+                  ? '自动架构门禁尚未达到可人工接受状态'
+                  : '正式合同仍有缺口或智能体尚未声明完整完成，只能要求修订或拒绝'}
               onClick={() => submitReview('accepted')}
             >人工接受</button>
             <button className="quiet" type="button" disabled={busy || !noteReady} onClick={() => submitReview('revision-requested')}>要求修订</button>

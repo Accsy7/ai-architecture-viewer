@@ -2,8 +2,8 @@
 
 const path = require('path');
 
-const AI_CODING_PROTOCOL_VERSION = '1.2.0';
-const SUPPORTED_PROTOCOL_VERSIONS = new Set(['1.0.0', '1.1.0', AI_CODING_PROTOCOL_VERSION]);
+const AI_CODING_PROTOCOL_VERSION = '1.3.0';
+const SUPPORTED_PROTOCOL_VERSIONS = new Set(['1.0.0', '1.1.0', '1.2.0', AI_CODING_PROTOCOL_VERSION]);
 const ARTIFACT_TYPES = new Set([
   'task-request',
   'evidence-manifest',
@@ -16,13 +16,14 @@ const BOUNDARY_POSTURES = new Set(['none', 'controlled', 'blocked']);
 const REVISION_KINDS = new Set(['git-commit', 'workspace', 'release']);
 const STABLE_ID = /^[a-z0-9][a-z0-9._-]{0,79}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
-const EVIDENCE_SOURCE_KINDS = new Set(['workspace-file', 'discussion']);
+const EVIDENCE_SOURCE_KINDS = new Set(['workspace-file', 'discussion', 'project-document']);
 const EVIDENCE_BASES = new Set([
   'user-confirmed',
   'design-document',
   'code-fact',
   'agent-inference',
 ]);
+const INTERACTION_MODES = new Set(['human-ui', 'system-service']);
 
 class AiCodingExchangeError extends Error {
   constructor(message, code = 'AI_CODING_ARTIFACT_INVALID', details) {
@@ -104,15 +105,27 @@ function revision(value, valuePath) {
   text(value.value, `${valuePath}.value`, { max: 160 });
 }
 
-function approvedTarget(value, valuePath) {
+function approvedTarget(value, valuePath, schemaVersion) {
   object(value, valuePath);
-  keys(value, new Set(['status', 'diagramId', 'revision', 'revisionId', 'semanticHash']), valuePath);
-  if (value.status !== 'formal-baseline') fail(`${valuePath}.status must be formal-baseline`);
+  const current = schemaVersion === AI_CODING_PROTOCOL_VERSION;
+  keys(value, new Set([
+    'status', 'diagramId', 'revision', 'revisionId', 'semanticHash',
+    ...(current ? ['contractId', 'contractHash', 'documentSetHash'] : []),
+  ]), valuePath);
+  if (value.status !== (current ? 'executable-formal-baseline' : 'formal-baseline')) {
+    fail(`${valuePath}.status must be ${current ? 'executable-formal-baseline' : 'formal-baseline'}`);
+  }
   stableId(value.diagramId, `${valuePath}.diagramId`);
   if (!Number.isSafeInteger(value.revision) || value.revision < 0) fail(`${valuePath}.revision must be a non-negative integer`);
   stableId(value.revisionId, `${valuePath}.revisionId`);
   if (typeof value.semanticHash !== 'string' || !SHA256.test(value.semanticHash)) {
     fail(`${valuePath}.semanticHash must be SHA-256`);
+  }
+  if (current) {
+    stableId(value.contractId, `${valuePath}.contractId`);
+    for (const field of ['contractHash', 'documentSetHash']) {
+      if (typeof value[field] !== 'string' || !SHA256.test(value[field])) fail(`${valuePath}.${field} must be SHA-256`);
+    }
   }
 }
 
@@ -168,17 +181,39 @@ function validateEvidenceManifest(value) {
       return;
     }
 
+    const current = value.schemaVersion === AI_CODING_PROTOCOL_VERSION;
     keys(entry, new Set([
       'id', 'sourceKind', 'basis', 'path', 'lineStart', 'lineEnd', 'sourceLabel',
       'recordedAt', 'summary', 'excerpt', 'contentHash',
+      ...(current ? ['documentId', 'section'] : []),
     ]), entryPath);
-    if (!EVIDENCE_SOURCE_KINDS.has(entry.sourceKind)) fail(`${entryPath}.sourceKind is not supported`);
+    const supportedSourceKinds = current ? EVIDENCE_SOURCE_KINDS : new Set(['workspace-file', 'discussion']);
+    if (!supportedSourceKinds.has(entry.sourceKind)) fail(`${entryPath}.sourceKind is not supported`);
     if (!EVIDENCE_BASES.has(entry.basis)) fail(`${entryPath}.basis is not supported`);
     text(entry.summary, `${entryPath}.summary`, { max: 1000 });
     validateOptionalExcerpt(entry.excerpt, `${entryPath}.excerpt`);
 
     if (entry.sourceKind === 'workspace-file') {
       validateFileEvidenceFields(entry, entryPath);
+      if (entry.documentId !== undefined || entry.section !== undefined) {
+        fail(`${entryPath} workspace evidence must not claim a registered project document`);
+      }
+      return;
+    }
+
+    if (entry.sourceKind === 'project-document') {
+      if (!['design-document', 'user-confirmed'].includes(entry.basis)) {
+        fail(`${entryPath}.basis must be design-document or user-confirmed for project-document evidence`);
+      }
+      stableId(entry.documentId, `${entryPath}.documentId`);
+      if (entry.section !== undefined) text(entry.section, `${entryPath}.section`, { max: 200 });
+      if (entry.path !== undefined || entry.lineStart !== undefined || entry.lineEnd !== undefined
+        || entry.sourceLabel !== undefined || entry.recordedAt !== undefined) {
+        fail(`${entryPath} project-document evidence must use documentId and optional section only`);
+      }
+      if (typeof entry.contentHash !== 'string' || !SHA256.test(entry.contentHash)) {
+        fail(`${entryPath}.contentHash must be SHA-256`);
+      }
       return;
     }
 
@@ -187,6 +222,9 @@ function validateEvidenceManifest(value) {
     }
     if (entry.path !== undefined || entry.lineStart !== undefined || entry.lineEnd !== undefined || entry.contentHash !== undefined) {
       fail(`${entryPath} discussion evidence must not claim a workspace file location or submitted hash`);
+    }
+    if (entry.documentId !== undefined || entry.section !== undefined) {
+      fail(`${entryPath} discussion evidence must not claim a registered project document`);
     }
     text(entry.sourceLabel, `${entryPath}.sourceLabel`, { max: 200 });
     timestamp(entry.recordedAt, `${entryPath}.recordedAt`);
@@ -228,7 +266,12 @@ function validateArchitectureSnapshot(value) {
   list(value.nodes, 'artifact.nodes', { min: 1, max: 500 }).forEach((node, index) => {
     const nodePath = `artifact.nodes[${index}]`;
     object(node, nodePath);
-    keys(node, new Set(['id', 'name', 'purpose', 'technical', 'product', 'authorization', 'evidenceIds']), nodePath);
+    keys(node, new Set([
+      'id', 'name', 'purpose', 'technical', 'product', 'authorization', 'evidenceIds',
+      ...(value.schemaVersion === AI_CODING_PROTOCOL_VERSION
+        ? ['documentRefs', 'interactionModes', 'architectureLayer']
+        : []),
+    ]), nodePath);
     stableId(node.id, `${nodePath}.id`);
     if (nodeIds.has(node.id)) fail(`artifact.nodes contains duplicate ID ${node.id}`);
     nodeIds.add(node.id);
@@ -237,6 +280,25 @@ function validateArchitectureSnapshot(value) {
     text(node.technical, `${nodePath}.technical`, { max: 500 });
     text(node.product, `${nodePath}.product`, { max: 500 });
     text(node.authorization, `${nodePath}.authorization`, { max: 500 });
+    if (value.schemaVersion === AI_CODING_PROTOCOL_VERSION) {
+      if (node.documentRefs !== undefined) {
+        const refs = new Set();
+        list(node.documentRefs, `${nodePath}.documentRefs`, { max: 64 }).forEach((id, refIndex) => {
+          stableId(id, `${nodePath}.documentRefs[${refIndex}]`);
+          if (refs.has(id)) fail(`${nodePath}.documentRefs contains duplicate ID ${id}`);
+          refs.add(id);
+        });
+      }
+      if (node.interactionModes !== undefined) {
+        const modes = new Set();
+        list(node.interactionModes, `${nodePath}.interactionModes`, { min: 1, max: 2 }).forEach((mode, modeIndex) => {
+          if (!INTERACTION_MODES.has(mode)) fail(`${nodePath}.interactionModes[${modeIndex}] is not supported`);
+          if (modes.has(mode)) fail(`${nodePath}.interactionModes contains duplicate mode ${mode}`);
+          modes.add(mode);
+        });
+      }
+      if (node.architectureLayer !== undefined) stableId(node.architectureLayer, `${nodePath}.architectureLayer`);
+    }
     evidenceIds(node.evidenceIds, `${nodePath}.evidenceIds`);
   });
 
@@ -256,8 +318,8 @@ function validateArchitectureSnapshot(value) {
     if (!nodeIds.has(edge.source) || !nodeIds.has(edge.target)) fail(`${edgePath} references an unknown node`);
     text(edge.label, `${edgePath}.label`, { max: 240 });
     if (!RELATION_TYPES.has(edge.relationType)) fail(`${edgePath}.relationType is not supported`);
-    if (value.schemaVersion === AI_CODING_PROTOCOL_VERSION && !BOUNDARY_POSTURES.has(edge.controlledBoundaryPosture)) {
-      fail(`${edgePath}.controlledBoundaryPosture is required by protocol ${AI_CODING_PROTOCOL_VERSION}`);
+    if (['1.2.0', AI_CODING_PROTOCOL_VERSION].includes(value.schemaVersion) && !BOUNDARY_POSTURES.has(edge.controlledBoundaryPosture)) {
+      fail(`${edgePath}.controlledBoundaryPosture is required by protocol ${value.schemaVersion}`);
     }
     if (edge.controlledBoundaryPosture !== undefined && !BOUNDARY_POSTURES.has(edge.controlledBoundaryPosture)) {
       fail(`${edgePath}.controlledBoundaryPosture is not supported`);
@@ -313,7 +375,31 @@ function validateArchitectureProposal(value) {
       fail(`${changePath}.patch does not match the change kind`);
     }
   });
-  textList(value.acceptanceCriteria, 'artifact.acceptanceCriteria', { min: 1, max: 100 });
+  if (value.schemaVersion === AI_CODING_PROTOCOL_VERSION) {
+    const criterionIds = new Set();
+    list(value.acceptanceCriteria, 'artifact.acceptanceCriteria', { min: 1, max: 100 }).forEach((criterion, index) => {
+      const criterionPath = `artifact.acceptanceCriteria[${index}]`;
+      object(criterion, criterionPath);
+      keys(criterion, new Set(['id', 'statement', 'targetRefs']), criterionPath);
+      stableId(criterion.id, `${criterionPath}.id`);
+      if (criterionIds.has(criterion.id)) fail(`artifact.acceptanceCriteria contains duplicate ID ${criterion.id}`);
+      criterionIds.add(criterion.id);
+      text(criterion.statement, `${criterionPath}.statement`, { max: 1000 });
+      const refs = new Set();
+      list(criterion.targetRefs, `${criterionPath}.targetRefs`, { max: 100 }).forEach((ref, refIndex) => {
+        const refPath = `${criterionPath}.targetRefs[${refIndex}]`;
+        object(ref, refPath);
+        keys(ref, new Set(['targetType', 'targetId']), refPath);
+        if (!['node', 'edge'].includes(ref.targetType)) fail(`${refPath}.targetType is not supported`);
+        stableId(ref.targetId, `${refPath}.targetId`);
+        const key = `${ref.targetType}:${ref.targetId}`;
+        if (refs.has(key)) fail(`${criterionPath}.targetRefs contains duplicate target ${key}`);
+        refs.add(key);
+      });
+    });
+  } else {
+    textList(value.acceptanceCriteria, 'artifact.acceptanceCriteria', { min: 1, max: 100 });
+  }
   textList(value.risks, 'artifact.risks');
   textList(value.decisionsRequired, 'artifact.decisionsRequired');
   relativePath(value.evidenceManifest, 'artifact.evidenceManifest');
@@ -328,11 +414,12 @@ function validateImplementationReport(value) {
     'unresolved', 'evidenceManifest', 'resultingSnapshot', 'resultingSnapshotArtifactId',
   ]), 'artifact');
   stableId(value.requestId, 'artifact.requestId');
-  if (value.schemaVersion === AI_CODING_PROTOCOL_VERSION) {
+  const usesFormalTarget = ['1.2.0', AI_CODING_PROTOCOL_VERSION].includes(value.schemaVersion);
+  if (usesFormalTarget) {
     if (value.approvedProposalId !== undefined || value.resultingSnapshot !== undefined) {
       fail(`protocol ${AI_CODING_PROTOCOL_VERSION} implementation reports must use approvedTarget and resultingSnapshotArtifactId`);
     }
-    approvedTarget(value.approvedTarget, 'artifact.approvedTarget');
+    approvedTarget(value.approvedTarget, 'artifact.approvedTarget', value.schemaVersion);
     stableId(value.resultingSnapshotArtifactId, 'artifact.resultingSnapshotArtifactId');
   } else {
     if (value.approvedTarget !== undefined || value.resultingSnapshotArtifactId !== undefined) {
@@ -353,11 +440,18 @@ function validateImplementationReport(value) {
     text(test.summary, `${testPath}.summary`, { max: 1000 });
   });
 
+  const acceptanceResultIds = new Set();
   list(value.acceptanceResults, 'artifact.acceptanceResults', { min: 1, max: 100 }).forEach((result, index) => {
     const resultPath = `artifact.acceptanceResults[${index}]`;
     object(result, resultPath);
-    keys(result, new Set(['criterion', 'status', 'evidenceIds']), resultPath);
-    text(result.criterion, `${resultPath}.criterion`, { max: 1000 });
+    const current = value.schemaVersion === AI_CODING_PROTOCOL_VERSION;
+    keys(result, new Set([current ? 'criterionId' : 'criterion', 'status', 'evidenceIds']), resultPath);
+    if (current) {
+      stableId(result.criterionId, `${resultPath}.criterionId`);
+      if (acceptanceResultIds.has(result.criterionId)) fail(`artifact.acceptanceResults contains duplicate criterionId ${result.criterionId}`);
+      acceptanceResultIds.add(result.criterionId);
+    }
+    else text(result.criterion, `${resultPath}.criterion`, { max: 1000 });
     if (!['satisfied', 'unsatisfied', 'unverified'].includes(result.status)) fail(`${resultPath}.status is not supported`);
     evidenceIds(result.evidenceIds, `${resultPath}.evidenceIds`, { min: result.status === 'satisfied' ? 1 : 0 });
   });
@@ -373,7 +467,7 @@ function validateImplementationReport(value) {
   });
   textList(value.unresolved, 'artifact.unresolved');
   relativePath(value.evidenceManifest, 'artifact.evidenceManifest');
-  if (value.schemaVersion !== AI_CODING_PROTOCOL_VERSION) {
+  if (!usesFormalTarget) {
     relativePath(value.resultingSnapshot, 'artifact.resultingSnapshot');
   }
 

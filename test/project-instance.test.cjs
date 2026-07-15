@@ -203,6 +203,7 @@ test('state validator rejects schema drift, duplicate version identities and bro
 
   const duplicateId = structuredClone(canonical);
   duplicateId.target.published.revisionId = duplicateId.current.published.revisionId;
+  duplicateId.target.published.developmentContract.target.revisionId = duplicateId.current.published.revisionId;
   duplicateId.target.draft.baseRevisionId = duplicateId.current.published.revisionId;
   // IDs are lane-local, so cross-lane equality remains valid.
   validateState(duplicateId);

@@ -1,6 +1,6 @@
 # Discovery output contract
 
-Produce artifacts compatible with protocol version `1.2.0`.
+Produce artifacts compatible with protocol version `1.3.0`.
 
 ## architecture-snapshot.json
 
@@ -12,7 +12,7 @@ Required sections:
 - assumptions and unknowns;
 - relative reference to `evidence-manifest.json`.
 
-Every node needs `id`, `name`, `purpose`, `technical`, `product`, `authorization`, and at least one `evidenceId`. Every edge needs stable endpoints, a relation type, `controlledBoundaryPosture`, and evidence.
+Every node needs `id`, `name`, `purpose`, `technical`, `product`, `authorization`, and at least one `evidenceId`. Include `interactionModes`, `architectureLayer`, and `documentRefs` when the repository provides evidence for them; never infer a layer from card coordinates. Every edge needs stable endpoints, a relation type, `controlledBoundaryPosture`, and evidence.
 
 ## evidence-manifest.json
 

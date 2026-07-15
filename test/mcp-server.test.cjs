@@ -40,6 +40,7 @@ test('MCP stdio server exposes the governed external-agent tool surface', async 
     const tools = await client.listTools();
     assert.deepEqual(tools.tools.map((tool) => tool.name), [
       'get_project_context',
+      'read_project_document',
       'get_current_architecture',
       'create_agent_run',
       'submit_architecture_snapshot',
@@ -57,12 +58,16 @@ test('MCP stdio server exposes the governed external-agent tool surface', async 
       'request_implementation_revision',
     ].includes(tool.name)), false);
     const approvedTargetTool = tools.tools.find((tool) => tool.name === 'get_approved_target');
-    assert.match(approvedTargetTool.description, /only the latest human-published formal target baseline/i);
-    assert.match(approvedTargetTool.description, /semantic hash/i);
+    assert.match(approvedTargetTool.description, /frozen acceptance contract/i);
+    assert.match(approvedTargetTool.description, /legacy\/unbound targets are explicitly non-executable/i);
     const reviewStatusTool = tools.tools.find((tool) => tool.name === 'get_review_status');
     assert.match(reviewStatusTool.description, /compact/i);
     assert.match(reviewStatusTool.description, /human-review/i);
     assert.ok(reviewStatusTool.inputSchema.properties.includeArchitectureGateDetails);
+    assert.ok(reviewStatusTool.inputSchema.properties.includeContractGateDetails);
+    const documentTool = tools.tools.find((tool) => tool.name === 'read_project_document');
+    assert.equal(documentTool.annotations.readOnlyHint, true);
+    assert.ok(documentTool.inputSchema.properties.section);
 
     const result = await client.callTool({
       name: 'get_current_architecture',
@@ -86,10 +91,19 @@ test('MCP stdio server exposes the governed external-agent tool surface', async 
     });
     const formalTarget = JSON.parse(formalTargetResult.content[0].text);
     assert.equal(formalTarget.approvalStatus, 'published-target');
-    assert.equal(formalTarget.baselineStatus, 'formal-baseline');
+    assert.equal(formalTarget.baselineStatus, 'legacy-unbound');
     assert.equal(formalTarget.architecture.revisionId, targetContext.selected.published.revisionId);
-    assert.equal(formalTarget.formalBaseline.revisionId, targetContext.selected.published.revisionId);
-    assert.match(formalTarget.formalBaseline.semanticHash, /^[a-f0-9]{64}$/);
+    assert.equal(formalTarget.formalBaseline, null);
+    assert.equal(formalTarget.developmentContract.status, 'legacy-unbound');
+
+    const documentResult = await client.callTool({
+      name: 'read_project_document',
+      arguments: { documentId: 'system-brief' },
+    });
+    const document = JSON.parse(documentResult.content[0].text);
+    assert.equal(document.documentId, 'system-brief');
+    assert.match(document.contentHash, /^[a-f0-9]{64}$/);
+    assert.ok(document.content.length > 0);
   } finally {
     await client.close();
   }

@@ -1,14 +1,22 @@
 {
-  "schemaVersion": "3.1.0",
+  "schemaVersion": "3.3.0",
   "meta": {
     "project": "Synthetic Support Assistant",
     "title": "Evidence-backed architecture proposal demo",
     "lastUpdated": "2026-07-14T00:00:00.000Z",
     "pendingDecision": "Review the proposed evaluation gate before publishing the target architecture.",
     "viewSummaries": {
-      "current": ["Published synthetic baseline", "Human review is required before a response is sent"],
-      "target": ["A draft evaluation gate is proposed", "The proposal is not published or automatically applied"],
-      "compare": ["One evaluation component and two controlled relationships are proposed"]
+      "current": [
+        "Published synthetic baseline",
+        "Human review is required before a response is sent"
+      ],
+      "target": [
+        "A draft evaluation gate is proposed",
+        "The proposal is not published or automatically applied"
+      ],
+      "compare": [
+        "One evaluation component and two controlled relationships are proposed"
+      ]
     },
     "groups": [
       {
@@ -19,7 +27,10 @@
         "description": "Accept and route a fictional support request.",
         "color": "#edf4ff",
         "accent": "#5d7ea9",
-        "position": { "x": -80, "y": -80 },
+        "position": {
+          "x": -80,
+          "y": -80
+        },
         "width": 660,
         "height": 330
       },
@@ -31,7 +42,10 @@
         "description": "Retrieve knowledge and draft a cited response.",
         "color": "#edf8f2",
         "accent": "#56876a",
-        "position": { "x": 650, "y": -80 },
+        "position": {
+          "x": 650,
+          "y": -80
+        },
         "width": 660,
         "height": 330
       },
@@ -43,7 +57,10 @@
         "description": "Keep a person in control of the final response.",
         "color": "#fff5e9",
         "accent": "#b77a48",
-        "position": { "x": 1380, "y": -80 },
+        "position": {
+          "x": 1380,
+          "y": -80
+        },
         "width": 340,
         "height": 330
       }
@@ -64,7 +81,10 @@
           {
             "id": "request-intake",
             "type": "architectureNode",
-            "position": { "x": 0, "y": 60 },
+            "position": {
+              "x": 0,
+              "y": 60
+            },
             "width": 260,
             "height": 150,
             "data": {
@@ -74,14 +94,19 @@
               "technical": "Published demo baseline",
               "product": "Synthetic public example",
               "authorization": "Accepts only demonstration content.",
-              "documentRefs": ["system-brief"],
+              "documentRefs": [
+                "system-brief"
+              ],
               "focus": true
             }
           },
           {
             "id": "policy-router",
             "type": "architectureNode",
-            "position": { "x": 320, "y": 60 },
+            "position": {
+              "x": 320,
+              "y": 60
+            },
             "width": 260,
             "height": 150,
             "data": {
@@ -91,13 +116,18 @@
               "technical": "Published demo baseline",
               "product": "Synthetic public example",
               "authorization": "May route but cannot send a final answer.",
-              "documentRefs": ["system-brief"]
+              "documentRefs": [
+                "system-brief"
+              ]
             }
           },
           {
             "id": "retrieval-service",
             "type": "architectureNode",
-            "position": { "x": 730, "y": 60 },
+            "position": {
+              "x": 730,
+              "y": 60
+            },
             "width": 260,
             "height": 150,
             "data": {
@@ -110,13 +140,18 @@
               "aiCollaboration": "Retrieval context for an assistant",
               "relatedDiagramId": "retrieval-flow",
               "relatedNodeId": "retrieval-service",
-              "documentRefs": ["retrieval-design"]
+              "documentRefs": [
+                "retrieval-design"
+              ]
             }
           },
           {
             "id": "knowledge-index",
             "type": "architectureNode",
-            "position": { "x": 1040, "y": 60 },
+            "position": {
+              "x": 1040,
+              "y": 60
+            },
             "width": 260,
             "height": 150,
             "data": {
@@ -126,13 +161,18 @@
               "technical": "Published demo baseline",
               "product": "Synthetic public example",
               "authorization": "Read-only index; no customer records are stored.",
-              "documentRefs": ["retrieval-design"]
+              "documentRefs": [
+                "retrieval-design"
+              ]
             }
           },
           {
             "id": "human-review",
             "type": "architectureNode",
-            "position": { "x": 1420, "y": 60 },
+            "position": {
+              "x": 1420,
+              "y": 60
+            },
             "width": 260,
             "height": 150,
             "data": {
@@ -142,7 +182,9 @@
               "technical": "Published demo baseline",
               "product": "Synthetic public example",
               "authorization": "A person remains responsible for the final response.",
-              "documentRefs": ["system-brief"]
+              "documentRefs": [
+                "system-brief"
+              ]
             }
           }
         ],
@@ -151,28 +193,49 @@
             "id": "request-to-router",
             "source": "request-intake",
             "target": "policy-router",
-            "data": { "label": "creates request", "relationType": "flow", "controlledBoundaryPosture": "none", "routingMode": "auto" }
+            "data": {
+              "label": "creates request",
+              "relationType": "flow",
+              "controlledBoundaryPosture": "none",
+              "routingMode": "auto"
+            }
           },
           {
             "id": "router-to-retrieval",
             "source": "policy-router",
             "target": "retrieval-service",
-            "data": { "label": "routes grounded query", "relationType": "flow", "controlledBoundaryPosture": "controlled", "routingMode": "auto" }
+            "data": {
+              "label": "routes grounded query",
+              "relationType": "flow",
+              "controlledBoundaryPosture": "controlled",
+              "routingMode": "auto"
+            }
           },
           {
             "id": "retrieval-to-index",
             "source": "retrieval-service",
             "target": "knowledge-index",
-            "data": { "label": "reads approved snippets", "relationType": "reference", "controlledBoundaryPosture": "controlled", "routingMode": "auto" }
+            "data": {
+              "label": "reads approved snippets",
+              "relationType": "reference",
+              "controlledBoundaryPosture": "controlled",
+              "routingMode": "auto"
+            }
           },
           {
             "id": "router-to-review",
             "source": "policy-router",
             "target": "human-review",
-            "data": { "label": "hands off draft", "relationType": "handoff", "controlledBoundaryPosture": "controlled", "routingMode": "auto" }
+            "data": {
+              "label": "hands off draft",
+              "relationType": "handoff",
+              "controlledBoundaryPosture": "controlled",
+              "routingMode": "auto"
+            }
           }
         ]
-      }
+      },
+      "developmentContract": null
     },
     "draft": null,
     "history": []
@@ -187,7 +250,30 @@
       "message": null,
       "publishedAt": null,
       "publishedBy": null,
-      "graph": { "nodes": [], "edges": [] }
+      "graph": {
+        "nodes": [],
+        "edges": []
+      },
+      "developmentContract": {
+        "schemaVersion": "1.0.0",
+        "status": "legacy-unbound",
+        "contractId": "legacy-target-r0",
+        "target": {
+          "revision": 0,
+          "revisionId": "target-r0",
+          "semanticHash": null
+        },
+        "source": null,
+        "acceptanceCriteria": [],
+        "targetRefs": [],
+        "boundaryRefs": [],
+        "documents": [],
+        "frozenAt": null,
+        "frozenBy": null,
+        "contractHash": null,
+        "documentSetHash": null,
+        "executionReason": "该正式目标创建于开发合同功能之前，未绑定可执行验收标准。"
+      }
     },
     "draft": {
       "draftId": "target-draft-r0",
@@ -200,7 +286,10 @@
           {
             "id": "request-intake",
             "type": "architectureNode",
-            "position": { "x": 0, "y": 60 },
+            "position": {
+              "x": 0,
+              "y": 60
+            },
             "width": 260,
             "height": 150,
             "data": {
@@ -211,14 +300,19 @@
               "horizon": "近期",
               "product": "Synthetic public example",
               "authorization": "Accepts only demonstration content.",
-              "documentRefs": ["system-brief"],
+              "documentRefs": [
+                "system-brief"
+              ],
               "focus": true
             }
           },
           {
             "id": "policy-router",
             "type": "architectureNode",
-            "position": { "x": 320, "y": 60 },
+            "position": {
+              "x": 320,
+              "y": 60
+            },
             "width": 260,
             "height": 150,
             "data": {
@@ -229,13 +323,18 @@
               "horizon": "近期",
               "product": "Synthetic public example",
               "authorization": "May route but cannot send a final answer.",
-              "documentRefs": ["system-brief"]
+              "documentRefs": [
+                "system-brief"
+              ]
             }
           },
           {
             "id": "retrieval-service",
             "type": "architectureNode",
-            "position": { "x": 730, "y": 60 },
+            "position": {
+              "x": 730,
+              "y": 60
+            },
             "width": 260,
             "height": 150,
             "data": {
@@ -249,13 +348,18 @@
               "aiCollaboration": "Retrieval context for an assistant",
               "relatedDiagramId": "retrieval-flow",
               "relatedNodeId": "retrieval-service",
-              "documentRefs": ["retrieval-design"]
+              "documentRefs": [
+                "retrieval-design"
+              ]
             }
           },
           {
             "id": "knowledge-index",
             "type": "architectureNode",
-            "position": { "x": 1040, "y": 60 },
+            "position": {
+              "x": 1040,
+              "y": 60
+            },
             "width": 260,
             "height": 150,
             "data": {
@@ -266,13 +370,18 @@
               "horizon": "近期",
               "product": "Synthetic public example",
               "authorization": "Read-only index; no customer records are stored.",
-              "documentRefs": ["retrieval-design"]
+              "documentRefs": [
+                "retrieval-design"
+              ]
             }
           },
           {
             "id": "evaluation-gate",
             "type": "architectureNode",
-            "position": { "x": 1080, "y": 250 },
+            "position": {
+              "x": 1080,
+              "y": 250
+            },
             "width": 260,
             "height": 150,
             "data": {
@@ -284,14 +393,19 @@
               "product": "Awaiting human review",
               "authorization": "May recommend a hold; cannot approve or send a response.",
               "aiCollaboration": "Evidence-based candidate change",
-              "documentRefs": ["evaluation-proposal"],
+              "documentRefs": [
+                "evaluation-proposal"
+              ],
               "focus": true
             }
           },
           {
             "id": "human-review",
             "type": "architectureNode",
-            "position": { "x": 1420, "y": 60 },
+            "position": {
+              "x": 1420,
+              "y": 60
+            },
             "width": 260,
             "height": 150,
             "data": {
@@ -302,7 +416,9 @@
               "horizon": "近期",
               "product": "Synthetic public example",
               "authorization": "A person remains responsible for the final response.",
-              "documentRefs": ["system-brief"]
+              "documentRefs": [
+                "system-brief"
+              ]
             }
           }
         ],
@@ -311,33 +427,78 @@
             "id": "request-to-router",
             "source": "request-intake",
             "target": "policy-router",
-            "data": { "label": "creates request", "relationType": "flow", "controlledBoundaryPosture": "none", "routingMode": "auto" }
+            "data": {
+              "label": "creates request",
+              "relationType": "flow",
+              "controlledBoundaryPosture": "none",
+              "routingMode": "auto"
+            }
           },
           {
             "id": "router-to-retrieval",
             "source": "policy-router",
             "target": "retrieval-service",
-            "data": { "label": "routes grounded query", "relationType": "flow", "controlledBoundaryPosture": "controlled", "routingMode": "auto" }
+            "data": {
+              "label": "routes grounded query",
+              "relationType": "flow",
+              "controlledBoundaryPosture": "controlled",
+              "routingMode": "auto"
+            }
           },
           {
             "id": "retrieval-to-index",
             "source": "retrieval-service",
             "target": "knowledge-index",
-            "data": { "label": "reads approved snippets", "relationType": "reference", "controlledBoundaryPosture": "controlled", "routingMode": "auto" }
+            "data": {
+              "label": "reads approved snippets",
+              "relationType": "reference",
+              "controlledBoundaryPosture": "controlled",
+              "routingMode": "auto"
+            }
           },
           {
             "id": "retrieval-to-evaluation",
             "source": "retrieval-service",
             "target": "evaluation-gate",
-            "data": { "label": "submits cited draft", "relationType": "flow", "controlledBoundaryPosture": "controlled", "routingMode": "auto" }
+            "data": {
+              "label": "submits cited draft",
+              "relationType": "flow",
+              "controlledBoundaryPosture": "controlled",
+              "routingMode": "auto"
+            }
           },
           {
             "id": "evaluation-to-review",
             "source": "evaluation-gate",
             "target": "human-review",
-            "data": { "label": "holds or hands off", "relationType": "governance", "controlledBoundaryPosture": "controlled", "routingMode": "auto" }
+            "data": {
+              "label": "holds or hands off",
+              "relationType": "governance",
+              "controlledBoundaryPosture": "controlled",
+              "routingMode": "auto"
+            }
           }
         ]
+      },
+      "developmentContract": {
+        "schemaVersion": "1.0.0",
+        "status": "draft",
+        "contractId": "contract-target-draft-r0",
+        "target": {
+          "revision": null,
+          "revisionId": null,
+          "semanticHash": null
+        },
+        "source": null,
+        "acceptanceCriteria": [],
+        "targetRefs": [],
+        "boundaryRefs": [],
+        "documents": [],
+        "frozenAt": null,
+        "frozenBy": null,
+        "contractHash": null,
+        "documentSetHash": null,
+        "executionReason": "草案尚未绑定可执行验收标准。"
       }
     },
     "history": []

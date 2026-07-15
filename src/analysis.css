@@ -201,13 +201,29 @@
 .analysis-reconciliation__heading strong { display: block; font-size: 12px; }
 .analysis-reconciliation__kicker { display: block; margin-bottom: 2px; color: var(--analysis-purple); font-size: 8px; font-weight: 900; letter-spacing: 0.7px; }
 .analysis-reconciliation > p { margin-top: 7px; color: var(--muted); font-size: 10px; line-height: 1.55; }
-.analysis-implementation-state { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; margin-top: 10px; }
+.analysis-implementation-state { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; margin-top: 10px; }
 .analysis-implementation-state > div { min-width: 0; padding: 8px; border: 1px solid #e3e5e1; border-radius: 8px; background: rgba(255, 255, 255, 0.76); }
 .analysis-implementation-state > div > span { display: block; margin-bottom: 5px; color: var(--muted); font-size: 8px; font-weight: 800; }
 .analysis-implementation-state > div > small { display: block; margin-top: 5px; color: var(--muted); font-size: 8px; line-height: 1.4; }
 .analysis-reconciliation-counts { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 9px; }
 .analysis-reconciliation-counts span { padding: 4px 7px; border-radius: 999px; color: #56625b; background: #e9eeea; font-size: 9px; }
 .analysis-reconciliation-counts b { margin-right: 3px; color: var(--ink); }
+.analysis-contract-gate { margin-top: 10px; padding: 10px; border: 1px solid #d7ddd8; border-radius: 9px; background: #f8faf8; }
+.analysis-contract-gate.is-criteria-unmet { border-color: #e4baba; background: #fff4f2; }
+.analysis-contract-gate.is-claim-incomplete { border-color: #e5c98f; background: #fff9ed; }
+.analysis-contract-gate__heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.analysis-contract-gate__heading > div > span { display: block; color: var(--muted); font-size: 8px; font-weight: 800; letter-spacing: .08em; }
+.analysis-contract-gate__heading > div > strong { display: block; margin-top: 3px; font-size: 11px; }
+.analysis-contract-gate > p { margin-top: 7px; color: var(--muted); font-size: 9px; line-height: 1.5; }
+.analysis-contract-gate__counts { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+.analysis-contract-gate__counts span { padding: 4px 7px; border-radius: 999px; background: rgba(255, 255, 255, .82); font-size: 9px; }
+.analysis-contract-gate__counts b { margin-right: 3px; }
+.analysis-contract-criteria { display: grid; gap: 7px; margin: 9px 0 0; padding: 0; list-style: none; }
+.analysis-contract-criteria li { display: grid; gap: 4px; padding: 9px; border: 1px solid rgba(40, 58, 48, .11); border-radius: 8px; background: rgba(255, 255, 255, .88); }
+.analysis-contract-criteria li > div { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.analysis-contract-criteria li strong { font-size: 10px; line-height: 1.45; }
+.analysis-contract-criteria li code,
+.analysis-contract-criteria li small { color: var(--muted); font-size: 8px; line-height: 1.45; overflow-wrap: anywhere; }
 .analysis-reconciliation__compact-note { display: block; margin-top: 8px; color: var(--muted); font-size: 9px; }
 .analysis-drift-list { display: grid; gap: 8px; margin-top: 10px; }
 .analysis-drift-item { padding: 10px; border: 1px solid #e2e5e0; border-radius: 9px; background: #fff; }
@@ -295,6 +311,15 @@
   color: #4e5c55;
   background: #edf1ed;
 }
+
+.analysis-contract-summary { display: grid; grid-template-columns: minmax(190px, .42fr) minmax(0, 1fr); gap: 14px; padding: 12px 24px; border-bottom: 1px solid var(--line); background: #f4f8f4; }
+.analysis-contract-summary.is-unbound { background: #fff8ea; }
+.analysis-contract-summary h3 { margin-top: 2px; font-size: 14px; }
+.analysis-contract-summary > p { color: var(--muted); font-size: 11px; line-height: 1.55; }
+.analysis-contract-summary ol { display: grid; max-height: 112px; gap: 5px; margin: 0; padding: 0; overflow: auto; list-style: none; }
+.analysis-contract-summary li { display: grid; gap: 2px; padding: 6px 8px; border-radius: 7px; background: #fff; }
+.analysis-contract-summary li strong { font-size: 10px; line-height: 1.45; }
+.analysis-contract-summary li code { color: var(--muted); font-size: 8px; }
 
 .analysis-review-grid {
   display: grid;
@@ -414,6 +439,7 @@
   .analysis-review-changes { border-right: 0; border-bottom: 1px solid var(--line); }
   .analysis-review-dialog__heading { padding: 18px 17px 14px; }
   .analysis-review-summary { padding: 10px 17px; }
+  .analysis-contract-summary { grid-template-columns: 1fr; padding: 10px 17px; }
   .analysis-review-column { padding: 17px; }
   .analysis-review-dialog__footer { align-items: stretch; flex-direction: column; padding: 14px 17px; }
   .analysis-review-dialog__footer .dialog-actions { width: 100%; }

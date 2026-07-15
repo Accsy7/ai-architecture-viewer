@@ -244,6 +244,7 @@ test('analysis contract migrates the pre-review v0.4 reconciliation into separat
   });
   assert.equal(run.architectureGate.status, 'aligned');
   assert.equal(run.architectureGate.readyForHumanReview, true);
+  assert.equal(run.contractGate, null);
   assert.equal(run.humanReview, null);
 });
 
@@ -304,7 +305,9 @@ test('analysis contract only permits semantic node and edge patches', () => {
 
   const documentBoundNode = validAnalysis();
   documentBoundNode.proposals[0].changes[0].patch.data.documentRefs = ['architecture-doc'];
-  contractError(() => validateAnalysis(documentBoundNode), 'ANALYSIS_PATCH_FIELD_FORBIDDEN');
+  documentBoundNode.proposals[0].changes[0].patch.data.interactionModes = ['human-ui', 'system-service'];
+  documentBoundNode.proposals[0].changes[0].patch.data.architectureLayer = 'application-layer';
+  assert.doesNotThrow(() => validateAnalysis(documentBoundNode));
 
   const groupedNode = validAnalysis();
   groupedNode.proposals[0].changes[0].patch.data.group = 'Core services';

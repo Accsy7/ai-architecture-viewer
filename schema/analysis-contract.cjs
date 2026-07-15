@@ -1,5 +1,6 @@
 'use strict';
 
+const crypto = require('crypto');
 const path = require('path');
 const {
   BOUNDARY_POSTURES,
@@ -10,7 +11,7 @@ const {
 } = require('./state-contract.cjs');
 const { validateExchangeArtifact } = require('./ai-coding-exchange-contract.cjs');
 
-const ANALYSIS_SCHEMA_VERSION = '2.3.0';
+const ANALYSIS_SCHEMA_VERSION = '2.4.0';
 const MAX_SOURCE_COUNT = 500;
 const MAX_EVIDENCE_COUNT = 5000;
 const MAX_PROPOSAL_COUNT = 500;
@@ -21,6 +22,7 @@ const MAX_CHANGES_PER_PROPOSAL = 100;
 const MAX_EVIDENCE_REFS_PER_PROPOSAL = 64;
 const MAX_EVIDENCE_REFS_PER_CHANGE = 16;
 const MAX_SOURCE_BYTES = 256 * 1024;
+const MAX_PROJECT_DOCUMENT_BYTES = 1024 * 1024;
 const MAX_EVIDENCE_LINE_SPAN = 2000;
 const MAX_EVIDENCE_EXCERPT_CHARS = 12000;
 const STABLE_ID = /^[a-z0-9][a-z0-9._-]{0,79}$/;
@@ -37,7 +39,7 @@ const SOURCE_TYPES = new Set([
   'source-code',
   'discussion',
 ]);
-const SOURCE_KINDS = new Set(['workspace-file', 'discussion']);
+const SOURCE_KINDS = new Set(['workspace-file', 'discussion', 'project-document']);
 const EVIDENCE_BASES = new Set([
   'user-confirmed',
   'design-document',
@@ -59,6 +61,8 @@ const RECONCILIATION_DRIFT_KINDS = new Set(['missing', 'extra', 'changed', 'unve
 const RECONCILIATION_SOURCES = new Set(['server-computed', 'agent-declared', 'evidence-check']);
 const RECONCILIATION_EXPLANATION_STATUSES = new Set(['unexplained', 'agent-provided']);
 const AGENT_CLAIM_STATUSES = new Set(['complete', 'partial', 'blocked']);
+const CONTRACT_GATE_STATUSES = new Set(['satisfied', 'criteria-unmet', 'claim-incomplete']);
+const CONTRACT_CRITERION_STATUSES = new Set(['satisfied', 'unsatisfied', 'unverified']);
 const HUMAN_REVIEW_DECISIONS = new Set(['accepted', 'revision-requested', 'rejected']);
 const TARGET_HORIZONS = new Set(['近期', '后续', '远期']);
 
@@ -74,6 +78,9 @@ const NODE_SEMANTIC_FIELDS = new Set([
   'aiCollaboration',
   'relatedDiagramId',
   'relatedNodeId',
+  'documentRefs',
+  'interactionModes',
+  'architectureLayer',
 ]);
 const REQUIRED_NODE_SEMANTIC_FIELDS = [
   'name',
@@ -84,6 +91,7 @@ const REQUIRED_NODE_SEMANTIC_FIELDS = [
 ];
 const EDGE_SEMANTIC_FIELDS = new Set(['label', 'relationType', 'controlledBoundaryPosture']);
 const REQUIRED_EDGE_SEMANTIC_FIELDS = ['label', 'relationType'];
+const INTERACTION_MODES = new Set(['human-ui', 'system-service']);
 
 function fail(message, code = 'ANALYSIS_VALIDATION_ERROR', status = 422, details) {
   throw new ContractError(message, code, status, details);
@@ -186,6 +194,7 @@ function validateSource(source, sourcePath = 'source') {
     'id',
     'sourceKind',
     'path',
+    'documentId',
     'label',
     'type',
     'selected',
@@ -198,8 +207,14 @@ function validateSource(source, sourcePath = 'source') {
   if (source.sourceKind === 'workspace-file') {
     validateSourcePath(source.path, `${sourcePath}.path`);
     if (source.type === 'discussion') fail(`${sourcePath}.type 与文件资料不匹配`);
+    if (source.documentId !== null && source.documentId !== undefined) fail(`${sourcePath}.documentId 必须为空`);
+  } else if (source.sourceKind === 'project-document') {
+    if (source.path !== null) fail(`${sourcePath}.path 必须为 null，注册文档只能通过 documentId 定位`);
+    assertStableId(source.documentId, `${sourcePath}.documentId`);
+    if (source.type !== 'markdown') fail(`${sourcePath}.type 必须是 markdown`);
   } else {
     if (source.path !== null) fail(`${sourcePath}.path 必须为 null，讨论依据不能冒充文件路径`);
+    if (source.documentId !== null && source.documentId !== undefined) fail(`${sourcePath}.documentId 必须为空`);
     if (source.type !== 'discussion') fail(`${sourcePath}.type 必须是 discussion`);
   }
   assertText(source.label, `${sourcePath}.label`, { max: 160 });
@@ -207,8 +222,9 @@ function validateSource(source, sourcePath = 'source') {
   if (typeof source.selected !== 'boolean') fail(`${sourcePath}.selected 必须是布尔值`);
   assertTimestamp(source.lastScannedAt, `${sourcePath}.lastScannedAt`, { nullable: true });
   assertHash(source.contentHash, `${sourcePath}.contentHash`, { nullable: true });
-  if (source.sizeBytes !== null && (!Number.isSafeInteger(source.sizeBytes) || source.sizeBytes < 0 || source.sizeBytes > MAX_SOURCE_BYTES)) {
-    fail(`${sourcePath}.sizeBytes 必须是 0 到 ${MAX_SOURCE_BYTES} 之间的安全整数或 null`);
+  const maxBytes = source.sourceKind === 'project-document' ? MAX_PROJECT_DOCUMENT_BYTES : MAX_SOURCE_BYTES;
+  if (source.sizeBytes !== null && (!Number.isSafeInteger(source.sizeBytes) || source.sizeBytes < 0 || source.sizeBytes > maxBytes)) {
+    fail(`${sourcePath}.sizeBytes 必须是 0 到 ${maxBytes} 之间的安全整数或 null`);
   }
   const scanned = source.lastScannedAt !== null;
   if (scanned !== (source.contentHash !== null) || scanned !== (source.sizeBytes !== null)) {
@@ -225,6 +241,8 @@ function validateEvidence(evidence, evidencePath = 'evidence') {
     'sourceKind',
     'basis',
     'path',
+    'documentId',
+    'section',
     'lineStart',
     'lineEnd',
     'excerpt',
@@ -246,6 +264,19 @@ function validateEvidence(evidence, evidencePath = 'evidence') {
     if (evidence.lineEnd - evidence.lineStart + 1 > MAX_EVIDENCE_LINE_SPAN) {
       fail(`${evidencePath} 的行范围不得超过 ${MAX_EVIDENCE_LINE_SPAN} 行`);
     }
+    if (evidence.documentId !== null && evidence.documentId !== undefined) fail(`${evidencePath}.documentId 必须为空`);
+    if (evidence.section !== null && evidence.section !== undefined) fail(`${evidencePath}.section 必须为空`);
+  } else if (evidence.sourceKind === 'project-document') {
+    if (evidence.path !== null || evidence.lineStart !== null || evidence.lineEnd !== null) {
+      fail(`${evidencePath} 的注册文档依据不得声明文件路径或行号`);
+    }
+    assertStableId(evidence.documentId, `${evidencePath}.documentId`);
+    if (evidence.section !== null && evidence.section !== undefined) {
+      assertText(evidence.section, `${evidencePath}.section`, { max: 200 });
+    }
+    if (!['design-document', 'user-confirmed'].includes(evidence.basis)) {
+      fail(`${evidencePath}.basis 必须是 design-document 或 user-confirmed`);
+    }
   } else {
     if (evidence.path !== null || evidence.lineStart !== null || evidence.lineEnd !== null) {
       fail(`${evidencePath} 的讨论依据不得声明文件路径或行号`);
@@ -253,6 +284,8 @@ function validateEvidence(evidence, evidencePath = 'evidence') {
     if (!['user-confirmed', 'agent-inference'].includes(evidence.basis)) {
       fail(`${evidencePath}.basis 必须是 user-confirmed 或 agent-inference`);
     }
+    if (evidence.documentId !== null && evidence.documentId !== undefined) fail(`${evidencePath}.documentId 必须为空`);
+    if (evidence.section !== null && evidence.section !== undefined) fail(`${evidencePath}.section 必须为空`);
   }
   assertText(evidence.excerpt, `${evidencePath}.excerpt`, { max: MAX_EVIDENCE_EXCERPT_CHARS });
   assertHash(evidence.contentHash, `${evidencePath}.contentHash`);
@@ -315,6 +348,27 @@ function validateNodeSemanticData(data, dataPath, { requireComplete = false, vie
     if (requireComplete && !Object.prototype.hasOwnProperty.call(data, 'relatedDiagramId')) {
       fail(`${dataPath}.relatedNodeId 需要同时提供 relatedDiagramId`);
     }
+  }
+  if (Object.prototype.hasOwnProperty.call(data, 'documentRefs')) {
+    assertArray(data.documentRefs, `${dataPath}.documentRefs`, { max: 64 });
+    const refs = new Set();
+    data.documentRefs.forEach((id, index) => {
+      assertStableId(id, `${dataPath}.documentRefs[${index}]`);
+      if (refs.has(id)) fail(`${dataPath}.documentRefs 不得包含重复文档 ${id}`);
+      refs.add(id);
+    });
+  }
+  if (Object.prototype.hasOwnProperty.call(data, 'interactionModes')) {
+    assertArray(data.interactionModes, `${dataPath}.interactionModes`, { min: 1, max: 2 });
+    const modes = new Set();
+    data.interactionModes.forEach((mode, index) => {
+      if (!INTERACTION_MODES.has(mode)) fail(`${dataPath}.interactionModes[${index}] 不是支持的交互模式`);
+      if (modes.has(mode)) fail(`${dataPath}.interactionModes 不得包含重复模式 ${mode}`);
+      modes.add(mode);
+    });
+  }
+  if (Object.prototype.hasOwnProperty.call(data, 'architectureLayer')) {
+    assertStableId(data.architectureLayer, `${dataPath}.architectureLayer`);
   }
   return data;
 }
@@ -454,18 +508,33 @@ function validateApprovedTarget(target, targetPath = 'agentRun.approvedTarget') 
     'revision',
     'revisionId',
     'semanticHash',
+    'contractId',
+    'contractHash',
+    'documentSetHash',
   ]), targetPath);
-  if (target.status !== 'formal-baseline') fail(`${targetPath}.status 必须是 formal-baseline`);
+  if (!['formal-baseline', 'executable-formal-baseline'].includes(target.status)) {
+    fail(`${targetPath}.status 必须是 formal-baseline 或 executable-formal-baseline`);
+  }
   assertStableId(target.diagramId, `${targetPath}.diagramId`);
   assertBaseRevision(target.revision, `${targetPath}.revision`);
   assertStableId(target.revisionId, `${targetPath}.revisionId`);
   assertHash(target.semanticHash, `${targetPath}.semanticHash`);
+  if (target.status === 'executable-formal-baseline') {
+    assertStableId(target.contractId, `${targetPath}.contractId`);
+    assertHash(target.contractHash, `${targetPath}.contractHash`);
+    assertHash(target.documentSetHash, `${targetPath}.documentSetHash`);
+  } else if (
+    target.contractId !== undefined || target.contractHash !== undefined || target.documentSetHash !== undefined
+  ) fail(`${targetPath} 的旧正式目标锁不得伪装成可执行合同`);
   return target;
 }
 
 function sameApprovedTarget(left, right) {
   if (!left || !right) return left === right;
-  return ['status', 'diagramId', 'revision', 'revisionId', 'semanticHash']
+  return [
+    'status', 'diagramId', 'revision', 'revisionId', 'semanticHash',
+    ...(left.status === 'executable-formal-baseline' ? ['contractId', 'contractHash', 'documentSetHash'] : []),
+  ]
     .every((field) => left[field] === right[field]);
 }
 
@@ -505,12 +574,24 @@ function validateReconciliationElement(element, elementPath) {
   assertObject(element, elementPath);
   if (element.targetType === 'node') {
     assertKeys(element, new Set([
-      'id', 'targetType', 'name', 'purpose', 'technical', 'product', 'authorization', 'evidenceIds',
+      'id', 'targetType', 'name', 'purpose', 'technical', 'product', 'authorization',
+      'documentRefs', 'interactionModes', 'architectureLayer', 'evidenceIds',
     ]), elementPath);
     assertStableId(element.id, `${elementPath}.id`);
     for (const field of ['name', 'purpose', 'technical', 'product', 'authorization']) {
       assertText(element[field], `${elementPath}.${field}`, { max: field === 'purpose' ? 2000 : 500 });
     }
+    if (element.documentRefs !== undefined) {
+      assertArray(element.documentRefs, `${elementPath}.documentRefs`, { max: 64 });
+      element.documentRefs.forEach((id, index) => assertStableId(id, `${elementPath}.documentRefs[${index}]`));
+    }
+    if (element.interactionModes !== undefined) {
+      assertArray(element.interactionModes, `${elementPath}.interactionModes`, { min: 1, max: 2 });
+      element.interactionModes.forEach((mode, index) => {
+        if (!INTERACTION_MODES.has(mode)) fail(`${elementPath}.interactionModes[${index}] 不是支持的交互模式`);
+      });
+    }
+    if (element.architectureLayer !== undefined) assertStableId(element.architectureLayer, `${elementPath}.architectureLayer`);
   } else if (element.targetType === 'edge') {
     assertKeys(element, new Set([
       'id', 'targetType', 'source', 'target', 'label', 'relationType', 'controlledBoundaryPosture', 'evidenceIds',
@@ -697,6 +778,69 @@ function validateArchitectureGate(gate, gatePath = 'agentRun.architectureGate') 
   return gate;
 }
 
+function validateContractGate(gate, gatePath = 'agentRun.contractGate') {
+  if (gate === null || gate === undefined) return gate;
+  assertObject(gate, gatePath);
+  assertKeys(gate, new Set([
+    'status',
+    'contractId',
+    'contractHash',
+    'reportArtifactId',
+    'computedAt',
+    'agentClaimStatus',
+    'counts',
+    'criteria',
+    'readyForAcceptance',
+  ]), gatePath);
+  if (!CONTRACT_GATE_STATUSES.has(gate.status)) fail(`${gatePath}.status 不是支持的合同门禁状态`);
+  assertStableId(gate.contractId, `${gatePath}.contractId`);
+  assertHash(gate.contractHash, `${gatePath}.contractHash`);
+  assertStableId(gate.reportArtifactId, `${gatePath}.reportArtifactId`);
+  assertTimestamp(gate.computedAt, `${gatePath}.computedAt`);
+  if (!AGENT_CLAIM_STATUSES.has(gate.agentClaimStatus)) {
+    fail(`${gatePath}.agentClaimStatus 不是支持的智能体声明状态`);
+  }
+  assertObject(gate.counts, `${gatePath}.counts`);
+  const countKeys = ['satisfied', 'unsatisfied', 'unverified'];
+  assertKeys(gate.counts, new Set(countKeys), `${gatePath}.counts`);
+  countKeys.forEach((key) => assertBaseRevision(gate.counts[key], `${gatePath}.counts.${key}`));
+  assertArray(gate.criteria, `${gatePath}.criteria`, { min: 1, max: 100 });
+  gate.criteria.forEach((criterion, index) => {
+    const criterionPath = `${gatePath}.criteria[${index}]`;
+    assertObject(criterion, criterionPath);
+    assertKeys(criterion, new Set([
+      'criterionId', 'statement', 'targetRefs', 'status', 'evidenceIds',
+    ]), criterionPath);
+    if (!CONTRACT_CRITERION_STATUSES.has(criterion.status)) {
+      fail(`${criterionPath}.status 不是支持的验收条件状态`);
+    }
+    validateReconciliationEvidenceIds(criterion.evidenceIds, `${criterionPath}.evidenceIds`);
+  });
+  validateAcceptanceCriteria(gate.criteria.map((criterion) => ({
+    id: criterion.criterionId,
+    statement: criterion.statement,
+    targetRefs: criterion.targetRefs,
+  })), `${gatePath}.criteria`);
+  const expectedCounts = Object.fromEntries(countKeys.map((key) => [
+    key,
+    gate.criteria.filter((criterion) => criterion.status === key).length,
+  ]));
+  countKeys.forEach((key) => {
+    if (gate.counts[key] !== expectedCounts[key]) fail(`${gatePath}.counts.${key} 与逐条合同结果不一致`);
+  });
+  const expectedStatus = expectedCounts.unsatisfied || expectedCounts.unverified
+    ? 'criteria-unmet'
+    : gate.agentClaimStatus === 'complete'
+      ? 'satisfied'
+      : 'claim-incomplete';
+  if (gate.status !== expectedStatus) fail(`${gatePath}.status 与合同结果和智能体声明不一致`);
+  if (typeof gate.readyForAcceptance !== 'boolean') fail(`${gatePath}.readyForAcceptance 必须是布尔值`);
+  if (gate.readyForAcceptance !== (gate.status === 'satisfied')) {
+    fail(`${gatePath}.readyForAcceptance 与合同门禁状态不一致`);
+  }
+  return gate;
+}
+
 const validateReconciliation = validateArchitectureGate;
 
 function validateAgentRun(run, runPath = 'agentRun') {
@@ -719,6 +863,7 @@ function validateAgentRun(run, runPath = 'agentRun') {
     'approvedTarget',
     'agentClaim',
     'architectureGate',
+    'contractGate',
     'humanReview',
   ]), runPath);
   assertStableId(run.id, `${runPath}.id`);
@@ -744,10 +889,12 @@ function validateAgentRun(run, runPath = 'agentRun') {
   validateApprovedTarget(run.approvedTarget, `${runPath}.approvedTarget`);
   validateAgentClaim(run.agentClaim, `${runPath}.agentClaim`);
   validateArchitectureGate(run.architectureGate, `${runPath}.architectureGate`);
+  validateContractGate(run.contractGate, `${runPath}.contractGate`);
   validateHumanReview(run.humanReview, `${runPath}.humanReview`);
   if (
     run.taskType !== 'implementation-reconcile'
-    && (run.approvedTarget !== null || run.agentClaim !== null || run.architectureGate !== null || run.humanReview !== null)
+    && (run.approvedTarget !== null || run.agentClaim !== null || run.architectureGate !== null
+      || run.contractGate || run.humanReview !== null)
   ) {
     fail(`${runPath} 只有 implementation-reconcile 运行可以包含正式目标锁、智能体声明、架构门禁和人工验收`);
   }
@@ -763,11 +910,25 @@ function validateAgentRun(run, runPath = 'agentRun') {
   if (run.agentClaim && run.architectureGate && run.agentClaim.reportArtifactId !== run.architectureGate.reportArtifactId) {
     fail(`${runPath}.agentClaim 与 architectureGate 必须引用同一实施报告`);
   }
+  if (run.contractGate && (!run.agentClaim || !run.architectureGate)) {
+    fail(`${runPath}.contractGate 必须对应智能体声明和自动架构门禁`);
+  }
+  if (run.contractGate && (
+    run.contractGate.reportArtifactId !== run.agentClaim.reportArtifactId
+    || run.contractGate.reportArtifactId !== run.architectureGate.reportArtifactId
+  )) fail(`${runPath}.contractGate 必须与智能体声明和架构门禁引用同一实施报告`);
+  if (run.contractGate && (
+    run.contractGate.contractId !== run.approvedTarget?.contractId
+    || run.contractGate.contractHash !== run.approvedTarget?.contractHash
+  )) fail(`${runPath}.contractGate 必须对应运行锁定的正式开发合同`);
   if (run.humanReview && (!run.agentClaim || !run.architectureGate)) {
     fail(`${runPath}.humanReview 必须对应已经计算的自动架构门禁`);
   }
   if (run.humanReview?.decision === 'accepted' && !run.architectureGate.readyForHumanReview) {
     fail(`${runPath} 的自动架构门禁未通过时不得记录人工接受`);
+  }
+  if (run.humanReview?.decision === 'accepted' && run.contractGate && !run.contractGate.readyForAcceptance) {
+    fail(`${runPath} 的合同门禁未满足时不得记录人工接受`);
   }
   if (run.humanReview && run.status !== 'reviewed') {
     fail(`${runPath} 已有人工验收结论时运行状态必须是 reviewed`);
@@ -794,6 +955,32 @@ function validateAgentArtifact(record, recordPath = 'artifactRecord') {
   return record;
 }
 
+function validateAcceptanceCriteria(criteria, valuePath = 'proposal.acceptanceCriteria') {
+  assertArray(criteria, valuePath, { max: 100 });
+  const ids = new Set();
+  criteria.forEach((criterion, index) => {
+    const criterionPath = `${valuePath}[${index}]`;
+    assertObject(criterion, criterionPath);
+    assertKeys(criterion, new Set(['id', 'statement', 'targetRefs']), criterionPath);
+    assertStableId(criterion.id, `${criterionPath}.id`);
+    if (ids.has(criterion.id)) fail(`${valuePath} 包含重复验收条件 ${criterion.id}`);
+    ids.add(criterion.id);
+    assertText(criterion.statement, `${criterionPath}.statement`, { max: 1000 });
+    assertArray(criterion.targetRefs, `${criterionPath}.targetRefs`, { max: 100 });
+    const refs = new Set();
+    criterion.targetRefs.forEach((ref, refIndex) => {
+      const refPath = `${criterionPath}.targetRefs[${refIndex}]`;
+      assertObject(ref, refPath);
+      assertKeys(ref, new Set(['targetType', 'targetId']), refPath);
+      if (!CHANGE_TARGET_TYPES.has(ref.targetType)) fail(`${refPath}.targetType 必须是 node 或 edge`);
+      assertStableId(ref.targetId, `${refPath}.targetId`);
+      const key = `${ref.targetType}:${ref.targetId}`;
+      if (refs.has(key)) fail(`${criterionPath}.targetRefs 包含重复引用 ${key}`);
+      refs.add(key);
+    });
+  });
+}
+
 function validateProposal(proposal, proposalPath = 'proposal', { knownEvidenceIds } = {}) {
   assertObject(proposal, proposalPath);
   assertKeys(proposal, new Set([
@@ -812,6 +999,8 @@ function validateProposal(proposal, proposalPath = 'proposal', { knownEvidenceId
     'changes',
     'application',
     'origin',
+    'requestId',
+    'acceptanceCriteria',
   ]), proposalPath);
   assertStableId(proposal.id, `${proposalPath}.id`);
   if (!PROPOSAL_STATUSES.has(proposal.status)) fail(`${proposalPath}.status 不是支持的提案状态`);
@@ -821,6 +1010,10 @@ function validateProposal(proposal, proposalPath = 'proposal', { knownEvidenceId
   assertBaseRevisionId(proposal.baseRevisionId, `${proposalPath}.baseRevisionId`, proposal.baseRevision);
   assertText(proposal.title, `${proposalPath}.title`, { max: 160 });
   assertText(proposal.summary, `${proposalPath}.summary`, { max: 2000 });
+  if (proposal.requestId !== null && proposal.requestId !== undefined) {
+    assertStableId(proposal.requestId, `${proposalPath}.requestId`);
+  }
+  validateAcceptanceCriteria(proposal.acceptanceCriteria || [], `${proposalPath}.acceptanceCriteria`);
   if (proposal.confidence !== null && !CONFIDENCE_LEVELS.has(proposal.confidence)) {
     fail(`${proposalPath}.confidence 必须是 low、medium、high 或 null`);
   }
@@ -934,14 +1127,19 @@ function validateAnalysis(analysis) {
 
   const sourcesById = new Map();
   const sourcePaths = new Set();
+  const sourceDocumentIds = new Set();
   analysis.sources.forEach((source, index) => {
     const sourcePath = `analysis.sources[${index}]`;
     validateSource(source, sourcePath);
     if (sourcesById.has(source.id)) fail(`analysis.sources 包含重复资料 ID ${source.id}`);
     const pathKey = source.path?.toLowerCase();
     if (pathKey && sourcePaths.has(pathKey)) fail(`analysis.sources 包含重复资料路径 ${source.path}`);
+    if (source.documentId && sourceDocumentIds.has(source.documentId)) {
+      fail(`analysis.sources 包含重复注册文档 ${source.documentId}`);
+    }
     sourcesById.set(source.id, source);
     if (pathKey) sourcePaths.add(pathKey);
+    if (source.documentId) sourceDocumentIds.add(source.documentId);
   });
 
   const evidenceIds = new Set();
@@ -956,6 +1154,9 @@ function validateAnalysis(analysis) {
     }
     if (source.path !== evidence.path) {
       fail(`${evidencePath}.path 必须与其 sourceId 的资料路径一致`, 'ANALYSIS_EVIDENCE_PATH_MISMATCH');
+    }
+    if ((source.documentId ?? null) !== (evidence.documentId ?? null)) {
+      fail(`${evidencePath}.documentId 必须与其 sourceId 的注册文档一致`, 'ANALYSIS_EVIDENCE_DOCUMENT_MISMATCH');
     }
     if (source.lastScannedAt === null) {
       fail(`${evidencePath}.sourceId 必须引用已扫描资料`, 'ANALYSIS_SOURCE_NOT_SCANNED');
@@ -992,7 +1193,7 @@ function migrateAnalysis(value) {
     validateAnalysis(incoming);
     return incoming;
   }
-  if (!['1.0.0', '2.0.0', '2.1.0', '2.2.0'].includes(incoming?.schemaVersion)) {
+  if (!['1.0.0', '2.0.0', '2.1.0', '2.2.0', '2.3.0'].includes(incoming?.schemaVersion)) {
     fail(
       `analysis.schemaVersion 无法迁移到 ${ANALYSIS_SCHEMA_VERSION}`,
       'ANALYSIS_SCHEMA_VERSION_MISMATCH',
@@ -1009,6 +1210,7 @@ function migrateAnalysis(value) {
   const migratedSources = (incoming.sources || []).map((source) => ({
     ...source,
     sourceKind: source.sourceKind || 'workspace-file',
+    documentId: source.documentId ?? null,
   }));
   const sourcesById = new Map(migratedSources.map((source) => [source.id, source]));
   const migratedEvidence = (incoming.evidence || []).map((evidence) => {
@@ -1021,9 +1223,12 @@ function migrateAnalysis(value) {
       ...evidence,
       sourceKind: evidence.sourceKind || source?.sourceKind || 'workspace-file',
       basis,
+      documentId: evidence.documentId ?? null,
+      section: evidence.section ?? null,
     };
   });
   const incomingArtifacts = incoming.schemaVersion === '1.0.0' ? [] : (incoming.artifacts || []);
+  const artifactsById = new Map(incomingArtifacts.map((record) => [record.id, record]));
   const reportsByRun = new Map(incomingArtifacts
     .filter((record) => record.artifactType === 'implementation-report')
     .map((record) => [record.runId, record]));
@@ -1061,6 +1266,7 @@ function migrateAnalysis(value) {
           claimedAt: report.submittedAt,
         } : null),
         architectureGate,
+        contractGate: run.contractGate || null,
         humanReview: run.humanReview || null,
       };
     });
@@ -1071,9 +1277,31 @@ function migrateAnalysis(value) {
     evidence: migratedEvidence,
     agentRuns: migratedRuns,
     artifacts: incomingArtifacts,
-    proposals: (incoming.proposals || []).map((proposal) => ({ ...proposal, origin: null })),
+    proposals: (incoming.proposals || []).map((proposal) => {
+      const origin = incoming.schemaVersion === '1.0.0' ? null : (proposal.origin || null);
+      const artifact = origin?.artifactId ? artifactsById.get(origin.artifactId)?.artifact : null;
+      const rawCriteria = proposal.acceptanceCriteria || artifact?.acceptanceCriteria || [];
+      const targetRefs = [...new Map((proposal.changes || []).map((change) => [
+        `${change.targetType}:${change.targetId}`,
+        { targetType: change.targetType, targetId: change.targetId },
+      ])).values()];
+      const acceptanceCriteria = rawCriteria.map((criterion, index) => {
+        if (criterion && typeof criterion === 'object' && !Array.isArray(criterion)) return clone(criterion);
+        const statement = String(criterion);
+        const digest = crypto.createHash('sha256')
+          .update(`${proposal.id}:${index}:${statement}`)
+          .digest('hex')
+          .slice(0, 20);
+        return { id: `criterion-${digest}`, statement, targetRefs: clone(targetRefs) };
+      });
+      return {
+        ...proposal,
+        origin,
+        requestId: proposal.requestId ?? artifact?.requestId ?? null,
+        acceptanceCriteria,
+      };
+    }),
   };
-  if (['2.0.0', '2.1.0', '2.2.0'].includes(incoming.schemaVersion)) migrated.proposals = incoming.proposals || [];
   validateAnalysis(migrated);
   return migrated;
 }
@@ -1120,6 +1348,7 @@ module.exports = {
   validateAnalysis,
   validateApprovedTarget,
   validateArchitectureGate,
+  validateContractGate,
   validateAgentClaim,
   validateAgentArtifact,
   validateAgentRun,

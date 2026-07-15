@@ -20,12 +20,14 @@ const POSTURE_LABELS = {
   blocked: '当前阻断',
 };
 
-function ViewerField({ label, value, multiline, tone }) {
+function ViewerField({ label, value, multiline, tone, format = 'text' }) {
   const text = value === null || value === undefined || value === '' ? '未说明' : String(value);
   return (
     <div className={`viewer-field ${multiline ? 'is-multiline' : ''} ${tone ? `tone-${tone}` : ''}`}>
       <span>{label}</span>
-      <p>{text}</p>
+      {format === 'tags' && Array.isArray(value)
+        ? <p className="viewer-field-tags">{value.map((item) => <em key={item}>{item}</em>)}</p>
+        : <p>{text}</p>}
     </div>
   );
 }
@@ -171,6 +173,7 @@ export default function ViewerDetailPanel({
                 value={selectedNode.data?.[field.key]}
                 multiline={field.multiline}
                 tone={field.tone}
+                format={field.format}
               />
               ))}
             <section className="relations-list">

@@ -16,7 +16,7 @@ function readJson(relativePath) {
 test('bundled AI coding skills have a safe public catalog and existing instructions', () => {
   const catalog = readSkillCatalog(path.join(ROOT, 'skills'));
   assert.equal(catalog.schemaVersion, '1.0.0');
-  assert.equal(catalog.protocolVersion, '1.2.0');
+  assert.equal(catalog.protocolVersion, '1.3.0');
   assert.deepEqual(catalog.skills.map((skill) => skill.id), [
     'architecture-discovery',
     'architecture-change-plan',
@@ -32,8 +32,8 @@ test('bundled AI coding skills have a safe public catalog and existing instructi
 test('canonical exchange manifest and JSON Schema are parseable and cover all artifact types', () => {
   const manifest = readJson('protocol/manifest.json');
   const schema = readJson('protocol/ai-coding-exchange.schema.json');
-  assert.equal(manifest.schemaVersion, '1.2.0');
-  assert.equal(manifest.protocolVersion, '1.2.0');
+  assert.equal(manifest.schemaVersion, '1.3.0');
+  assert.equal(manifest.protocolVersion, '1.3.0');
   assert.equal(schema.$schema, 'https://json-schema.org/draft/2020-12/schema');
   assert.deepEqual(manifest.artifacts.map((artifact) => artifact.type).sort(), [
     'architecture-proposal',
@@ -96,10 +96,11 @@ test('exchange protocol distinguishes discussion decisions from file facts and r
   assert.deepEqual(validateExchangeArtifact(legacy), legacy);
 });
 
-test('protocol 1.2 binds implementation reports to a formal target and snapshot artifact while legacy reports stay readable', () => {
+test('protocol 1.3 binds implementation reports to a formal contract and snapshot while legacy reports stay readable', () => {
   const report = readJson('skills/implementation-reconcile/assets/implementation-report.template.json');
-  assert.equal(report.schemaVersion, '1.2.0');
-  assert.equal(report.approvedTarget.status, 'formal-baseline');
+  assert.equal(report.schemaVersion, '1.3.0');
+  assert.equal(report.approvedTarget.status, 'executable-formal-baseline');
+  assert.match(report.approvedTarget.contractHash, /^[a-f0-9]{64}$/);
   assert.equal(report.resultingSnapshotArtifactId, 'snapshot-after-implementation');
   assert.equal('approvedProposalId' in report, false);
   assert.equal('resultingSnapshot' in report, false);
@@ -111,6 +112,11 @@ test('protocol 1.2 binds implementation reports to a formal target and snapshot 
   delete legacy.resultingSnapshotArtifactId;
   legacy.approvedProposalId = 'proposal-legacy';
   legacy.resultingSnapshot = 'architecture-snapshot.json';
+  legacy.acceptanceResults[0] = {
+    criterion: 'The legacy approved behavior is implemented.',
+    status: 'unverified',
+    evidenceIds: [],
+  };
   assert.doesNotThrow(() => validateExchangeArtifact(legacy));
 });
 
@@ -124,7 +130,7 @@ test('complete implementation reports require observed passing checks and satisf
   assert.throws(() => validateExchangeArtifact(report), /acceptance criterion/);
 
   report.acceptanceResults[0] = {
-    criterion: 'The approved behavior is implemented.',
+    criterionId: 'criterion-replace-me',
     status: 'satisfied',
     evidenceIds: ['evidence-replace-me'],
   };

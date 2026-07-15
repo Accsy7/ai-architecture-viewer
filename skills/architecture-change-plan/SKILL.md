@@ -10,12 +10,12 @@ Convert user intent and available evidence into a small, decision-ready target a
 ## Workflow
 
 1. When AI Architecture Viewer MCP tools are available, call `get_project_context` for the target view and `get_approved_target`, then call `create_agent_run` with task type `architecture-change-plan` and view `target`. Retain the returned run ID.
-2. Read the user goal, constraints, exclusions, latest published target, explicitly confirmed discussion conclusions, and any authorized Markdown design materials. Do not require repository code for a concept project.
+2. Read the user goal, constraints, exclusions, latest published target, explicitly confirmed discussion conclusions, and the document index. Use `read_project_document` with `documentId` and an optional exact heading for registered Markdown; do not require repository code for a concept project or read every document by default.
 3. Ask only for missing decisions that would materially change scope, safety, data handling, or acceptance.
 4. Create up to three viable options. State advantages, disadvantages, migration impact, and important unknowns.
 5. Recommend one option, but keep the recommendation separate from the user's approval.
 6. Express the recommended option as basis-backed node and edge changes. Do not include coordinates, layout, branding, or manual-confirmation fields.
-7. Define observable acceptance criteria and explicit non-goals.
+7. Define observable acceptance criteria with stable IDs and explicit node/edge target references, plus explicit non-goals. These criteria become the development contract only after the user publishes the accepted target draft.
 8. Write the artifacts under `ai-coding/plans/<request-id>/`:
    - `task-request.json`
    - `architecture-proposal.json`
@@ -28,7 +28,8 @@ Convert user intent and available evidence into a small, decision-ready target a
 - Read [references/output-contract.md](references/output-contract.md) before writing artifacts.
 - Start from the JSON files in [assets](assets) when useful.
 - Link every proposed change to one or more basis entries. Use `user-confirmed` for an explicit user decision, `design-document` for an authorized file, `code-fact` for observed implementation, and `agent-inference` for an unconfirmed conclusion.
-- Use `sourceKind: discussion` only with `user-confirmed` or `agent-inference`. Use `sourceKind: workspace-file` with a relative path, line range, and SHA-256 hash for Markdown or code.
+- Use `sourceKind: discussion` only with `user-confirmed` or `agent-inference`. Prefer `sourceKind: project-document` with `documentId`, optional exact `section`, and the hash returned by `read_project_document` for registered Markdown. Use `sourceKind: workspace-file` only for files inside the configured code workspace.
+- A registered project document may use `design-document` or an explicitly `user-confirmed` target basis, but never `code-fact`. Bind relevant document IDs to proposed nodes through `documentRefs`.
 - Never describe discussion conclusions, design documents, or agent inference as current implemented architecture. They support the target design only.
 - Keep code execution, file mutation, deployment, and publication outside this skill.
 - Never mark the proposal approved. User acceptance writes only a draft; publication is a separate human-only action in the viewer.

@@ -8,6 +8,10 @@ const path = require('node:path');
 const test = require('node:test');
 const { createServer } = require('../server.js');
 const { ANALYSIS_SCHEMA_VERSION } = require('../schema/analysis-contract.cjs');
+const {
+  DEVELOPMENT_CONTRACT_SCHEMA_VERSION,
+  migrateLegacyState,
+} = require('../schema/state-contract.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
 const V2_STATE = path.join(__dirname, 'fixtures', 'generic-state-v2.json');
@@ -17,6 +21,90 @@ const NOW = '2020-01-01T00:00:00.000Z';
 
 function hash(content) {
   return crypto.createHash('sha256').update(content, 'utf8').digest('hex');
+}
+
+function canonicalize(value) {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalize(value[key])]));
+}
+
+function hashJson(value) {
+  return hash(JSON.stringify(canonicalize(value)));
+}
+
+function semanticGraphHash(revision) {
+  const nodeFields = [
+    'name', 'group', 'purpose', 'technical', 'product', 'authorization', 'horizon',
+    'focus', 'buildStrategy', 'aiCollaboration', 'relatedDiagramId', 'relatedNodeId',
+    'documentRefs', 'interactionModes', 'architectureLayer',
+  ];
+  const edgeFields = ['label', 'relationType', 'controlledBoundaryPosture'];
+  const pick = (value, fields) => Object.fromEntries(fields
+    .filter((field) => value[field] !== undefined)
+    .map((field) => [field, value[field]]));
+  return hashJson({
+    nodes: revision.graph.nodes.map((node) => ({
+      id: node.id,
+      ...(node.type ? { type: node.type } : {}),
+      data: pick(node.data, nodeFields),
+    })).sort((left, right) => left.id.localeCompare(right.id)),
+    edges: revision.graph.edges.map((edge) => ({
+      id: edge.id,
+      source: edge.source,
+      target: edge.target,
+      data: pick(edge.data, edgeFields),
+    })).sort((left, right) => left.id.localeCompare(right.id)),
+  });
+}
+
+function executableContract(revision) {
+  const targetRefs = [
+    ...revision.graph.nodes.map((node) => ({ targetType: 'node', targetId: node.id })),
+    ...revision.graph.edges.map((edge) => ({ targetType: 'edge', targetId: edge.id })),
+  ].sort((left, right) => `${left.targetType}:${left.targetId}`.localeCompare(`${right.targetType}:${right.targetId}`));
+  const boundaryRefs = [
+    ...revision.graph.nodes.map((node) => ({
+      targetType: 'node', targetId: node.id, field: 'authorization', value: node.data.authorization,
+    })),
+    ...revision.graph.edges.map((edge) => ({
+      targetType: 'edge', targetId: edge.id, field: 'controlledBoundaryPosture', value: edge.data.controlledBoundaryPosture,
+    })),
+  ].sort((left, right) => `${left.targetType}:${left.targetId}:${left.field}`.localeCompare(`${right.targetType}:${right.targetId}:${right.field}`));
+  const contract = {
+    schemaVersion: DEVELOPMENT_CONTRACT_SCHEMA_VERSION,
+    status: 'executable',
+    contractId: `contract-${revision.revisionId}`,
+    target: {
+      revision: revision.revision,
+      revisionId: revision.revisionId,
+      semanticHash: semanticGraphHash(revision),
+    },
+    source: { proposalId: 'proposal-approved-target', requestId: 'request-approved-target', artifactId: null, runId: null },
+    acceptanceCriteria: [
+      {
+        id: 'criterion-formal-target-aligned',
+        statement: 'The implementation is reconciled with the published formal target.',
+        targetRefs,
+      },
+      {
+        id: 'criterion-boundaries-preserved',
+        statement: 'The implementation preserves the published permission and controlled-boundary semantics.',
+        targetRefs,
+      },
+    ],
+    targetRefs,
+    boundaryRefs,
+    documents: [],
+    frozenAt: '2026-07-14T00:00:00.000Z',
+    frozenBy: 'user',
+    contractHash: null,
+    documentSetHash: hashJson([]),
+    executionReason: null,
+  };
+  const { contractHash: ignored, ...content } = contract;
+  contract.contractHash = hashJson(content);
+  return contract;
 }
 
 function createFixture({
@@ -36,6 +124,7 @@ function createFixture({
   const staticRoot = path.join(projectRoot, 'dist');
   const sourceFile = path.join(workspaceRoot, 'src', 'service.js');
   const designFile = path.join(workspaceRoot, 'docs', 'target-design.md');
+  const registeredDocumentFile = path.join(projectRoot, 'documents', 'registered-target.md');
   const sourceContent = [
     'export function evaluateEvidence(candidate) {',
     '  return candidate.citations.length > 0;',
@@ -56,13 +145,37 @@ function createFixture({
       state.target.published.graph.nodes.forEach((node) => { node.data.horizon = '近期'; });
       state.target.draft = null;
     }
-    fs.writeFileSync(stateFile, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+    const canonical = migrateLegacyState(state);
+    if (targetFromCurrent) canonical.target.published.developmentContract = executableContract(canonical.target.published);
+    fs.writeFileSync(stateFile, `${JSON.stringify(canonical, null, 2)}\n`, 'utf8');
   }
   fs.copyFileSync(DEMO_CONFIG, configFile);
   fs.copyFileSync(DEMO_DOCUMENTS, documentsFile);
   if (!withoutCodeRepository) fs.writeFileSync(sourceFile, sourceContent, 'utf8');
   const designContent = '# Target design\n\nThe target needs a human-governed architecture decision boundary.\n';
   fs.writeFileSync(designFile, designContent, 'utf8');
+  const registeredDocumentContent = [
+    '# Registered target design',
+    '',
+    '## Human boundary',
+    '',
+    'The user directly controls approval and publication of the target architecture.',
+  ].join('\n');
+  fs.mkdirSync(path.dirname(registeredDocumentFile), { recursive: true });
+  fs.writeFileSync(registeredDocumentFile, registeredDocumentContent, 'utf8');
+  const registry = JSON.parse(fs.readFileSync(documentsFile, 'utf8'));
+  registry.documents.push({
+    id: 'registered-target-design',
+    title: 'Registered target design',
+    type: 'target_design',
+    status: 'active',
+    authority: 'source_of_truth',
+    path: 'documents/registered-target.md',
+    summary: 'The registered target design used by contract and evidence tests.',
+    supersedes: null,
+    lastVerifiedAt: '2026-07-15T00:00:00.000Z',
+  });
+  fs.writeFileSync(documentsFile, `${JSON.stringify(registry, null, 2)}\n`, 'utf8');
   fs.writeFileSync(path.join(staticRoot, 'index.html'), '<!doctype html><div id="root"></div>', 'utf8');
   return {
     projectRoot, workspaceRoot, stateFile, analysisFile, configFile, documentsFile, staticRoot,
@@ -70,6 +183,8 @@ function createFixture({
     sourceContent,
     designFile,
     designContent,
+    registeredDocumentFile,
+    registeredDocumentContent,
   };
 }
 
@@ -241,6 +356,43 @@ function designEvidenceManifest(designContent) {
   };
 }
 
+function registeredDocumentEvidenceManifest(contentHash) {
+  return {
+    schemaVersion: '1.3.0',
+    artifactType: 'evidence-manifest',
+    artifactId: 'evidence-registered-design-manifest',
+    createdAt: NOW,
+    projectRevision: { kind: 'workspace', value: 'concept-registered-document' },
+    entries: [{
+      id: 'evidence-registered-target-boundary',
+      sourceKind: 'project-document',
+      basis: 'design-document',
+      documentId: 'registered-target-design',
+      section: 'Human boundary',
+      summary: 'The registered design assigns approval and publication to the user.',
+      contentHash,
+    }],
+  };
+}
+
+function registeredDocumentProposal() {
+  const proposal = conceptProposal({
+    artifactId: 'proposal-registered-document-target',
+    evidenceId: 'evidence-registered-target-boundary',
+  });
+  proposal.schemaVersion = '1.3.0';
+  proposal.requestId = 'request-registered-document-target';
+  proposal.changes[0].patch.data.documentRefs = ['registered-target-design'];
+  proposal.changes[0].patch.data.interactionModes = ['human-ui', 'system-service'];
+  proposal.changes[0].patch.data.architectureLayer = 'application-layer';
+  proposal.acceptanceCriteria = [{
+    id: 'criterion-human-boundary-visible',
+    statement: 'The published target exposes a user-controlled decision boundary.',
+    targetRefs: [{ targetType: 'node', targetId: 'human-decision-boundary' }],
+  }];
+  return proposal;
+}
+
 function implementationReport() {
   return {
     schemaVersion: '1.0.0',
@@ -272,7 +424,7 @@ function implementationReport() {
 
 function implementationEvidenceManifest(sourceContent, overrides = {}) {
   return {
-    schemaVersion: '1.2.0',
+    schemaVersion: '1.3.0',
     artifactType: 'evidence-manifest',
     artifactId: overrides.artifactId || 'evidence-implementation-v12',
     createdAt: NOW,
@@ -310,7 +462,7 @@ function implementationSnapshot(formalArchitecture, overrides = {}) {
     evidenceIds: ['evidence-service-behavior'],
   }));
   return {
-    schemaVersion: '1.2.0',
+    schemaVersion: '1.3.0',
     artifactType: 'architecture-snapshot',
     artifactId: overrides.artifactId || 'snapshot-implementation-v12',
     createdAt: NOW,
@@ -329,7 +481,7 @@ function implementationSnapshot(formalArchitecture, overrides = {}) {
 
 function implementationReportV12(run, snapshot, overrides = {}) {
   return {
-    schemaVersion: '1.2.0',
+    schemaVersion: '1.3.0',
     artifactType: 'implementation-report',
     artifactId: overrides.artifactId || 'report-implementation-v12',
     createdAt: NOW,
@@ -339,11 +491,18 @@ function implementationReportV12(run, snapshot, overrides = {}) {
     resultingRevision: structuredClone(snapshot.project.revision),
     changedFiles: ['src/service.js'],
     tests: overrides.tests || [{ command: 'npm test', outcome: 'passed', summary: 'All observed checks passed.' }],
-    acceptanceResults: overrides.acceptanceResults || [{
-      criterion: 'The implementation is reconciled with the published formal target.',
-      status: 'satisfied',
-      evidenceIds: ['evidence-service-behavior'],
-    }],
+    acceptanceResults: overrides.acceptanceResults || [
+      {
+        criterionId: 'criterion-formal-target-aligned',
+        status: 'satisfied',
+        evidenceIds: ['evidence-service-behavior'],
+      },
+      {
+        criterionId: 'criterion-boundaries-preserved',
+        status: 'satisfied',
+        evidenceIds: ['evidence-service-behavior'],
+      },
+    ],
     drift: overrides.drift || [],
     unresolved: overrides.unresolved || [],
     evidenceManifest: 'evidence-manifest.json',
@@ -366,6 +525,21 @@ function advanceFormalTarget(stateFile) {
     publishedAt: '2026-07-15T00:00:00.000Z',
     publishedBy: 'user',
   };
+  state.target.published.developmentContract = executableContract(state.target.published);
+  fs.writeFileSync(stateFile, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+}
+
+function advanceFormalTargetWithDifferentCriteria(stateFile) {
+  advanceFormalTarget(stateFile);
+  const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+  const contract = state.target.published.developmentContract;
+  contract.acceptanceCriteria = [{
+    id: 'criterion-replacement-baseline',
+    statement: 'The replacement formal target satisfies its newly published observable outcome.',
+    targetRefs: structuredClone(contract.targetRefs),
+  }];
+  const { contractHash: ignored, ...content } = contract;
+  contract.contractHash = hashJson(content);
   fs.writeFileSync(stateFile, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
 }
 
@@ -405,6 +579,7 @@ test('agent APIs expose local context without a model provider or approval capab
   assert.equal(context.response.status, 200, JSON.stringify(context.payload));
   assert.equal(context.payload.workflow.createRunFirst, true);
   assert.equal(context.payload.workflow.implementationHumanReviewRequired, true);
+  assert.equal(context.payload.workflow.serverComputedContractGate, true);
   assert.equal(context.payload.workflow.agentCanReview, false);
   assert.equal(context.payload.workflow.agentCanApprove, false);
   assert.equal(context.payload.workflow.agentCanPublish, false);
@@ -412,6 +587,7 @@ test('agent APIs expose local context without a model provider or approval capab
   assert.equal(context.payload.selected.published.representation, 'semantic-graph-v1');
   assert.equal(context.payload.selected.published.graph.nodes[0].position, undefined);
   assert.equal(context.payload.selected.published.graph.nodes[0].width, undefined);
+  assert.equal(Object.hasOwn(context.payload.selected, 'baselineStatus'), false);
   assert.deepEqual(context.payload.workflow.supportedEvidenceBases, [
     'user-confirmed', 'design-document', 'code-fact', 'agent-inference',
   ]);
@@ -421,6 +597,7 @@ test('agent APIs expose local context without a model provider or approval capab
   assert.equal(analysis.payload.integration.mode, 'external-agent');
   assert.equal(analysis.payload.integration.modelProviderRequired, false);
   assert.equal(analysis.payload.integration.implementationHumanReviewRequired, true);
+  assert.equal(analysis.payload.integration.serverComputedContractGate, true);
   assert.equal(analysis.payload.integration.agentCanReview, false);
   assert.equal(Object.hasOwn(analysis.payload, 'provider'), false);
 });
@@ -531,7 +708,8 @@ test('a concept project can complete the target-proposal loop from user-confirme
 
   const formalTargetBeforePublish = await request(fixture.baseUrl, '/api/agent/approved-target');
   assert.equal(formalTargetBeforePublish.payload.approvalStatus, 'published-target');
-  assert.equal(formalTargetBeforePublish.payload.baselineStatus, 'formal-baseline');
+  assert.equal(formalTargetBeforePublish.payload.baselineStatus, 'legacy-unbound');
+  assert.equal(formalTargetBeforePublish.payload.formalBaseline, null);
   assert.equal(formalTargetBeforePublish.payload.architecture.revisionId, accepted.payload.lane.published.revisionId);
   assert.equal(formalTargetBeforePublish.payload.architecture.graph.nodes.length, 0);
   assert.equal('approvedProposalIds' in formalTargetBeforePublish.payload, false);
@@ -558,7 +736,9 @@ test('a concept project can complete the target-proposal loop from user-confirme
 
   const approvedTarget = await request(fixture.baseUrl, '/api/agent/approved-target');
   assert.equal(approvedTarget.payload.approvalStatus, 'published-target');
-  assert.equal(approvedTarget.payload.baselineStatus, 'formal-baseline');
+  assert.equal(approvedTarget.payload.baselineStatus, 'executable-formal-baseline');
+  assert.equal(approvedTarget.payload.formalBaseline.status, 'executable-formal-baseline');
+  assert.equal(approvedTarget.payload.developmentContract.acceptanceCriteria[0].statement, 'The target shows a human-controlled decision boundary.');
   assert.equal(approvedTarget.payload.architecture.graph.nodes[0].id, 'human-decision-boundary');
   assert.equal(approvedTarget.payload.architecture.graph.nodes[0].data.authorization, 'Only the user may approve and publish.');
   assert.equal(JSON.stringify(approvedTarget.payload.architecture).includes('position'), false);
@@ -587,6 +767,196 @@ test('a Markdown design can support a target proposal without any code repositor
   assert.equal(proposal.evidence[0].basis, 'design-document');
   assert.equal(proposal.evidence[0].sourceKind, 'workspace-file');
   assert.equal(proposal.evidence[0].path, 'docs/target-design.md');
+});
+
+test('registered project documents bind a published contract by ID and hash without becoming code facts', async (t) => {
+  const fixture = await startFixture(t, { separateWorkspace: true, clearTargetDraft: true });
+  const preview = await request(
+    fixture.baseUrl,
+    '/api/documents/registered-target-design/preview?section=Human%20boundary',
+  );
+  assert.equal(preview.response.status, 200, JSON.stringify(preview.payload));
+  assert.equal(preview.payload.documentId, 'registered-target-design');
+  assert.match(preview.payload.contentHash, /^[a-f0-9]{64}$/);
+  assert.match(preview.payload.content, /user directly controls approval/i);
+
+  const targetRun = await createRun(fixture.baseUrl, {
+    view: 'target',
+    summary: 'Create a target from a registered project document.',
+  });
+  const manifest = registeredDocumentEvidenceManifest(preview.payload.contentHash);
+  const submitted = await request(fixture.baseUrl, `/api/agent/runs/${targetRun.id}/artifacts`, {
+    method: 'POST',
+    body: body({ artifact: registeredDocumentProposal(), evidenceManifest: manifest }),
+  });
+  assert.equal(submitted.response.status, 201, JSON.stringify(submitted.payload));
+
+  const analysis = await request(fixture.baseUrl, '/api/analysis');
+  const evidence = analysis.payload.evidence.find((item) => item.id === 'evidence-registered-target-boundary');
+  assert.equal(evidence.sourceKind, 'project-document');
+  assert.equal(evidence.documentId, 'registered-target-design');
+  assert.equal(evidence.section, 'Human boundary');
+  assert.equal(evidence.path, null);
+
+  const accepted = await request(fixture.baseUrl, '/api/analysis/proposals/proposal-registered-document-target/accept', {
+    method: 'POST',
+    body: body({
+      schemaVersion: ANALYSIS_SCHEMA_VERSION,
+      baseRevision: analysis.payload.baseRevision,
+      userConfirmed: true,
+    }),
+  });
+  assert.equal(accepted.response.status, 200, JSON.stringify(accepted.payload));
+  assert.equal(accepted.payload.lane.draft.developmentContract.status, 'draft');
+  assert.equal(accepted.payload.lane.draft.developmentContract.documents[0].id, 'registered-target-design');
+  assert.equal(accepted.payload.lane.draft.developmentContract.acceptanceCriteria[0].id, 'criterion-human-boundary-visible');
+
+  const lane = accepted.payload.lane;
+  const published = await request(fixture.baseUrl, '/api/publish?view=target', {
+    method: 'POST',
+    body: body({
+      schemaVersion: lane.schemaVersion,
+      expectedHeadRevision: lane.published.revision,
+      expectedHeadRevisionId: lane.published.revisionId,
+      expectedDraftId: lane.draft.draftId,
+      expectedDraftRevision: lane.draft.draftRevision,
+      message: 'Freeze registered target contract',
+      userConfirmed: true,
+    }),
+  });
+  assert.equal(published.response.status, 200, JSON.stringify(published.payload));
+  assert.equal(published.payload.published.developmentContract.status, 'executable');
+
+  const approved = await request(fixture.baseUrl, '/api/agent/approved-target');
+  assert.equal(approved.payload.baselineStatus, 'executable-formal-baseline');
+  assert.equal(approved.payload.developmentContract.documents[0].contentHash, preview.payload.fullContentHash);
+  const compactNode = approved.payload.architecture.graph.nodes.find((node) => node.id === 'human-decision-boundary');
+  assert.deepEqual(compactNode.data.documentRefs, ['registered-target-design']);
+  assert.deepEqual(compactNode.data.interactionModes, ['human-ui', 'system-service']);
+  assert.equal(compactNode.data.architectureLayer, 'application-layer');
+
+  const implementationRun = await createRun(fixture.baseUrl, {
+    taskType: 'implementation-reconcile',
+    view: 'current',
+    summary: 'Lock the published contract and its registered document.',
+  });
+  assert.equal(implementationRun.approvedTarget.contractHash, approved.payload.formalBaseline.contractHash);
+  fs.appendFileSync(fixture.registeredDocumentFile, '\nThe contract text changed after the run lock.\n', 'utf8');
+  const staleSnapshot = implementationSnapshot(approved.payload.architecture, { artifactId: 'snapshot-stale-document' });
+  const stale = await request(fixture.baseUrl, `/api/agent/runs/${implementationRun.id}/artifacts`, {
+    method: 'POST',
+    body: body({ artifact: staleSnapshot, evidenceManifest: implementationEvidenceManifest(fixture.sourceContent) }),
+  });
+  assert.equal(stale.response.status, 409);
+  assert.equal(stale.payload.code, 'AGENT_BOUND_DOCUMENT_STALE');
+
+  const currentRun = await createRun(fixture.baseUrl, {
+    taskType: 'architecture-change-plan',
+    view: 'current',
+    summary: 'A registered design must not prove current implementation.',
+  });
+  const forbidden = await request(fixture.baseUrl, `/api/agent/runs/${currentRun.id}/artifacts`, {
+    method: 'POST',
+    body: body({ artifact: registeredDocumentProposal(), evidenceManifest: manifest }),
+  });
+  assert.equal(forbidden.response.status, 422);
+  assert.equal(forbidden.payload.code, 'AGENT_EVIDENCE_BASIS_FORBIDDEN');
+
+  fs.writeFileSync(fixture.registeredDocumentFile, fixture.registeredDocumentContent, 'utf8');
+  const originalRegistry = JSON.parse(fs.readFileSync(fixture.documentsFile, 'utf8'));
+  const registeredIndex = originalRegistry.documents.findIndex((item) => item.id === 'registered-target-design');
+  const verificationOnlyRegistry = structuredClone(originalRegistry);
+  verificationOnlyRegistry.documents[registeredIndex].lastVerifiedAt = '2030-01-01T00:00:00.000Z';
+  fs.writeFileSync(fixture.documentsFile, `${JSON.stringify(verificationOnlyRegistry, null, 2)}\n`, 'utf8');
+  const stillExecutable = await request(fixture.baseUrl, '/api/agent/approved-target');
+  assert.equal(stillExecutable.payload.baselineStatus, 'executable-formal-baseline');
+
+  const copiedDocumentPath = path.join(fixture.projectRoot, 'documents', 'registered-target-copy.md');
+  fs.copyFileSync(fixture.registeredDocumentFile, copiedDocumentPath);
+  const bindingMutations = [
+    ['archived', (document) => { document.status = 'archived'; }],
+    ['superseded', (document) => { document.status = 'superseded'; }],
+    ['authority', (document) => { document.authority = 'supporting'; }],
+    ['path', (document) => { document.path = 'documents/registered-target-copy.md'; }],
+  ];
+  for (const [label, mutate] of bindingMutations) {
+    const changedRegistry = structuredClone(originalRegistry);
+    mutate(changedRegistry.documents[registeredIndex]);
+    fs.writeFileSync(fixture.documentsFile, `${JSON.stringify(changedRegistry, null, 2)}\n`, 'utf8');
+    const staleTarget = await request(fixture.baseUrl, '/api/agent/approved-target');
+    assert.equal(staleTarget.payload.baselineStatus, 'stale-formal-contract', label);
+    assert.equal(staleTarget.payload.executionIssue.code, 'AGENT_BOUND_DOCUMENT_STALE', label);
+
+    const metadataStale = await request(fixture.baseUrl, `/api/agent/runs/${implementationRun.id}/artifacts`, {
+      method: 'POST',
+      body: body({
+        artifact: implementationSnapshot(approved.payload.architecture, { artifactId: `snapshot-stale-${label}` }),
+        evidenceManifest: implementationEvidenceManifest(fixture.sourceContent),
+      }),
+    });
+    assert.equal(metadataStale.response.status, 409, label);
+    assert.equal(metadataStale.payload.code, 'AGENT_BOUND_DOCUMENT_STALE', label);
+  }
+  fs.writeFileSync(fixture.documentsFile, `${JSON.stringify(originalRegistry, null, 2)}\n`, 'utf8');
+});
+
+test('directly tampering with a published target graph invalidates its frozen contract and old run', async (t) => {
+  const fixture = await startFixture(t, { targetFromCurrent: true });
+  const approved = await request(fixture.baseUrl, '/api/agent/approved-target');
+  assert.equal(approved.payload.baselineStatus, 'executable-formal-baseline');
+  assert.equal(
+    approved.payload.developmentContract.target.semanticHash,
+    approved.payload.formalBaseline.semanticHash,
+  );
+  const run = await createRun(fixture.baseUrl, {
+    taskType: 'implementation-reconcile',
+    view: 'current',
+    summary: 'Lock the published target before a direct-file tamper attempt.',
+  });
+
+  const state = JSON.parse(fs.readFileSync(fixture.stateFile, 'utf8'));
+  state.target.published.graph.nodes[0].data.purpose = 'This responsibility was changed outside the publication workflow.';
+  fs.writeFileSync(fixture.stateFile, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+
+  const invalidTarget = await request(fixture.baseUrl, '/api/agent/approved-target');
+  assert.equal(invalidTarget.response.status, 200);
+  assert.equal(invalidTarget.payload.baselineStatus, 'stale-formal-contract');
+  assert.equal(invalidTarget.payload.formalBaseline, null);
+  assert.equal(invalidTarget.payload.executionIssue.code, 'AGENT_TARGET_CONTRACT_INVALID');
+  const invalidContext = await request(fixture.baseUrl, '/api/agent/context?view=target');
+  assert.equal(invalidContext.response.status, 200);
+  assert.equal(invalidContext.payload.selected.baselineStatus, invalidTarget.payload.baselineStatus);
+  assert.equal(invalidContext.payload.selected.formalBaseline, null);
+  assert.equal(
+    invalidContext.payload.selected.executionIssue.code,
+    invalidTarget.payload.executionIssue.code,
+  );
+
+  const staleSnapshot = implementationSnapshot(approved.payload.architecture, {
+    artifactId: 'snapshot-after-target-graph-tamper',
+  });
+  const staleSubmission = await request(fixture.baseUrl, `/api/agent/runs/${run.id}/artifacts`, {
+    method: 'POST',
+    body: body({
+      artifact: staleSnapshot,
+      evidenceManifest: implementationEvidenceManifest(fixture.sourceContent),
+    }),
+  });
+  assert.equal(staleSubmission.response.status, 409);
+  assert.equal(staleSubmission.payload.code, 'AGENT_TARGET_CONTRACT_INVALID');
+
+  const rejectedRun = await request(fixture.baseUrl, '/api/agent/runs', {
+    method: 'POST',
+    body: body({
+      agentName: 'Codex',
+      agentClient: 'codex',
+      taskType: 'implementation-reconcile',
+      view: 'current',
+      summary: 'A tampered target must not become a new implementation baseline.',
+    }),
+  });
+  assert.equal(rejectedRun.response.status, 409);
+  assert.equal(rejectedRun.payload.code, 'AGENT_TARGET_CONTRACT_INVALID');
 });
 
 test('discussion and design intent cannot be submitted as current implementation facts', async (t) => {
@@ -736,7 +1106,7 @@ test('an aligned implementation reaches human review but cannot complete itself'
     view: 'current',
     summary: 'Reconcile implemented code with the published formal target.',
   });
-  assert.equal(run.approvedTarget.status, 'formal-baseline');
+  assert.equal(run.approvedTarget.status, 'executable-formal-baseline');
   assert.equal(run.approvedTarget.diagramId, run.diagramId);
   assert.equal(run.approvedTarget.revision, 1);
   assert.equal(run.approvedTarget.revisionId, 'target-r1');
@@ -774,8 +1144,8 @@ test('an aligned implementation reaches human review but cannot complete itself'
     changedFileCount: 1,
     passedCheckCount: 1,
     failedCheckCount: 0,
-    acceptedCriterionCount: 1,
-    criterionCount: 1,
+    acceptedCriterionCount: 2,
+    criterionCount: 2,
     driftCount: 0,
     unresolvedCount: 0,
   });
@@ -786,16 +1156,35 @@ test('an aligned implementation reaches human review but cannot complete itself'
   });
   assert.equal(submitted.payload.run.architectureGate.status, 'aligned');
   assert.equal(submitted.payload.run.architectureGate.readyForHumanReview, true);
+  assert.equal(submitted.payload.run.contractGate.status, 'satisfied');
+  assert.deepEqual(submitted.payload.run.contractGate.counts, {
+    satisfied: 2,
+    unsatisfied: 0,
+    unverified: 0,
+  });
+  assert.equal(submitted.payload.run.contractGate.readyForAcceptance, true);
   assert.equal(submitted.payload.run.humanReview, null);
   assert.equal(submitted.payload.run.status, 'submitted');
   assert.equal(submitted.payload.permissions.requiresHumanReview, true);
+  assert.equal(submitted.payload.permissions.canAcceptImplementation, true);
   assert.equal(submitted.payload.permissions.agentCanReview, false);
   assert.equal('drift' in submitted.payload.run.architectureGate, false, 'default review response stays compact');
+  assert.equal('criteria' in submitted.payload.run.contractGate, false, 'default contract response stays compact');
 
-  const detailed = await request(fixture.baseUrl, `/api/agent/runs/${run.id}?details=architecture-gate`);
+  const detailed = await request(fixture.baseUrl, `/api/agent/runs/${run.id}?details=review-gates`);
   assert.equal(detailed.payload.run.architectureGate.status, 'aligned');
   assert.deepEqual(detailed.payload.run.architectureGate.drift, []);
   assert.equal(detailed.payload.run.architectureGate.crossCheck.matches, true);
+  assert.equal(detailed.payload.run.contractGate.status, 'satisfied');
+  assert.equal(detailed.payload.run.contractGate.criteria.length, 2);
+  assert.equal(
+    detailed.payload.run.contractGate.criteria[0].statement,
+    'The implementation is reconciled with the published formal target.',
+  );
+  assert.deepEqual(
+    detailed.payload.run.contractGate.criteria[0].targetRefs,
+    approved.payload.developmentContract.acceptanceCriteria[0].targetRefs,
+  );
 
   const analysisBeforeReview = await request(fixture.baseUrl, '/api/analysis');
   const unconfirmed = await request(fixture.baseUrl, `/api/analysis/runs/${run.id}/review`, {
@@ -827,8 +1216,258 @@ test('an aligned implementation reaches human review but cannot complete itself'
   const reviewStatus = await request(fixture.baseUrl, `/api/agent/runs/${run.id}`);
   assert.equal(reviewStatus.payload.run.agentClaim.status, 'complete');
   assert.equal(reviewStatus.payload.run.architectureGate.status, 'aligned');
+  assert.equal(reviewStatus.payload.run.contractGate.status, 'satisfied');
   assert.equal('drift' in reviewStatus.payload.run.architectureGate, false);
   assert.equal(reviewStatus.payload.run.humanReview.decision, 'accepted');
+});
+
+test('partial or contract-incomplete agent claims cannot be silently accepted as complete', async (t) => {
+  const fixture = await startFixture(t, { targetFromCurrent: true });
+  const approved = await request(fixture.baseUrl, '/api/agent/approved-target');
+  const cases = [
+    {
+      label: 'partial',
+      status: 'partial',
+      acceptanceResults: [
+        {
+          criterionId: 'criterion-formal-target-aligned',
+          status: 'satisfied',
+          evidenceIds: ['evidence-service-behavior'],
+        },
+        {
+          criterionId: 'criterion-boundaries-preserved',
+          status: 'satisfied',
+          evidenceIds: ['evidence-service-behavior'],
+        },
+      ],
+      expectedGateStatus: 'claim-incomplete',
+      expectedCounts: { satisfied: 2, unsatisfied: 0, unverified: 0 },
+    },
+    {
+      label: 'blocked',
+      status: 'blocked',
+      acceptanceResults: [
+        {
+          criterionId: 'criterion-formal-target-aligned',
+          status: 'unsatisfied',
+          evidenceIds: [],
+        },
+        {
+          criterionId: 'criterion-boundaries-preserved',
+          status: 'unverified',
+          evidenceIds: [],
+        },
+      ],
+      expectedGateStatus: 'criteria-unmet',
+      expectedCounts: { satisfied: 0, unsatisfied: 1, unverified: 1 },
+    },
+  ];
+
+  for (const item of cases) {
+    const run = await createRun(fixture.baseUrl, {
+      taskType: 'implementation-reconcile',
+      view: 'current',
+      summary: `Verify the ${item.label} contract gate.`,
+    });
+    const snapshot = implementationSnapshot(approved.payload.architecture, {
+      artifactId: `snapshot-contract-gate-${item.label}`,
+    });
+    const snapshotSubmitted = await request(fixture.baseUrl, `/api/agent/runs/${run.id}/artifacts`, {
+      method: 'POST',
+      body: body({
+        artifact: snapshot,
+        evidenceManifest: implementationEvidenceManifest(fixture.sourceContent, {
+          artifactId: `evidence-contract-gate-snapshot-${item.label}`,
+        }),
+      }),
+    });
+    assert.equal(snapshotSubmitted.response.status, 201, JSON.stringify(snapshotSubmitted.payload));
+
+    const report = implementationReportV12(run, snapshot, {
+      artifactId: `report-contract-gate-${item.label}`,
+      status: item.status,
+      acceptanceResults: item.acceptanceResults,
+      unresolved: item.status === 'blocked' ? ['The formal contract is not fulfilled.'] : [],
+    });
+    const submitted = await request(fixture.baseUrl, `/api/agent/runs/${run.id}/artifacts`, {
+      method: 'POST',
+      body: body({
+        artifact: report,
+        evidenceManifest: implementationEvidenceManifest(fixture.sourceContent, {
+          artifactId: `evidence-contract-gate-report-${item.label}`,
+        }),
+      }),
+    });
+    assert.equal(submitted.response.status, 201, JSON.stringify(submitted.payload));
+    assert.equal(submitted.payload.run.architectureGate.status, 'aligned');
+    assert.equal(submitted.payload.run.contractGate.status, item.expectedGateStatus);
+    assert.deepEqual(submitted.payload.run.contractGate.counts, item.expectedCounts);
+    assert.equal(submitted.payload.run.contractGate.readyForAcceptance, false);
+    assert.equal(submitted.payload.permissions.canAcceptImplementation, false);
+
+    const detailed = await request(fixture.baseUrl, `/api/agent/runs/${run.id}?details=contract-gate`);
+    assert.equal(detailed.payload.run.contractGate.criteria.length, 2);
+    assert.equal(
+      detailed.payload.run.contractGate.criteria[0].statement,
+      approved.payload.developmentContract.acceptanceCriteria[0].statement,
+    );
+    assert.deepEqual(
+      detailed.payload.run.contractGate.criteria.map((criterion) => criterion.status),
+      item.acceptanceResults.map((criterion) => criterion.status),
+    );
+
+    const accepted = await reviewImplementation(
+      fixture.baseUrl,
+      run.id,
+      'accepted',
+      'An aligned graph must not hide an incomplete formal development contract.',
+    );
+    assert.equal(accepted.response.status, 409, item.label);
+    assert.equal(accepted.payload.code, 'IMPLEMENTATION_CONTRACT_GATE_NOT_READY', item.label);
+    const afterRejectedAcceptance = await request(fixture.baseUrl, '/api/analysis');
+    assert.equal(
+      afterRejectedAcceptance.payload.runs.find((candidate) => candidate.id === run.id).humanReview,
+      null,
+    );
+
+    const revisionRequested = await reviewImplementation(
+      fixture.baseUrl,
+      run.id,
+      'revision-requested',
+      'Fulfil and verify every frozen acceptance criterion before acceptance.',
+    );
+    assert.equal(revisionRequested.response.status, 200, JSON.stringify(revisionRequested.payload));
+    const reviewedRun = revisionRequested.payload.runs.find((candidate) => candidate.id === run.id);
+    assert.equal(reviewedRun.humanReview.decision, 'revision-requested');
+  }
+});
+
+test('a readable legacy implementation run without a contract gate cannot be accepted', async (t) => {
+  const fixture = await startFixture(t, { targetFromCurrent: true });
+  const run = await createRun(fixture.baseUrl, {
+    taskType: 'implementation-reconcile',
+    view: 'current',
+  });
+  const approved = await request(fixture.baseUrl, '/api/agent/approved-target');
+  const snapshot = implementationSnapshot(approved.payload.architecture, {
+    artifactId: 'snapshot-legacy-contract-gate',
+  });
+  const snapshotSubmitted = await request(fixture.baseUrl, `/api/agent/runs/${run.id}/artifacts`, {
+    method: 'POST',
+    body: body({ artifact: snapshot, evidenceManifest: implementationEvidenceManifest(fixture.sourceContent) }),
+  });
+  assert.equal(snapshotSubmitted.response.status, 201, JSON.stringify(snapshotSubmitted.payload));
+  const report = implementationReportV12(run, snapshot, {
+    artifactId: 'report-legacy-contract-gate',
+    status: 'complete',
+  });
+  const reportSubmitted = await request(fixture.baseUrl, `/api/agent/runs/${run.id}/artifacts`, {
+    method: 'POST',
+    body: body({
+      artifact: report,
+      evidenceManifest: implementationEvidenceManifest(fixture.sourceContent, {
+        artifactId: 'evidence-report-legacy-contract-gate',
+      }),
+    }),
+  });
+  assert.equal(reportSubmitted.response.status, 201, JSON.stringify(reportSubmitted.payload));
+
+  const stored = JSON.parse(fs.readFileSync(fixture.analysisFile, 'utf8'));
+  stored.agentRuns.find((candidate) => candidate.id === run.id).contractGate = null;
+  fs.writeFileSync(fixture.analysisFile, `${JSON.stringify(stored, null, 2)}\n`, 'utf8');
+  const readable = await request(fixture.baseUrl, `/api/agent/runs/${run.id}`);
+  assert.equal(readable.response.status, 200, JSON.stringify(readable.payload));
+  assert.equal(readable.payload.run.contractGate, null);
+  assert.equal(readable.payload.permissions.canAcceptImplementation, false);
+
+  const accepted = await reviewImplementation(
+    fixture.baseUrl,
+    run.id,
+    'accepted',
+    'A legacy run without a formal contract gate must not be accepted.',
+  );
+  assert.equal(accepted.response.status, 409);
+  assert.equal(accepted.payload.code, 'IMPLEMENTATION_CONTRACT_GATE_REQUIRED');
+
+  const revisionRequested = await reviewImplementation(
+    fixture.baseUrl,
+    run.id,
+    'revision-requested',
+    'Create a new implementation run bound to the current formal contract.',
+  );
+  assert.equal(revisionRequested.response.status, 200, JSON.stringify(revisionRequested.payload));
+  const reviewedRun = revisionRequested.payload.runs.find((candidate) => candidate.id === run.id);
+  assert.equal(reviewedRun.humanReview.decision, 'revision-requested');
+});
+
+test('implementation acceptance results must exactly reference the frozen contract criteria', async (t) => {
+  const fixture = await startFixture(t, { targetFromCurrent: true });
+  const run = await createRun(fixture.baseUrl, {
+    taskType: 'implementation-reconcile',
+    view: 'current',
+  });
+  const approved = await request(fixture.baseUrl, '/api/agent/approved-target');
+  const snapshot = implementationSnapshot(approved.payload.architecture, { artifactId: 'snapshot-contract-criteria' });
+  const manifest = implementationEvidenceManifest(fixture.sourceContent, {
+    artifactId: 'evidence-contract-criteria',
+  });
+  const submittedSnapshot = await request(fixture.baseUrl, `/api/agent/runs/${run.id}/artifacts`, {
+    method: 'POST',
+    body: body({ artifact: snapshot, evidenceManifest: manifest }),
+  });
+  assert.equal(submittedSnapshot.response.status, 201, JSON.stringify(submittedSnapshot.payload));
+
+  const missingReport = implementationReportV12(run, snapshot, {
+    artifactId: 'report-missing-contract-criterion',
+    acceptanceResults: [{
+      criterionId: 'criterion-formal-target-aligned',
+      status: 'satisfied',
+      evidenceIds: ['evidence-service-behavior'],
+    }],
+  });
+  const missing = await request(fixture.baseUrl, `/api/agent/runs/${run.id}/artifacts`, {
+    method: 'POST',
+    body: body({ artifact: missingReport, evidenceManifest: manifest }),
+  });
+  assert.equal(missing.response.status, 422);
+  assert.equal(missing.payload.code, 'AGENT_ACCEPTANCE_CONTRACT_MISMATCH');
+  assert.deepEqual(missing.payload.details.missingCriterionIds, ['criterion-boundaries-preserved']);
+
+  const extraReport = implementationReportV12(run, snapshot, {
+    artifactId: 'report-extra-contract-criterion',
+  });
+  extraReport.acceptanceResults.push({
+    criterionId: 'criterion-agent-invented',
+    status: 'satisfied',
+    evidenceIds: ['evidence-service-behavior'],
+  });
+  const extra = await request(fixture.baseUrl, `/api/agent/runs/${run.id}/artifacts`, {
+    method: 'POST',
+    body: body({ artifact: extraReport, evidenceManifest: manifest }),
+  });
+  assert.equal(extra.response.status, 422);
+  assert.equal(extra.payload.code, 'AGENT_ACCEPTANCE_CONTRACT_MISMATCH');
+  assert.deepEqual(extra.payload.details.extraCriterionIds, ['criterion-agent-invented']);
+
+  const tamperedReport = implementationReportV12(run, snapshot, {
+    artifactId: 'report-tampered-contract-criterion',
+  });
+  tamperedReport.acceptanceResults[0].criterion = 'The agent rewrote the published criterion.';
+  const tampered = await request(fixture.baseUrl, `/api/agent/runs/${run.id}/artifacts`, {
+    method: 'POST',
+    body: body({ artifact: tamperedReport, evidenceManifest: manifest }),
+  });
+  assert.equal(tampered.response.status, 422);
+  assert.equal(tampered.payload.code, 'AI_CODING_ARTIFACT_INVALID');
+
+  const validReport = implementationReportV12(run, snapshot, { artifactId: 'report-exact-contract-criteria' });
+  const valid = await request(fixture.baseUrl, `/api/agent/runs/${run.id}/artifacts`, {
+    method: 'POST',
+    body: body({ artifact: validReport, evidenceManifest: manifest }),
+  });
+  assert.equal(valid.response.status, 201, JSON.stringify(valid.payload));
+  assert.equal(valid.payload.run.humanReview, null);
+  assert.equal(valid.payload.run.architectureGate.readyForHumanReview, true);
 });
 
 test('the architecture gate saves missing, extra, semantic, boundary, and unverified drift with agent explanations pending human judgment', async (t) => {
@@ -1031,6 +1670,57 @@ test('fully agent-described drift only becomes ready until a user explicitly acc
   );
 });
 
+test('human acceptance rejects an old implementation run after a different formal contract is published', async (t) => {
+  const fixture = await startFixture(t, { targetFromCurrent: true });
+  const run = await createRun(fixture.baseUrl, { taskType: 'implementation-reconcile', view: 'current' });
+  const approved = await request(fixture.baseUrl, '/api/agent/approved-target');
+  const snapshot = implementationSnapshot(approved.payload.architecture, {
+    artifactId: 'snapshot-stale-human-review-v12',
+  });
+  const snapshotSubmitted = await request(fixture.baseUrl, `/api/agent/runs/${run.id}/artifacts`, {
+    method: 'POST',
+    body: body({
+      artifact: snapshot,
+      evidenceManifest: implementationEvidenceManifest(fixture.sourceContent, {
+        artifactId: 'evidence-stale-human-review-snapshot',
+      }),
+    }),
+  });
+  assert.equal(snapshotSubmitted.response.status, 201, JSON.stringify(snapshotSubmitted.payload));
+
+  const reportSubmitted = await request(fixture.baseUrl, `/api/agent/runs/${run.id}/artifacts`, {
+    method: 'POST',
+    body: body({
+      artifact: implementationReportV12(run, snapshot, {
+        artifactId: 'report-stale-human-review-v12',
+        status: 'complete',
+      }),
+      evidenceManifest: implementationEvidenceManifest(fixture.sourceContent, {
+        artifactId: 'evidence-stale-human-review-report',
+      }),
+    }),
+  });
+  assert.equal(reportSubmitted.response.status, 201, JSON.stringify(reportSubmitted.payload));
+  assert.equal(reportSubmitted.payload.run.contractGate.readyForAcceptance, true);
+  assert.equal(reportSubmitted.payload.run.humanReview, null);
+
+  advanceFormalTargetWithDifferentCriteria(fixture.stateFile);
+  const accepted = await reviewImplementation(
+    fixture.baseUrl,
+    run.id,
+    'accepted',
+    'An old implementation run cannot be accepted against a newly published formal contract.',
+  );
+  assert.equal(accepted.response.status, 409, JSON.stringify(accepted.payload));
+  assert.equal(accepted.payload.code, 'AGENT_APPROVED_TARGET_STALE');
+  assert.equal(accepted.payload.details.expected.revisionId, 'target-r1');
+  assert.equal(accepted.payload.details.actual.revisionId, 'target-r2');
+
+  const analysis = await request(fixture.baseUrl, '/api/analysis');
+  const storedRun = analysis.payload.runs.find((item) => item.id === run.id);
+  assert.equal(storedRun.humanReview, null);
+});
+
 test('a local human rejection is traceable and never changes the formal target', async (t) => {
   const fixture = await startFixture(t, { targetFromCurrent: true });
   const run = await createRun(fixture.baseUrl, { taskType: 'implementation-reconcile', view: 'current' });
@@ -1154,7 +1844,7 @@ test('architecture snapshots become additive semantic diffs and never remove omi
   assert.equal(proposal.changes[0].targetId, 'processing-module');
 });
 
-test('approved target always exposes only the published formal baseline', async (t) => {
+test('approved target excludes an ordinary draft and marks a legacy published target non-executable', async (t) => {
   const fixture = await startFixture(t);
   const target = await request(fixture.baseUrl, '/api/state?view=target');
   assert.equal(target.response.status, 200);
@@ -1163,9 +1853,9 @@ test('approved target always exposes only the published formal baseline', async 
   const approved = await request(fixture.baseUrl, '/api/agent/approved-target');
   assert.equal(approved.response.status, 200);
   assert.equal(approved.payload.approvalStatus, 'published-target');
-  assert.equal(approved.payload.baselineStatus, 'formal-baseline');
-  assert.equal(approved.payload.formalBaseline.revisionId, target.payload.published.revisionId);
-  assert.match(approved.payload.formalBaseline.semanticHash, /^[a-f0-9]{64}$/);
+  assert.equal(approved.payload.baselineStatus, 'legacy-unbound');
+  assert.equal(approved.payload.formalBaseline, null);
+  assert.equal(approved.payload.developmentContract.status, 'legacy-unbound');
   assert.equal(approved.payload.architecture.revisionId, target.payload.published.revisionId);
   assert.deepEqual(
     approved.payload.architecture.graph.nodes.map((node) => node.id),
@@ -1173,6 +1863,18 @@ test('approved target always exposes only the published formal baseline', async 
   );
   assert.equal(approved.payload.architecture.representation, 'semantic-graph-v1');
   assert.equal(JSON.stringify(approved.payload.architecture).includes('position'), false);
+
+  const blockedRun = await request(fixture.baseUrl, '/api/agent/runs', {
+    method: 'POST',
+    body: body({
+      agentName: 'Codex',
+      agentClient: 'codex',
+      taskType: 'implementation-reconcile',
+      summary: 'Must not run against an unbound legacy target.',
+    }),
+  });
+  assert.equal(blockedRun.response.status, 409);
+  assert.equal(blockedRun.payload.code, 'AGENT_TARGET_NOT_EXECUTABLE');
 });
 
 test('agent evidence paths stay inside the repository and avoid sensitive directories', async (t) => {
@@ -1193,7 +1895,7 @@ test('skill catalog API exposes the three bundled workflows without absolute pat
   const fixture = await startFixture(t);
   const result = await request(fixture.baseUrl, '/api/skills');
   assert.equal(result.response.status, 200);
-  assert.equal(result.payload.protocolVersion, '1.2.0');
+  assert.equal(result.payload.protocolVersion, '1.3.0');
   assert.deepEqual(result.payload.skills.map((skill) => skill.id), [
     'architecture-discovery',
     'architecture-change-plan',

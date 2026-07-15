@@ -13,7 +13,7 @@ Create a factual current-state architecture package without modifying applicatio
 2. When AI Architecture Viewer MCP tools are available, call `get_project_context`, then call `create_agent_run` with task type `architecture-discovery`. Retain the returned run ID. If MCP is unavailable, continue with file artifacts and the CLI fallback below.
 3. Record the workspace revision. Prefer a commit identifier when available; otherwise use a stable workspace label and state that the tree is uncommitted.
 4. Inspect entry points, manifests, build and test configuration, runtime boundaries, modules, storage, external integrations, and human or authorization gates.
-5. Support every current-state node and edge with one or more `code-fact` evidence IDs. Put uncertain interpretations in assumptions or unknowns; they must not masquerade as implemented facts.
+5. Support every current-state node and edge with one or more `code-fact` evidence IDs. Preserve observed `interactionModes` and `architectureLayer` values instead of inferring them from diagram position. Put uncertain interpretations in assumptions or unknowns; they must not masquerade as implemented facts.
 6. Use repository-relative forward-slash paths. Never emit absolute paths, credentials, full secret values, or unapproved source bodies.
 7. Write the artifacts under `ai-coding/discovery/<run-id>/`:
    - `architecture-snapshot.json`

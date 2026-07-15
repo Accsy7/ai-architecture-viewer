@@ -349,6 +349,8 @@ body.is-resizing-inspector .workspace-resizer span { background: var(--green); }
 .viewer-field.tone-product > p { border-left-color: var(--amber); }
 .viewer-field.tone-authorization > p { border-left-color: var(--red); }
 .viewer-field.tone-ai > p { border-left-color: #7251b5; background: #f7f3ff; }
+.viewer-field > .viewer-field-tags { display: flex; min-height: 0; flex-wrap: wrap; gap: 6px; }
+.viewer-field-tags em { padding: 3px 7px; border: 1px solid #d7ded8; border-radius: 999px; color: #345143; background: #fff; font-size: 10px; font-style: normal; font-weight: 750; }
 
 .viewer-routing-note {
   margin-top: 16px !important;
@@ -493,6 +495,18 @@ body.is-resizing-inspector .workspace-resizer span { background: var(--green); }
 .publish-draft-dialog { width: min(620px, calc(100vw - 56px)); }
 .publish-diff-summary { display: flex; flex-wrap: wrap; gap: 6px; margin: 15px 0; }
 .publish-diff-summary span { padding: 5px 9px; border-radius: 999px; background: #edf2ee; font-size: 11px; font-weight: 750; }
+.publish-contract-preview { margin: 15px 0; padding: 13px 14px; border: 1px solid #d8dfd9; border-radius: 12px; background: #f7f9f6; }
+.publish-contract-preview.is-unbound { border-color: #e4c68a; background: #fff9ed; }
+.publish-contract-preview__heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.publish-contract-preview__heading strong { font-size: 13px; }
+.publish-contract-preview__heading span { padding: 4px 7px; border-radius: 999px; color: #345143; background: #e6efe8; font-size: 10px; font-weight: 800; }
+.publish-contract-preview.is-unbound .publish-contract-preview__heading span { color: #76551c; background: #f5e4b8; }
+.publish-contract-preview > p { margin-top: 5px; color: var(--muted); font-size: 11px; line-height: 1.55; }
+.publish-contract-list { display: grid; gap: 6px; margin: 10px 0 0; padding: 0; list-style: none; }
+.publish-contract-list li { display: grid; gap: 3px; padding: 8px 9px; border-radius: 8px; background: #fff; font-size: 11px; }
+.publish-contract-list code { color: var(--muted); font-size: 9px; }
+.publish-contract-documents { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.publish-contract-documents span { padding: 5px 8px; border: 1px solid #dfe4df; border-radius: 8px; background: #fff; font-size: 10px; }
 
 .phase3-sheet {
   width: min(720px, 100%);

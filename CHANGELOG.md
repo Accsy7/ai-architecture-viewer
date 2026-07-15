@@ -2,6 +2,51 @@
 
 All notable changes to AI Architecture Viewer are documented in this file.
 
+## [0.5.0] - 2026-07-15
+
+### Added
+
+- Self-contained development contracts frozen into every newly published target
+  revision, including source proposal/request provenance, target semantic hash, stable observable
+  acceptance criteria, target and permission-boundary references, and bound
+  document metadata and hashes.
+- Strict implementation-report matching against the frozen criterion IDs;
+  omitted, extra, duplicated, or rewritten criteria are rejected before the
+  automatic architecture gate is computed.
+- A separate server-computed contract gate joins immutable criterion text and
+  target references with each reported status and evidence ID. Partial,
+  blocked, unsatisfied, unverified, and legacy unbound runs cannot be accepted
+  even when the architecture graph itself is aligned.
+- A bounded read-only MCP document tool using registered `documentId` and an
+  optional exact Markdown heading. Registered documents and evidence share the
+  same path protection, size limits, section matching, and content hashes.
+- Lightweight `documentRefs` in compact semantic graphs and enriched document
+  indexes so agents can read only relevant project context.
+- Generic `interactionModes` and `architectureLayer` node semantics across
+  state, proposals, snapshots, compact reads, diffs, and implementation drift.
+- Publication and proposal-review UI summaries showing the contract criteria,
+  permission-boundary count, and bound documents before a user publishes.
+
+### Protocol, compatibility, and governance
+
+- State schema `3.3.0` migrates 3.0/3.1/3.2 data without inventing acceptance
+  criteria. Earlier formal targets are explicitly `legacy-unbound` and cannot
+  start a strict implementation run.
+- Exchange protocol `1.3.0` adds executable formal-target locks with contract
+  and document-set hashes, stable criterion references, registered document
+  evidence, and the generic node interaction/layer fields. Earlier protocol
+  artifacts remain readable.
+- Analysis schema `2.4.0` preserves proposal criteria and request provenance,
+  registered document evidence, and the expanded formal-target lock.
+- Project documents may support target design only. Current architecture and
+  implementation snapshots still require workspace-relative `code-fact`
+  evidence, and MCP still exposes no review, approval, or publication tool.
+- A bound document or formal contract change makes an older implementation run
+  stale; no run silently migrates to a newer target.
+- Direct edits to a published target graph invalidate its contract: runtime
+  checks recompute the semantic graph hash, target index, and permission-boundary
+  index before exposing or locking an executable baseline.
+
 ## [0.4.0] - 2026-07-15
 
 ### Added

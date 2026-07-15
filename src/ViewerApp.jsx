@@ -76,6 +76,8 @@ const DEFAULT_CONFIG = {
     { key: 'product', label: '产品与视觉验收', tone: 'product' },
     { key: 'authorization', label: '授权边界', tone: 'authorization' },
     { key: 'aiCollaboration', label: '智能体协作方式', tone: 'ai', optional: true },
+    { key: 'interactionModes', label: '交互方式', format: 'tags', optional: true },
+    { key: 'architectureLayer', label: '架构层级', optional: true },
     { key: 'buildStrategy', label: '建设方式' },
     { key: 'horizon', label: '目标周期' },
   ],
@@ -90,7 +92,7 @@ const EMPTY_REGISTRY = {
 };
 
 const EMPTY_ANALYSIS = {
-  schemaVersion: '2.3.0',
+  schemaVersion: '2.4.0',
   baseRevision: 0,
   lastUpdated: null,
   sources: [],
@@ -110,7 +112,7 @@ const EMPTY_ANALYSIS = {
 
 const EMPTY_SKILL_CATALOG = {
   schemaVersion: '1.0.0',
-  protocolVersion: '1.2.0',
+  protocolVersion: '1.3.0',
   skills: [],
 };
 
@@ -942,12 +944,17 @@ function Viewer() {
   const openEvidenceExcerpt = useCallback((evidence) => {
     if (!evidence) return;
     const isDiscussion = evidence.sourceKind === 'discussion';
+    const isProjectDocument = evidence.sourceKind === 'project-document';
     const range = evidence.lineEnd && evidence.lineEnd !== evidence.lineStart
       ? `${evidence.lineStart}–${evidence.lineEnd}`
       : evidence.lineStart;
     setPreview({
-      title: isDiscussion ? '用户讨论依据摘录' : '资料依据摘录',
-      path: isDiscussion ? (evidence.sourceLabel || '用户与智能体讨论') : `${evidence.path}:${range}`,
+      title: isDiscussion ? '用户讨论依据摘录' : isProjectDocument ? '注册项目文档摘录' : '资料依据摘录',
+      path: isDiscussion
+        ? (evidence.sourceLabel || '用户与智能体讨论')
+        : isProjectDocument
+          ? `document:${evidence.documentId}${evidence.section ? `#${evidence.section}` : ''}`
+          : `${evidence.path}:${range}`,
       content: evidence.excerpt || '',
     });
     setPreviewLoading(false);
@@ -1700,6 +1707,7 @@ function Viewer() {
           diagramTitle={selectedDiagram?.title || '当前架构图'}
           viewLabel={selectedArchitectureView[1]}
           diff={draftDiff}
+          developmentContract={lane.draft.developmentContract}
           onCancel={() => setPublishDialogOpen(false)}
           onConfirm={publishCurrentDraft}
         />

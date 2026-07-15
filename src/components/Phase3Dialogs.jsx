@@ -284,7 +284,7 @@ export function ArchitectureCorrectionDialog({
   );
 }
 
-export function PublishDraftDialog({ diagramTitle, viewLabel, diff, onCancel, onConfirm }) {
+export function PublishDraftDialog({ diagramTitle, viewLabel, diff, developmentContract, onCancel, onConfirm }) {
   const [message, setMessage] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const items = [
@@ -294,6 +294,11 @@ export function PublishDraftDialog({ diagramTitle, viewLabel, diff, onCancel, on
     ['文档', diff?.document || 0],
     ['关系', diff?.relationship || 0],
   ];
+  const criteria = Array.isArray(developmentContract?.acceptanceCriteria)
+    ? developmentContract.acceptanceCriteria
+    : [];
+  const documents = Array.isArray(developmentContract?.documents) ? developmentContract.documents : [];
+  const hasExecutableCriteria = criteria.length > 0;
   return (
     <div className="phase3-backdrop top-layer" role="presentation" onMouseDown={(event) => {
       if (event.target === event.currentTarget && !submitting) onCancel();
@@ -303,6 +308,34 @@ export function PublishDraftDialog({ diagramTitle, viewLabel, diff, onCancel, on
         <h2 id="publish-title">发布{diagramTitle}的{viewLabel}修订</h2>
         <p>这会把当前完整草案变成新的正式版本，不只是发布最后一次字段修改。旧版本会完整保留。</p>
         <div className="publish-diff-summary">{items.map(([label, value]) => <span key={label}>{label} {value}</span>)}</div>
+        {developmentContract && (
+          <section className={`publish-contract-preview ${hasExecutableCriteria ? '' : 'is-unbound'}`}>
+            <div className="publish-contract-preview__heading">
+              <strong>随正式目标冻结的开发合同</strong>
+              <span>{hasExecutableCriteria ? `${criteria.length} 条验收条件` : '发布后不可启动严格实施'}</span>
+            </div>
+            <p>
+              {hasExecutableCriteria
+                ? `发布后，外部智能体必须逐条引用这些条件；同时锁定 ${developmentContract.boundaryRefs?.length || 0} 项权限边界和 ${documents.length} 份绑定文档。`
+                : '当前草案没有来自目标提案的可观察验收条件。你仍可发布架构版本，但它会明确标为不可执行基线。'}
+            </p>
+            {criteria.length > 0 && (
+              <ol className="publish-contract-list">
+                {criteria.map((criterion) => (
+                  <li key={criterion.id}>
+                    <strong>{criterion.statement}</strong>
+                    <code>{criterion.id} · 约束 {criterion.targetRefs?.length || 0} 个架构项</code>
+                  </li>
+                ))}
+              </ol>
+            )}
+            {documents.length > 0 && (
+              <div className="publish-contract-documents" aria-label="绑定文档">
+                {documents.map((document) => <span key={document.id}>{document.title} · {document.id}</span>)}
+              </div>
+            )}
+          </section>
+        )}
         <label className="field"><span>本次修订说明（必填）</span><textarea rows="4" value={message} placeholder="说明本次确认了哪些结构、边界或产品判断" onChange={(event) => setMessage(event.target.value)} /></label>
         <div className="dialog-actions">
           <button className="quiet" type="button" disabled={submitting} onClick={onCancel}>继续保留草案</button>

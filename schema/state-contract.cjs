@@ -1,8 +1,9 @@
 'use strict';
 
-const SCHEMA_VERSION = '3.1.0';
-const PREVIOUS_CANONICAL_SCHEMA_VERSION = '3.0.0';
+const SCHEMA_VERSION = '3.3.0';
+const PREVIOUS_CANONICAL_SCHEMA_VERSIONS = new Set(['3.2.0', '3.1.0', '3.0.0']);
 const LEGACY_SCHEMA_VERSION = '2.0.0';
+const DEVELOPMENT_CONTRACT_SCHEMA_VERSION = '1.0.0';
 const NODE_TYPE = 'architectureNode';
 const DEFAULT_NODE_WIDTH = 260;
 const DEFAULT_NODE_HEIGHT = 150;
@@ -12,11 +13,16 @@ const RELATION_TYPES = new Set(['flow', 'support', 'reference', 'governance', 'h
 const BOUNDARY_POSTURES = new Set(['none', 'controlled', 'blocked']);
 const ROUTING_MODES = new Set(['auto', 'manual']);
 const ROUTING_PORTS = new Set(['top', 'right', 'bottom', 'left']);
+const INTERACTION_MODES = new Set(['human-ui', 'system-service']);
+const DEVELOPMENT_CONTRACT_STATUSES = new Set(['draft', 'executable', 'not-executable', 'legacy-unbound']);
+const CONTRACT_TARGET_TYPES = new Set(['node', 'edge']);
+const CONTRACT_BOUNDARY_FIELDS = new Set(['authorization', 'controlledBoundaryPosture']);
 const MAX_WAYPOINT_COUNT = 24;
 const TARGET_HORIZONS = new Set(['近期', '后续', '远期']);
 const BUILD_STRATEGIES = new Set(['自建', '现有自建', '外部集成', '待决定']);
 const REVISION_ORIGINS = new Set(['migration', 'publish', 'restore']);
 const STABLE_ID = /^[a-z0-9][a-z0-9._-]{0,79}$/;
+const SHA256 = /^[a-f0-9]{64}$/;
 const MIGRATION_LAYOUTS = { current: {}, target: {} };
 
 class ContractError extends Error {
@@ -98,6 +104,154 @@ function validateDocumentRefs(value, valuePath) {
   });
 }
 
+function validateInteractionModes(value, valuePath) {
+  if (value === undefined) return;
+  if (!Array.isArray(value) || value.length < 1 || value.length > INTERACTION_MODES.size) {
+    fail(`${valuePath} 必须包含 1 到 ${INTERACTION_MODES.size} 个交互模式`);
+  }
+  const modes = new Set();
+  value.forEach((mode, index) => {
+    if (!INTERACTION_MODES.has(mode)) fail(`${valuePath}[${index}] 不是支持的交互模式`);
+    if (modes.has(mode)) fail(`${valuePath} 不得包含重复交互模式 ${mode}`);
+    modes.add(mode);
+  });
+}
+
+function assertHash(value, valuePath, { nullable = false } = {}) {
+  if (nullable && value === null) return;
+  if (typeof value !== 'string' || !SHA256.test(value)) fail(`${valuePath} 必须是小写 SHA-256 哈希`);
+}
+
+function validateContractTargetRef(ref, valuePath) {
+  assertObject(ref, valuePath);
+  assertKeys(ref, new Set(['targetType', 'targetId']), valuePath);
+  if (!CONTRACT_TARGET_TYPES.has(ref.targetType)) fail(`${valuePath}.targetType 必须是 node 或 edge`);
+  assertStableId(ref.targetId, `${valuePath}.targetId`);
+}
+
+function validateContractTargetRefs(value, valuePath) {
+  if (!Array.isArray(value)) fail(`${valuePath} 必须是数组`);
+  const seen = new Set();
+  value.forEach((ref, index) => {
+    validateContractTargetRef(ref, `${valuePath}[${index}]`);
+    const key = `${ref.targetType}:${ref.targetId}`;
+    if (seen.has(key)) fail(`${valuePath} 不得包含重复目标引用 ${key}`);
+    seen.add(key);
+  });
+}
+
+function validateDevelopmentContract(contract, view, revision, valuePath) {
+  if (contract === null) {
+    if (view === 'target') fail(`${valuePath} 的目标架构必须明确开发合同状态`);
+    return;
+  }
+  if (view !== 'target') fail(`${valuePath} 的当前架构不得包含目标开发合同`);
+  assertObject(contract, valuePath);
+  assertKeys(contract, new Set([
+    'schemaVersion', 'status', 'contractId', 'target', 'source', 'acceptanceCriteria',
+    'targetRefs', 'boundaryRefs', 'documents', 'frozenAt', 'frozenBy',
+    'contractHash', 'documentSetHash', 'executionReason',
+  ]), valuePath);
+  if (contract.schemaVersion !== DEVELOPMENT_CONTRACT_SCHEMA_VERSION) {
+    fail(`${valuePath}.schemaVersion 必须是 ${DEVELOPMENT_CONTRACT_SCHEMA_VERSION}`);
+  }
+  if (!DEVELOPMENT_CONTRACT_STATUSES.has(contract.status)) fail(`${valuePath}.status 无效`);
+  assertStableId(contract.contractId, `${valuePath}.contractId`);
+  assertObject(contract.target, `${valuePath}.target`);
+  assertKeys(contract.target, new Set(['revision', 'revisionId', 'semanticHash']), `${valuePath}.target`);
+  if (contract.status === 'draft') {
+    if (contract.target.revision !== null || contract.target.revisionId !== null || contract.target.semanticHash !== null) {
+      fail(`${valuePath}.target 在草案阶段必须为空`);
+    }
+  } else {
+    assertRevision(contract.target.revision, `${valuePath}.target.revision`);
+    assertStableId(contract.target.revisionId, `${valuePath}.target.revisionId`);
+    if (revision && (
+      contract.target.revision !== revision.revision
+      || contract.target.revisionId !== revision.revisionId
+    )) fail(`${valuePath}.target 必须锁定其所属正式版本`);
+    if (contract.status === 'legacy-unbound') {
+      if (contract.target.semanticHash !== null) fail(`${valuePath}.target 的旧未绑定版本不得伪造语义哈希`);
+    } else {
+      assertHash(contract.target.semanticHash, `${valuePath}.target.semanticHash`);
+    }
+  }
+  if (contract.source !== null) {
+    assertObject(contract.source, `${valuePath}.source`);
+    assertKeys(contract.source, new Set(['proposalId', 'requestId', 'artifactId', 'runId']), `${valuePath}.source`);
+    ['proposalId', 'requestId', 'artifactId', 'runId'].forEach((field) => {
+      assertStableId(contract.source[field], `${valuePath}.source.${field}`, { nullable: true });
+    });
+    if (!Object.values(contract.source).some(Boolean)) fail(`${valuePath}.source 至少需要一个来源标识`);
+  }
+  if (!Array.isArray(contract.acceptanceCriteria) || contract.acceptanceCriteria.length > 100) {
+    fail(`${valuePath}.acceptanceCriteria 必须是至多 100 项的数组`);
+  }
+  const criterionIds = new Set();
+  contract.acceptanceCriteria.forEach((criterion, index) => {
+    const criterionPath = `${valuePath}.acceptanceCriteria[${index}]`;
+    assertObject(criterion, criterionPath);
+    assertKeys(criterion, new Set(['id', 'statement', 'targetRefs']), criterionPath);
+    assertStableId(criterion.id, `${criterionPath}.id`);
+    if (criterionIds.has(criterion.id)) fail(`${valuePath}.acceptanceCriteria 包含重复 ID ${criterion.id}`);
+    criterionIds.add(criterion.id);
+    assertText(criterion.statement, `${criterionPath}.statement`, { max: 1000 });
+    validateContractTargetRefs(criterion.targetRefs, `${criterionPath}.targetRefs`);
+  });
+  validateContractTargetRefs(contract.targetRefs, `${valuePath}.targetRefs`);
+  if (!Array.isArray(contract.boundaryRefs)) fail(`${valuePath}.boundaryRefs 必须是数组`);
+  const boundaryKeys = new Set();
+  contract.boundaryRefs.forEach((boundary, index) => {
+    const boundaryPath = `${valuePath}.boundaryRefs[${index}]`;
+    assertObject(boundary, boundaryPath);
+    assertKeys(boundary, new Set(['targetType', 'targetId', 'field', 'value']), boundaryPath);
+    validateContractTargetRef({ targetType: boundary.targetType, targetId: boundary.targetId }, boundaryPath);
+    if (!CONTRACT_BOUNDARY_FIELDS.has(boundary.field)) fail(`${boundaryPath}.field 不是受支持的边界字段`);
+    assertText(boundary.value, `${boundaryPath}.value`, { max: 500 });
+    const key = `${boundary.targetType}:${boundary.targetId}:${boundary.field}`;
+    if (boundaryKeys.has(key)) fail(`${valuePath}.boundaryRefs 包含重复边界引用 ${key}`);
+    boundaryKeys.add(key);
+  });
+  if (!Array.isArray(contract.documents)) fail(`${valuePath}.documents 必须是数组`);
+  const documentIds = new Set();
+  contract.documents.forEach((document, index) => {
+    const documentPath = `${valuePath}.documents[${index}]`;
+    assertObject(document, documentPath);
+    assertKeys(document, new Set([
+      'id', 'title', 'path', 'summary', 'status', 'authority', 'lastVerifiedAt',
+      'contentHash', 'sizeBytes',
+    ]), documentPath);
+    assertStableId(document.id, `${documentPath}.id`);
+    if (documentIds.has(document.id)) fail(`${valuePath}.documents 包含重复文档 ${document.id}`);
+    documentIds.add(document.id);
+    assertText(document.title, `${documentPath}.title`, { max: 160 });
+    assertText(document.path, `${documentPath}.path`, { max: 500 });
+    assertText(document.summary, `${documentPath}.summary`, { max: 1000 });
+    assertText(document.status, `${documentPath}.status`, { max: 80 });
+    assertText(document.authority, `${documentPath}.authority`, { max: 80 });
+    assertTimestamp(document.lastVerifiedAt, `${documentPath}.lastVerifiedAt`, { nullable: true });
+    assertHash(document.contentHash, `${documentPath}.contentHash`);
+    if (!Number.isSafeInteger(document.sizeBytes) || document.sizeBytes < 0 || document.sizeBytes > 1024 * 1024) {
+      fail(`${documentPath}.sizeBytes 必须是 0 到 1MiB 之间的安全整数`);
+    }
+  });
+  assertTimestamp(contract.frozenAt, `${valuePath}.frozenAt`, { nullable: true });
+  if (contract.frozenBy !== null && contract.frozenBy !== 'user') fail(`${valuePath}.frozenBy 必须是 user 或 null`);
+  assertHash(contract.contractHash, `${valuePath}.contractHash`, { nullable: true });
+  assertHash(contract.documentSetHash, `${valuePath}.documentSetHash`, { nullable: true });
+  if (contract.executionReason !== null) assertText(contract.executionReason, `${valuePath}.executionReason`, { max: 500 });
+  const formal = contract.status !== 'draft' && contract.status !== 'legacy-unbound';
+  if (formal !== Boolean(contract.frozenAt && contract.frozenBy && contract.contractHash && contract.documentSetHash)) {
+    fail(`${valuePath} 的冻结信息与合同状态不一致`);
+  }
+  if (contract.status === 'executable' && (!contract.acceptanceCriteria.length || contract.executionReason !== null)) {
+    fail(`${valuePath} 的可执行合同必须有验收条件且不得包含不可执行原因`);
+  }
+  if (contract.status !== 'executable' && contract.executionReason === null) {
+    fail(`${valuePath} 的非可执行合同必须说明原因`);
+  }
+}
+
 function validateNode(node, index, view) {
   const nodePath = `graph.nodes[${index}]`;
   assertObject(node, nodePath);
@@ -118,7 +272,7 @@ function validateNode(node, index, view) {
       'name', 'group', 'purpose', 'technical', 'product', 'authorization',
       'horizon', 'focus', 'buildStrategy', 'humanConfirmed', 'confirmationNote',
       'confirmedAt', 'documentRefs', 'aiCollaboration', 'relatedDiagramId',
-      'relatedNodeId',
+      'relatedNodeId', 'interactionModes', 'architectureLayer',
     ]),
     `${nodePath}.data`,
   );
@@ -160,6 +314,10 @@ function validateNode(node, index, view) {
     if (node.data.relatedDiagramId === undefined) {
       fail(`${nodePath}.data.relatedNodeId 必须与 relatedDiagramId 一起使用`);
     }
+  }
+  validateInteractionModes(node.data.interactionModes, `${nodePath}.data.interactionModes`);
+  if (node.data.architectureLayer !== undefined) {
+    assertStableId(node.data.architectureLayer, `${nodePath}.data.architectureLayer`);
   }
   if (node.data.humanConfirmed === true) {
     assertText(node.data.confirmationNote, `${nodePath}.data.confirmationNote`, { max: 1000 });
@@ -242,7 +400,7 @@ function validateRevisionSnapshot(revision, view, revisionPath = `${view}.publis
     revision,
     new Set([
       'revision', 'revisionId', 'parentRevisionId', 'origin', 'restoredFromRevisionId',
-      'message', 'publishedAt', 'publishedBy', 'graph',
+      'message', 'publishedAt', 'publishedBy', 'graph', 'developmentContract',
     ]),
     revisionPath,
   );
@@ -275,6 +433,7 @@ function validateRevisionSnapshot(revision, view, revisionPath = `${view}.publis
     if (revision.publishedBy !== 'user') fail(`${revisionPath}.publishedBy 必须是 user`);
     validateGraph(revision.graph, view, { allowEmpty: view === 'target' });
   }
+  validateDevelopmentContract(revision.developmentContract, view, revision, `${revisionPath}.developmentContract`);
 }
 
 function validateDraft(draft, published, view, draftPath = `${view}.draft`) {
@@ -282,7 +441,7 @@ function validateDraft(draft, published, view, draftPath = `${view}.draft`) {
   assertObject(draft, draftPath);
   assertKeys(
     draft,
-    new Set(['draftId', 'draftRevision', 'baseRevision', 'baseRevisionId', 'savedAt', 'graph']),
+    new Set(['draftId', 'draftRevision', 'baseRevision', 'baseRevisionId', 'savedAt', 'graph', 'developmentContract']),
     draftPath,
   );
   assertStableId(draft.draftId, `${draftPath}.draftId`);
@@ -295,6 +454,7 @@ function validateDraft(draft, published, view, draftPath = `${view}.draft`) {
   }
   assertTimestamp(draft.savedAt, `${draftPath}.savedAt`);
   validateGraph(draft.graph, view);
+  validateDevelopmentContract(draft.developmentContract, view, null, `${draftPath}.developmentContract`);
 }
 
 function validateLane(lane, view) {
@@ -473,6 +633,71 @@ function migrateGraph(value, view) {
   };
 }
 
+function legacyDevelopmentContract(revision) {
+  return {
+    schemaVersion: DEVELOPMENT_CONTRACT_SCHEMA_VERSION,
+    status: 'legacy-unbound',
+    contractId: `legacy-${revision.revisionId}`,
+    target: { revision: revision.revision, revisionId: revision.revisionId, semanticHash: null },
+    source: null,
+    acceptanceCriteria: [],
+    targetRefs: [],
+    boundaryRefs: [],
+    documents: [],
+    frozenAt: null,
+    frozenBy: null,
+    contractHash: null,
+    documentSetHash: null,
+    executionReason: '该正式目标创建于开发合同功能之前，未绑定可执行验收标准。',
+  };
+}
+
+function unboundDraftDevelopmentContract(draftId) {
+  return {
+    schemaVersion: DEVELOPMENT_CONTRACT_SCHEMA_VERSION,
+    status: 'draft',
+    contractId: `contract-${draftId}`,
+    target: { revision: null, revisionId: null, semanticHash: null },
+    source: null,
+    acceptanceCriteria: [],
+    targetRefs: [],
+    boundaryRefs: [],
+    documents: [],
+    frozenAt: null,
+    frozenBy: null,
+    contractHash: null,
+    documentSetHash: null,
+    executionReason: '草案尚未绑定可执行验收标准。',
+  };
+}
+
+function normalizeCanonicalLane(lane, view) {
+  const normalizeRevision = (revision) => {
+    revision.graph = migrateGraph(revision.graph, view);
+    if (revision.developmentContract === undefined) {
+      revision.developmentContract = view === 'target' ? legacyDevelopmentContract(revision) : null;
+    } else if (revision.developmentContract
+      && revision.developmentContract.target?.semanticHash === undefined
+      && revision.developmentContract.status === 'legacy-unbound') {
+      revision.developmentContract.target.semanticHash = null;
+    }
+  };
+  normalizeRevision(lane.published);
+  lane.history.forEach(normalizeRevision);
+  if (lane.draft) {
+    lane.draft.graph = migrateGraph(lane.draft.graph, view);
+    if (lane.draft.developmentContract === undefined) {
+      lane.draft.developmentContract = view === 'target'
+        ? unboundDraftDevelopmentContract(lane.draft.draftId)
+        : null;
+    } else if (lane.draft.developmentContract
+      && lane.draft.developmentContract.target?.semanticHash === undefined
+      && lane.draft.developmentContract.status === 'draft') {
+      lane.draft.developmentContract.target.semanticHash = null;
+    }
+  }
+}
+
 function v2Published(value, view) {
   if (value.revision !== undefined && value.graph) return clone(value);
   return {
@@ -507,7 +732,9 @@ function migrateLane(lane, view) {
     publishedAt: snapshot.publishedAt,
     publishedBy: snapshot.publishedBy,
     graph: migrateGraph(snapshot, view),
+    developmentContract: null,
   }));
+  if (view === 'target') revisions.forEach((revision) => { revision.developmentContract = legacyDevelopmentContract(revision); });
   const published = revisions[revisions.length - 1];
   const legacyDraft = v2Draft(lane.draft, view);
   return {
@@ -519,6 +746,9 @@ function migrateLane(lane, view) {
       baseRevisionId: published.revisionId,
       savedAt: legacyDraft.savedAt,
       graph: migrateGraph(legacyDraft, view),
+      developmentContract: view === 'target'
+        ? unboundDraftDevelopmentContract(`${view}-draft-migrated-r${legacyDraft.baseRevision}`)
+        : null,
     },
     history: revisions.slice(0, -1),
   };
@@ -527,17 +757,17 @@ function migrateLane(lane, view) {
 function migrateLegacyState(legacy) {
   if (legacy && legacy.schemaVersion === SCHEMA_VERSION) {
     const canonical = clone(legacy);
+    ['current', 'target'].forEach((view) => {
+      normalizeCanonicalLane(canonical[view], view);
+    });
     validateState(canonical);
     return canonical;
   }
-  if (legacy && legacy.schemaVersion === PREVIOUS_CANONICAL_SCHEMA_VERSION) {
+  if (legacy && PREVIOUS_CANONICAL_SCHEMA_VERSIONS.has(legacy.schemaVersion)) {
     const canonical = clone(legacy);
     canonical.schemaVersion = SCHEMA_VERSION;
     ['current', 'target'].forEach((view) => {
-      const lane = canonical[view];
-      lane.published.graph = migrateGraph(lane.published.graph, view);
-      if (lane.draft) lane.draft.graph = migrateGraph(lane.draft.graph, view);
-      lane.history.forEach((revision) => { revision.graph = migrateGraph(revision.graph, view); });
+      normalizeCanonicalLane(canonical[view], view);
     });
     validateState(canonical);
     return canonical;
@@ -631,6 +861,7 @@ function revisionSummary(revision, { isHead = false } = {}) {
     publishedBy: revision.publishedBy,
     nodeCount: revision.graph.nodes.length,
     edgeCount: revision.graph.edges.length,
+    developmentContractStatus: revision.developmentContract?.status || null,
     isHead,
   };
 }
@@ -705,6 +936,9 @@ module.exports = {
   ContractError,
   DEFAULT_NODE_HEIGHT,
   DEFAULT_NODE_WIDTH,
+  DEVELOPMENT_CONTRACT_SCHEMA_VERSION,
+  DEVELOPMENT_CONTRACT_STATUSES,
+  INTERACTION_MODES,
   LEGACY_SCHEMA_VERSION,
   MAX_EDGE_COUNT,
   MAX_NODE_COUNT,
@@ -716,6 +950,7 @@ module.exports = {
   clone,
   diffGraphs,
   migrateLegacyState,
+  unboundDraftDevelopmentContract,
   revisionSummary,
   semanticProjectionFromCanonical,
   semanticProjectionFromLegacy,

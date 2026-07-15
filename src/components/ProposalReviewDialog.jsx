@@ -43,6 +43,9 @@ function formatConfidence(value) {
 
 function evidencePath(evidence) {
   if (evidence?.sourceKind === 'discussion') return evidence?.sourceLabel || '讨论来源未记录';
+  if (evidence?.sourceKind === 'project-document') {
+    return `document:${evidence.documentId || '未登记'}${evidence.section ? `#${evidence.section}` : ''}`;
+  }
   return evidence?.relativePath || evidence?.path || evidence?.sourcePath || evidence?.location || evidence?.sourceLabel || '来源未记录';
 }
 
@@ -176,6 +179,7 @@ function EvidencePanel({ change, evidence, onLocateEvidence }) {
             {evidence.map((item, index) => {
               const basis = evidenceBasis(item);
               const isDiscussion = item.sourceKind === 'discussion';
+              const isProjectDocument = item.sourceKind === 'project-document';
               return (
               <article className="analysis-evidence-card" key={item.id || `${evidencePath(item)}-${index}`}>
                 <div className="analysis-evidence-card__meta">
@@ -186,7 +190,9 @@ function EvidencePanel({ change, evidence, onLocateEvidence }) {
                   <code>{evidenceLabel(item)}</code>
                 </div>
                 <pre>{evidenceExcerpt(item)}</pre>
-                {onLocateEvidence && <button className="quiet" type="button" onClick={() => onLocateEvidence(item, change)}>{isDiscussion ? '查看讨论摘录' : '定位原文'}</button>}
+                {onLocateEvidence && <button className="quiet" type="button" onClick={() => onLocateEvidence(item, change)}>
+                  {isDiscussion ? '查看讨论摘录' : isProjectDocument ? '查看登记文档摘录' : '定位原文'}
+                </button>}
               </article>
               );
             })}
@@ -214,6 +220,7 @@ export default function ProposalReviewDialog({
 }) {
   const changes = useMemo(() => asList(proposal?.changes || proposal?.items), [proposal]);
   const evidenceRegistry = useMemo(() => asList(proposal?.evidence || proposal?.evidenceRegistry), [proposal]);
+  const acceptanceCriteria = useMemo(() => asList(proposal?.acceptanceCriteria), [proposal]);
   const [selectedChangeId, setSelectedChangeId] = useState(null);
   const [actionInFlight, setActionInFlight] = useState(null);
 
@@ -291,6 +298,25 @@ export default function ProposalReviewDialog({
           <span>{evidenceRegistry.length} 条已登记依据</span>
           {formatConfidence(proposal.confidence) && <span>整体置信度 {formatConfidence(proposal.confidence)}</span>}
         </div>
+
+        {proposal.view === 'target' && (
+          <section className={`analysis-contract-summary ${acceptanceCriteria.length ? '' : 'is-unbound'}`}>
+            <div>
+              <p className="kicker">DEVELOPMENT CONTRACT</p>
+              <h3>{acceptanceCriteria.length ? '发布后将冻结的验收条件' : '此提案没有可执行验收条件'}</h3>
+            </div>
+            {acceptanceCriteria.length ? (
+              <ol>
+                {acceptanceCriteria.map((criterion) => (
+                  <li key={criterion.id}>
+                    <strong>{criterion.statement}</strong>
+                    <code>{criterion.id} · {criterion.targetRefs?.length || 0} 个架构引用</code>
+                  </li>
+                ))}
+              </ol>
+            ) : <p>接受后仍可形成目标草案，但发布时会明确标为不可执行，不能启动严格实施闭环。</p>}
+          </section>
+        )}
 
         <div className="analysis-review-grid">
           <ChangeList changes={changes} selectedChangeId={selectedChangeId} onSelect={chooseChange} />

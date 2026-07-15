@@ -99,16 +99,17 @@ function registerTool(server, name, config, handler) {
 }
 
 const server = new McpServer(
-  { name: 'ai-architecture-viewer', version: '0.4.0' },
+  { name: 'ai-architecture-viewer', version: '0.5.0' },
   {
     instructions: [
       'Use this server as an external visual architecture handoff for coding agents.',
       'Call get_project_context before creating a run.',
       'Create a run before submitting evidence-backed artifacts.',
       'Evidence paths must be relative to the configured code workspace root.',
+      'Registered project documents are read only by documentId and optional Markdown section; they may support target design but never implementation facts.',
       'Only a published target is an executable architecture baseline; an accepted draft still awaits human publication.',
-      'Implementation runs lock that published target, submit a code-fact snapshot first, and receive a server-computed architecture gate.',
-      'An implementation report status is only an agent claim; even an aligned architecture gate still requires local human review.',
+      'Implementation runs lock that published target, submit a code-fact snapshot first, and receive server-computed architecture and formal-contract gates.',
+      'An implementation report status is only an agent claim; acceptance requires a complete claim, satisfied contract criteria, an eligible architecture gate, and local human review.',
       'Agents may submit snapshots, proposals, and implementation reports, but cannot review their own result, approve, or publish architecture.',
     ].join(' '),
   },
@@ -121,10 +122,22 @@ const diagramViewSchema = z.object({
 
 registerTool(server, 'get_project_context', {
   title: 'Get project architecture context',
-  description: 'Read the viewer project, diagram catalog, selected published baseline, document index, and human-governance boundaries before inspecting or planning.',
+  description: 'Read the viewer project, diagram catalog, selected published baseline and execution status, contract invalidation reason, document index, and human-governance boundaries before inspecting or planning.',
   inputSchema: diagramViewSchema,
   annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
 }, ({ diagramId, view }) => viewerRequest(`/api/agent/context${query({ diagram: diagramId, view })}`));
+
+registerTool(server, 'read_project_document', {
+  title: 'Read registered project document',
+  description: 'Read one registered Markdown document, optionally narrowed to an exact heading. The viewer enforces the project document root, size limits, section matching, and returns content hashes; this is target-design context, not code-fact proof.',
+  inputSchema: z.object({
+    documentId: z.string().regex(/^[a-z0-9][a-z0-9._-]{0,79}$/),
+    section: z.string().min(1).max(200).optional(),
+  }),
+  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+}, ({ documentId, section }) => viewerRequest(
+  `/api/documents/${encodeURIComponent(documentId)}/preview${query({ section })}`,
+));
 
 registerTool(server, 'get_current_architecture', {
   title: 'Get current published architecture',
@@ -148,7 +161,7 @@ registerTool(server, 'get_current_architecture', {
 
 registerTool(server, 'create_agent_run', {
   title: 'Create agent architecture run',
-  description: 'Create a traceable run and lock its architecture baseline. Implementation runs also lock the exact published formal target revision and semantic hash.',
+  description: 'Create a traceable run and lock its architecture baseline. Implementation runs require and lock the exact executable published target, development contract, and bound-document hashes.',
   inputSchema: z.object({
     agentName: z.string().min(1).max(120),
     agentClient: z.string().min(1).max(80).describe('Client identity such as codex or claude-code.'),
@@ -190,28 +203,34 @@ registerTool(server, 'submit_change_proposal', {
 
 registerTool(server, 'submit_implementation_report', {
   title: 'Submit implementation reconciliation report',
-  description: 'Submit a code-fact-backed agent claim that references the run-locked formal target and prior resulting snapshot. The server independently computes the architecture gate; every result still requires local human review.',
+  description: 'Submit a code-fact-backed agent claim that references the run-locked formal target and prior resulting snapshot. The server independently computes architecture and formal-contract gates; every result still requires local human review.',
   inputSchema: submissionSchema,
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
 }, ({ runId, artifact, evidenceManifest }) => submit(runId, artifact, evidenceManifest));
 
 registerTool(server, 'get_review_status', {
   title: 'Get review status',
-  description: 'Read the agent claim, compact server-computed architecture gate, and traceable human-review status for one run. Request gate details only when individual drift evidence is needed.',
+  description: 'Read the agent claim, compact server-computed architecture and formal-contract gates, and traceable human-review status for one run. Request details only when individual drift or acceptance-criterion evidence is needed.',
   inputSchema: z.object({
     runId: z.string().min(1),
     includeArchitectureGateDetails: z.boolean().optional(),
+    includeContractGateDetails: z.boolean().optional(),
   }),
   annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
-}, ({ runId, includeArchitectureGateDetails }) => viewerRequest(
-  `/api/agent/runs/${encodeURIComponent(runId)}${query({
-    details: includeArchitectureGateDetails ? 'architecture-gate' : undefined,
-  })}`,
-));
+}, ({ runId, includeArchitectureGateDetails, includeContractGateDetails }) => {
+  const details = includeArchitectureGateDetails && includeContractGateDetails
+    ? 'review-gates'
+    : includeArchitectureGateDetails
+      ? 'architecture-gate'
+      : includeContractGateDetails
+        ? 'contract-gate'
+        : undefined;
+  return viewerRequest(`/api/agent/runs/${encodeURIComponent(runId)}${query({ details })}`);
+});
 
 registerTool(server, 'get_approved_target', {
   title: 'Get published formal target baseline',
-  description: 'Read only the latest human-published formal target baseline, including revision identity and semantic hash, as a compact semantic graph. Accepted but unpublished drafts are excluded.',
+  description: 'Read only the latest human-published target, its execution status, compact semantic graph, frozen acceptance contract, boundary references, and bound-document hashes. Accepted but unpublished drafts are excluded; legacy/unbound targets are explicitly non-executable.',
   inputSchema: z.object({ diagramId: z.string().optional() }),
   annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
 }, ({ diagramId }) => viewerRequest(`/api/agent/approved-target${query({ diagram: diagramId })}`));

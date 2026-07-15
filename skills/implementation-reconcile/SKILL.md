@@ -9,11 +9,11 @@ Verify what was actually built and make all architecture drift visible to the us
 
 ## Workflow
 
-1. When AI Architecture Viewer MCP tools are available, call `get_approved_target` and `get_project_context`, then call `create_agent_run` with task type `implementation-reconcile`. Retain the run ID and its `approvedTarget` lock. Treat only the returned `published-target` / `formal-baseline` as executable; an accepted proposal with `awaiting-publication` review status is still a draft and must not start implementation.
-2. Confirm that the run lock exactly matches the published target descriptor: `diagramId`, `revision`, `revisionId`, and `semanticHash`. Never replace it with a later target silently; create a new run when the formal target changes.
+1. When AI Architecture Viewer MCP tools are available, call `get_approved_target` and `get_project_context`, then call `create_agent_run` with task type `implementation-reconcile`. Retain the run ID and its `approvedTarget` lock. Start only when `baselineStatus` is `executable-formal-baseline`; accepted drafts, legacy/unbound targets, and stale document contracts are not executable.
+2. Confirm that the run lock exactly matches `diagramId`, `revision`, `revisionId`, `semanticHash`, `contractId`, `contractHash`, and `documentSetHash`. Never replace it with a later target silently; create a new run when the formal target, contract, or bound document changes.
 3. Inspect the actual worktree or revision diff. Include uncommitted changes when they are in scope and identify them as uncommitted.
 4. Run the relevant tests, builds, checks, or safe diagnostics. Record command, outcome, and a concise result; never hide failures.
-5. Map implementation evidence to each acceptance criterion and formal target responsibility, relationship, authorization boundary, and controlled boundary posture.
+5. Read only the bound documents needed for the relevant target nodes, using `read_project_document` by ID and optional section. Map implementation evidence to every frozen acceptance criterion ID and formal target responsibility, relationship, interaction mode, architecture layer, authorization boundary, and controlled boundary posture.
 6. Generate the complete resulting current-state architecture only from `code-fact` evidence. Every relation must include `controlledBoundaryPosture`. Record inference as unresolved or unverified; never present target intent or design documentation as implemented fact.
 7. Classify drift as `missing`, `extra`, `changed`, or `unverified`. Explain every observed deviation, but do not rewrite the formal target to match the code. The server recomputes these categories by stable ID and only checks whether your explanation maps to a computed item; it does not judge the explanation reasonable or accepted.
 8. Write the artifacts under `ai-coding/reconciliation/<run-id>/`:
@@ -22,13 +22,13 @@ Verify what was actually built and make all architecture drift visible to the us
    - `evidence-manifest.json`
 9. If `protocol/validate-artifact.cjs` is available, validate all files before reporting completion.
 10. Submit `architecture-snapshot.json` first with `submit_architecture_snapshot`. Then submit `implementation-report.json` with `submit_implementation_report`, using the same run and referencing the snapshot artifact ID. If MCP is unavailable, submit in the same order with `npm run agent -- submit`.
-11. Call `get_review_status` without details for the compact `agentClaim`, `architectureGate`, and `humanReview` state. Set `includeArchitectureGateDetails: true` only when you need individual drift items and evidence. A ready gate still means `humanReview` is pending until the user decides in the local viewer.
+11. Call `get_review_status` without details for compact `agentClaim`, `architectureGate`, `contractGate`, and `humanReview` states. Set `includeArchitectureGateDetails: true` only for individual drift evidence, and `includeContractGateDetails: true` only for the frozen criterion statements, target references, result statuses, and evidence IDs. Both gates must be ready before local acceptance is available; the final decision still belongs to the user.
 
 ## Output rules
 
 - Read [references/output-contract.md](references/output-contract.md) before writing artifacts.
 - Start from the JSON files in [assets](assets) when useful.
-- Use `complete` only as the agent's own claim when every acceptance criterion is satisfied, required checks pass, every server-computed deviation is reported and explained, and nothing remains unverified. It never represents final user acceptance. Otherwise use `partial` or `blocked`.
+- Use `complete` only as the agent's own claim when every frozen acceptance criterion ID is reported exactly once and satisfied, required checks pass, every server-computed deviation is reported and explained, and nothing remains unverified. It never represents final user acceptance. Otherwise use `partial` or `blocked`.
 - Report changed files using repository-relative paths.
 - Do not edit the run-locked formal target, review or accept your own report, or publish a viewer revision.
 - Do not claim tests passed unless they were run and their result was observed.
@@ -37,4 +37,4 @@ Verify what was actually built and make all architecture drift visible to the us
 
 ## Handoff gate
 
-Finish the agent handoff only when the user can distinguish the agent's claim, automatic architecture-gate result, failed or unrun checks, missing scope, extra scope, changed responsibilities or boundaries, unverified claims, and remaining decisions. An explained deviation remains pending human judgment and never changes the formal target automatically. Only the local user's `humanReview` decision accepts, rejects, or requests revision of the implementation result.
+Finish the agent handoff only when the user can distinguish the agent's claim, automatic architecture-gate result, formal-contract criterion gate, failed or unrun checks, missing scope, extra scope, changed responsibilities or boundaries, unverified claims, and remaining decisions. Partial or blocked claims and unsatisfied or unverified contract criteria cannot be accepted. An explained deviation remains pending human judgment and never changes the formal target automatically. Only the local user's `humanReview` decision accepts, rejects, or requests revision of the implementation result.
