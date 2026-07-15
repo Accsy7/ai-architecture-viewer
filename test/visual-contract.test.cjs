@@ -111,3 +111,75 @@ test('relationship focus root keeps a controlled visual border after flow exit',
   assert.match(css, /\.architecture-node\.is-relationship-focus-root/);
   assert.match(app, /setRelationshipFocusNodeId\(originId\);\s*setFocusSelection\(Boolean\(originId\)\);/s);
 });
+
+test('owner inspector keeps primary language visible and secondary evidence collapsed', () => {
+  const details = read('src/components/ViewerDetailPanel.jsx');
+  const i18n = read('src/i18n.jsx');
+
+  assert.match(details, /details\.whatItDoes/);
+  assert.match(details, /details\.currentProgress/);
+  assert.match(details, /details\.cannotDo/);
+  assert.match(details, /<details className="inspector-disclosure relationship-disclosure">/);
+  assert.match(details, /<details className="inspector-disclosure inspector-more">/);
+  assert.match(details, /<details className="inspector-disclosure understanding-evidence">/);
+  assert.match(details, /details\.historicalMigrationRecord/);
+  assert.match(details, /details\.sourceNotRecorded/);
+  assert.doesNotMatch(details, /human-confirmation-card/);
+
+  for (const key of [
+    'details.whatItDoes',
+    'details.currentProgress',
+    'details.cannotDo',
+    'details.directRelationships',
+    'details.moreInformation',
+    'details.understandingEvidence',
+    'details.historicalMigrationRecord',
+  ]) {
+    const escaped = key.replace('.', '\\.');
+    assert.equal((i18n.match(new RegExp(`'${escaped}':`, 'g')) || []).length, 2, `${key} must be bilingual`);
+  }
+});
+
+test('viewer tools use one neutral treatment and neutral count badges', () => {
+  const phase3 = read('src/phase3.css');
+  const analysis = read('src/analysis.css');
+  const genericTool = rule(phase3, '.graph-heading-actions button');
+  const documentTool = rule(phase3, '.graph-heading-actions .persistent-document-entry');
+  const agentTool = rule(analysis, '.graph-heading-actions .analysis-entry');
+
+  assert.match(genericTool, /background:\s*#fbfcfa/);
+  assert.match(genericTool, /border-color:\s*#d3d9d5/);
+  assert.match(documentTool, /background:\s*#fbfcfa/);
+  assert.doesNotMatch(documentTool, /var\(--green\)|green-soft/);
+  assert.match(agentTool, /background:\s*#fbfcfa/);
+  assert.doesNotMatch(agentTool, /analysis-purple/);
+  assert.match(rule(phase3, '.graph-heading-actions button span'), /background:\s*#eef1ed/);
+});
+
+test('all three architecture selector triggers stay transparent through mouse and open states', () => {
+  const css = read('src/phase3.css');
+  assert.match(rule(css, '.architecture-selector-trigger'), /background:\s*transparent/);
+  assert.match(rule(css, '.architecture-selector-trigger'), /border:\s*0/);
+  assert.match(rule(css, '.architecture-selector-trigger'), /box-shadow:\s*none/);
+  assert.match(rule(css, '.architecture-selector-trigger'), /font-family:\s*Georgia/);
+  assert.match(rule(css, '.architecture-selector-trigger'), /font-size:\s*22px/);
+  assert.match(rule(css, '.diagram-selector-trigger'), /background:\s*transparent/);
+  assert.match(rule(css, '.diagram-selector-trigger'), /border:\s*0/);
+  assert.match(rule(css, '.diagram-selector-trigger'), /box-shadow:\s*none/);
+  assert.match(rule(css, '.diagram-selector-trigger'), /font-size:\s*13px/);
+  assert.match(css, /\.architecture-selector-trigger:hover:not\(:disabled\),[\s\S]*?\.navigation-level-selector \.diagram-level-trigger\[aria-expanded='true'\]\s*\{[\s\S]*?border:\s*0;[\s\S]*?background:\s*transparent;[\s\S]*?box-shadow:\s*none;/);
+  assert.match(css, /\.architecture-selector-trigger:focus-visible,[\s\S]*?\.navigation-level-selector \.diagram-level-trigger:focus-visible\s*\{[\s\S]*?background:\s*transparent;[\s\S]*?outline:\s*2px solid rgba\(70, 109, 153, 0\.42\)/);
+  assert.doesNotMatch(rule(css, '.navigation-level-selector .diagram-level-trigger'), /background\s*:/);
+});
+
+test('relationship focus and business-flow navigation use blue rather than success green', () => {
+  const css = read('styles.css');
+  assert.match(css, /\.architecture-node\.is-relationship-focus-root,[\s\S]*?border-color:\s*var\(--blue\)/);
+  assert.match(rule(css, '.relationship-focus-summary'), /border-left:\s*3px solid var\(--blue\)/);
+  assert.match(rule(css, '.business-flow-node-badge'), /color:\s*var\(--blue\)/);
+  assert.match(rule(css, '.business-flow-step.is-active'), /border-color:\s*var\(--blue\)/);
+  assert.match(rule(css, '.business-flow-step-number'), /background:\s*var\(--blue\)/);
+  for (const selector of ['.business-flow-node-badge', '.business-flow-step.is-active', '.business-flow-step-number']) {
+    assert.doesNotMatch(rule(css, selector), /var\(--green\)|green-soft/);
+  }
+});

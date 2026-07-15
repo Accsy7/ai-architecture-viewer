@@ -6,15 +6,15 @@
 }
 
 .graph-heading-actions .analysis-entry {
-  border-color: var(--analysis-purple-line);
-  color: var(--analysis-purple);
-  background: #fdfcff;
+  border-color: #d3d9d5;
+  color: #46534d;
+  background: #fbfcfa;
 }
 
 .graph-heading-actions .analysis-entry:hover:not(:disabled) {
-  border-color: var(--analysis-purple);
-  color: #fff;
-  background: var(--analysis-purple);
+  border-color: #aeb8b2;
+  color: var(--ink);
+  background: #f1f3f1;
 }
 
 .analysis-backdrop { z-index: 1120; }

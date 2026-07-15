@@ -5,13 +5,14 @@ import {
   documentTypeLabel,
   documentWarnings,
 } from '../document-model.js';
+import { partitionInspectorFields, understandingEvidence } from '../inspector-presentation.mjs';
 import { useI18n } from '../i18n.jsx';
 
-function ViewerField({ label, value, multiline, tone, format = 'text' }) {
+function ViewerField({ label, value, multiline, tone, format = 'text', variant }) {
   const { t } = useI18n();
   const text = value === null || value === undefined || value === '' ? t('details.unspecified') : String(value);
   return (
-    <div className={`viewer-field ${multiline ? 'is-multiline' : ''} ${tone ? `tone-${tone}` : ''}`}>
+    <div className={`viewer-field ${multiline ? 'is-multiline' : ''} ${tone ? `tone-${tone}` : ''} ${variant ? `is-${variant}` : ''}`}>
       <span>{label}</span>
       {format === 'tags' && Array.isArray(value)
         ? <p className="viewer-field-tags">{value.map((item) => <em key={item}>{item}</em>)}</p>
@@ -117,12 +118,31 @@ export default function ViewerDetailPanel({
   if (selectedNode) {
     const relatedEdges = edges.filter((edge) => edge.source === selectedNode.id || edge.target === selectedNode.id);
     const fields = Array.isArray(nodeFields) ? nodeFields : [];
+    const presentation = partitionInspectorFields(fields, selectedNode.data);
+    const evidence = understandingEvidence(selectedNode.data);
+    const documentCount = selectedNode.data?.documentRefs?.length || 0;
+    const renderConfiguredField = (field, label, variant) => field && (
+      <ViewerField
+        key={field.key}
+        label={label || field.label}
+        value={selectedNode.data?.[field.key]}
+        multiline={field.multiline}
+        tone={field.tone}
+        format={field.format}
+        variant={variant}
+      />
+    );
     return (
       <aside className="inspector" aria-label={t('details.moduleAria')}>
         <div className="inspector-heading">
           <span className="aside-mark">◎</span>
-          <div><p className="kicker">{t('details.module')}</p><h2>{selectedNode.data?.name || selectedNode.id}</h2></div>
+          <div>
+            <p className="kicker">{t('details.module')}</p>
+            <h2>{selectedNode.data?.name || selectedNode.id}</h2>
+            {presentation.group && <p className="inspector-group">{selectedNode.data?.group || t('details.unspecified')}</p>}
+          </div>
         </div>
+        {renderConfiguredField(presentation.purpose, t('details.whatItDoes'), 'core')}
         {(childDiagram || relatedDiagram || canCorrect) && (
           <div className="viewer-node-actions">
             {childDiagram && (
@@ -156,9 +176,9 @@ export default function ViewerDetailPanel({
           </section>
         )}
         <div className="inspector-tabs" role="tablist" aria-label={t('details.moduleInfo')}>
-          <button type="button" role="tab" aria-selected={activeTab === 'module'} className={activeTab === 'module' ? 'active' : ''} onClick={() => setActiveTab('module')}>{t('details.moduleDescription')}</button>
+          <button type="button" role="tab" aria-selected={activeTab === 'module'} className={activeTab === 'module' ? 'active' : ''} onClick={() => setActiveTab('module')}>{t('details.overview')}</button>
           <button type="button" role="tab" aria-selected={activeTab === 'documents'} className={activeTab === 'documents' ? 'active' : ''} onClick={() => setActiveTab('documents')}>
-            {t('details.documentsTab')} <span>{selectedNode.data?.documentRefs?.length || 0}</span>
+            {t('details.documentsTab')} <span>{documentCount}</span>
           </button>
         </div>
 
@@ -166,41 +186,62 @@ export default function ViewerDetailPanel({
           <RelatedDocuments node={selectedNode} documents={documents} onPreviewDocument={onPreviewDocument} />
         ) : (
           <>
-            {selectedNode.data?.compareStatus && <ViewerField label={t('details.compareStatus')} value={t(`compare.${selectedNode.data.compareStatus}`, {}, selectedNode.data.compareStatus)} />}
-            {selectedNode.data?.humanConfirmed && (
-              <section className="human-confirmation-card">
-                <strong>{t('node.humanConfirmed')}</strong>
-                <p>{selectedNode.data.confirmationNote}</p>
-                {selectedNode.data.confirmedAt && <time dateTime={selectedNode.data.confirmedAt}>{formatDateTime(selectedNode.data.confirmedAt)}</time>}
-                <small>{t('node.correctionNotPublication')}</small>
+            <details className="inspector-disclosure relationship-disclosure">
+              <summary><span>{t('details.directRelationships')}</span><strong>{relatedEdges.length}</strong></summary>
+              <section className="relations-list">
+                {!relatedEdges.length && <p className="inspector-placeholder">{t('details.noRelationships')}</p>}
+                {relatedEdges.map((edge) => {
+                  const outgoing = edge.source === selectedNode.id;
+                  const otherId = outgoing ? edge.target : edge.source;
+                  return (
+                    <button className="relation-row" type="button" key={edge.id} onClick={() => onSelectEdge(edge.id)}>
+                      <span>{outgoing ? '→' : '←'} {nodeNames.get(otherId) || otherId}</span>
+                      <small>{edge.data?.label || t(`relation.${edge.data?.relationType}`, {}, t('details.related'))}</small>
+                    </button>
+                  );
+                })}
               </section>
-            )}
-            {fields
-              .filter((field) => !field.optional || ![null, undefined, ''].includes(selectedNode.data?.[field.key]))
-              .map((field) => (
-              <ViewerField
-                key={field.key}
-                label={field.label}
-                value={selectedNode.data?.[field.key]}
-                multiline={field.multiline}
-                tone={field.tone}
-                format={field.format}
-              />
-              ))}
-            <section className="relations-list">
-              <h3>{t('details.relatedRelationships')} <span>{relatedEdges.length}</span></h3>
-              {!relatedEdges.length && <p className="inspector-placeholder">{t('details.noRelationships')}</p>}
-              {relatedEdges.map((edge) => {
-                const outgoing = edge.source === selectedNode.id;
-                const otherId = outgoing ? edge.target : edge.source;
-                return (
-                  <button className="relation-row" type="button" key={edge.id} onClick={() => onSelectEdge(edge.id)}>
-                    <span>{outgoing ? '→' : '←'} {nodeNames.get(otherId) || otherId}</span>
-                    <small>{edge.data?.label || t(`relation.${edge.data?.relationType}`, {}, t('details.related'))}</small>
-                  </button>
-                );
-              })}
+            </details>
+
+            <section className="inspector-core-status">
+              {renderConfiguredField(presentation.progress, t('details.currentProgress'), 'core')}
+              {renderConfiguredField(presentation.boundary, t('details.cannotDo'), 'core')}
             </section>
+
+            {(presentation.secondary.length > 0 || selectedNode.data?.compareStatus) && (
+              <details className="inspector-disclosure inspector-more">
+                <summary><span>{t('details.moreInformation')}</span><strong>{presentation.secondary.length + (selectedNode.data?.compareStatus ? 1 : 0)}</strong></summary>
+                <div className="inspector-disclosure-content">
+                  {selectedNode.data?.compareStatus && <ViewerField label={t('details.compareStatus')} value={t(`compare.${selectedNode.data.compareStatus}`, {}, selectedNode.data.compareStatus)} />}
+                  {presentation.secondary.map((field) => renderConfiguredField(field))}
+                </div>
+              </details>
+            )}
+
+            {evidence.length > 0 && (
+              <details className="inspector-disclosure understanding-evidence">
+                <summary><span>{t('details.understandingEvidence')}</span><strong>{evidence.length}</strong></summary>
+                <div className="understanding-evidence-list">
+                  {evidence.map((record, index) => (
+                    <article key={`${record.recordedAt || 'undated'}-${index}`}>
+                      <div className="understanding-evidence-source">
+                        <strong>{t('details.historicalMigrationRecord')}</strong>
+                        <span>{t('details.sourceNotRecorded')}</span>
+                      </div>
+                      <dl>
+                        <div><dt>{t('details.retainedConclusion')}</dt><dd>{record.retainedConclusion || t('details.unspecified')}</dd></div>
+                        <div><dt>{t('details.affectedUnderstanding')}</dt><dd>{t('details.moduleUnderstanding', { name: record.affectedModuleName || selectedNode.id })}</dd></div>
+                        <div>
+                          <dt>{t('details.recordedAt')}</dt>
+                          <dd>{record.recordedAt ? <time dateTime={record.recordedAt}>{formatDateTime(record.recordedAt)}</time> : t('details.recordedAtUnknown')}</dd>
+                        </div>
+                      </dl>
+                      <small>{t('node.correctionNotPublication')}</small>
+                    </article>
+                  ))}
+                </div>
+              </details>
+            )}
           </>
         )}
       </aside>
