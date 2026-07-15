@@ -85,6 +85,9 @@ export default function ViewerDetailPanel({
   onOpenRelated,
   canCorrect,
   onCorrectNode,
+  relationshipFocused = false,
+  availableFlows = [],
+  onStartFlow,
 }) {
   const { t, formatDateTime } = useI18n();
   const [activeTab, setActiveTab] = useState('module');
@@ -134,6 +137,23 @@ export default function ViewerDetailPanel({
             )}
             {canCorrect && <button type="button" onClick={onCorrectNode}>{t('details.correctAi')}</button>}
           </div>
+        )}
+        {relationshipFocused && (
+          <p className="relationship-focus-summary">
+            {t('focus.oneHopSummary', { count: relatedEdges.length })}
+          </p>
+        )}
+        {relationshipFocused && availableFlows.length > 0 && (
+          <section className="registered-flow-entry" aria-label={t('flow.available')}>
+            <h3>{t('flow.available')} <span>{availableFlows.length}</span></h3>
+            <p>{t('flow.entryHelp')}</p>
+            {availableFlows.map((flow) => (
+              <button type="button" key={flow.id} onClick={() => onStartFlow(flow.id)}>
+                <strong>{flow.title}</strong>
+                <small>{t('flow.enter')}</small>
+              </button>
+            ))}
+          </section>
         )}
         <div className="inspector-tabs" role="tablist" aria-label={t('details.moduleInfo')}>
           <button type="button" role="tab" aria-selected={activeTab === 'module'} className={activeTab === 'module' ? 'active' : ''} onClick={() => setActiveTab('module')}>{t('details.moduleDescription')}</button>

@@ -15,6 +15,7 @@ import {
   getDiagramCatalog,
   getDocuments,
   getLane,
+  getRegisteredFlows,
   getRevision,
   getRevisionDiff,
   getRevisions,
@@ -37,6 +38,7 @@ import {
 import { resolveEdgePorts } from './routing.mjs';
 import { enrichNodesWithDocuments } from './document-model.js';
 import ArchitectureNode, { CanvasEditContext } from './components/ArchitectureNode.jsx';
+import BusinessFlowPanel from './components/BusinessFlowPanel.jsx';
 import AnalysisWorkbench from './components/AnalysisWorkbench.jsx';
 import PendingChangesLayer, { PendingChangesInspector } from './components/PendingChangesLayer.jsx';
 import GroupRegionNode from './components/GroupRegionNode.jsx';
@@ -63,6 +65,13 @@ import {
   REGION_NODE_PREFIX,
   sameGeometry,
 } from './group-regions.mjs';
+import {
+  availableFlowsForFocus,
+  flowCanvasProjection,
+  oneHopProjection,
+  projectionNodeForSource,
+  sourceNodeForProjection,
+} from './registered-flows.mjs';
 
 const nodeTypes = { architectureNode: ArchitectureNode, groupRegion: GroupRegionNode };
 const edgeTypes = { architectureEdge: SmartArchitectureEdge };
@@ -281,6 +290,11 @@ function Viewer() {
   const [selectedEdgeId, setSelectedEdgeId] = useState(null);
   const [selectedRegionId, setSelectedRegionId] = useState(null);
   const [focusSelection, setFocusSelection] = useState(false);
+  const [registeredFlows, setRegisteredFlows] = useState([]);
+  const [relationshipFocusNodeId, setRelationshipFocusNodeId] = useState(null);
+  const [activeFlowId, setActiveFlowId] = useState(null);
+  const [flowOriginNodeId, setFlowOriginNodeId] = useState(null);
+  const [selectedFlowSourceNodeId, setSelectedFlowSourceNodeId] = useState(null);
   const [regionPreview, setRegionPreview] = useState({});
   const [loading, setLoading] = useState(true);
   const [toastMessage, setToastMessage] = useState('');
@@ -383,6 +397,10 @@ function Viewer() {
     setSelectedEdgeId(null);
     setSelectedRegionId(null);
     setFocusSelection(false);
+    setRelationshipFocusNodeId(null);
+    setActiveFlowId(null);
+    setFlowOriginNodeId(null);
+    setSelectedFlowSourceNodeId(null);
     if (shouldFit) fitAfterLoadRef.current = true;
   }, [replaceEdges, replaceNodes]);
 
@@ -562,6 +580,34 @@ function Viewer() {
       loadView('compare', true, diagramRef.current);
     }
   }, [catalogReady, loadView]);
+  useEffect(() => {
+    let cancelled = false;
+    if (!catalogReady || !diagramId || !['current', 'target'].includes(view)) {
+      setRegisteredFlows([]);
+      return () => { cancelled = true; };
+    }
+    getRegisteredFlows(view, diagramId).then((response) => {
+      if (cancelled) return;
+      setRegisteredFlows(Array.isArray(response.flows) ? response.flows : []);
+    }).catch((error) => {
+      if (cancelled) return;
+      setRegisteredFlows([]);
+      setActiveFlowId(null);
+      setFlowOriginNodeId(null);
+      setSelectedFlowSourceNodeId(null);
+      showToast(translateError(error));
+    });
+    return () => { cancelled = true; };
+  }, [
+    catalogReady,
+    diagramId,
+    lane?.draft?.draftId,
+    lane?.draft?.draftRevision,
+    lane?.published?.revisionId,
+    showToast,
+    translateError,
+    view,
+  ]);
   useEffect(() => { refreshDocuments(); }, [refreshDocuments]);
   useEffect(() => { refreshAnalysis(); }, [refreshAnalysis]);
   useEffect(() => { refreshSkills(true); }, [refreshSkills]);
@@ -974,6 +1020,60 @@ function Viewer() {
   const canvasEdges = canvasElements.edges;
   const selectedNode = canvasNodes.find((node) => node.id === selectedNodeId) || null;
   const selectedEdge = canvasEdges.find((edge) => edge.id === selectedEdgeId) || null;
+  const activeFlow = registeredFlows.find((flow) => flow.id === activeFlowId) || null;
+  const relationshipProjection = useMemo(
+    () => oneHopProjection(canvasNodes, canvasEdges, relationshipFocusNodeId),
+    [canvasEdges, canvasNodes, relationshipFocusNodeId],
+  );
+  const activeFlowProjection = useMemo(
+    () => flowCanvasProjection(activeFlow),
+    [activeFlow],
+  );
+  const availableFocusedFlows = useMemo(
+    () => availableFlowsForFocus(registeredFlows, relationshipFocusNodeId),
+    [registeredFlows, relationshipFocusNodeId],
+  );
+  const flowOriginNode = canvasNodes.find((node) => node.id === flowOriginNodeId) || null;
+
+  const startRegisteredFlow = useCallback((flowId) => {
+    const flow = registeredFlows.find((entry) => entry.id === flowId);
+    const originId = relationshipFocusNodeId;
+    const originStep = sourceNodeForProjection(flow, originId);
+    if (!flow || !originId || !originStep) return;
+    setActiveFlowId(flow.id);
+    setFlowOriginNodeId(originId);
+    setSelectedFlowSourceNodeId(originStep.sourceNodeId);
+    setSelectedNodeId(originId);
+    setSelectedEdgeId(null);
+    setSelectedRegionId(null);
+    setFocusSelection(true);
+    setPendingLayerOpen(false);
+    setInspectorCollapsed(false);
+  }, [registeredFlows, relationshipFocusNodeId]);
+
+  const selectFlowStep = useCallback((sourceNodeId) => {
+    if (!activeFlow?.nodes.some((node) => node.sourceNodeId === sourceNodeId)) return;
+    setSelectedFlowSourceNodeId(sourceNodeId);
+    const projectionNodeId = projectionNodeForSource(activeFlow, sourceNodeId);
+    if (!projectionNodeId) return;
+    setSelectedNodeId(projectionNodeId);
+    setSelectedEdgeId(null);
+    setSelectedRegionId(null);
+  }, [activeFlow]);
+
+  const exitRegisteredFlow = useCallback(() => {
+    const originId = flowOriginNodeId && canvasNodes.some((node) => node.id === flowOriginNodeId)
+      ? flowOriginNodeId
+      : null;
+    setActiveFlowId(null);
+    setFlowOriginNodeId(null);
+    setSelectedFlowSourceNodeId(null);
+    setSelectedRegionId(null);
+    setSelectedEdgeId(null);
+    setSelectedNodeId(originId);
+    setRelationshipFocusNodeId(originId);
+    setFocusSelection(Boolean(originId));
+  }, [canvasNodes, flowOriginNodeId]);
 
   const displayEdges = useMemo(() => {
     const routedEdges = canvasEdges.map((edge) => {
@@ -993,7 +1093,18 @@ function Viewer() {
     return routedEdges.map(({ edge, styled, ports }, edgeIndex) => {
       const related = edge.id === selectedEdgeId
         || (selectedNodeId && (edge.source === selectedNodeId || edge.target === selectedNodeId));
-      const emphasized = focusSelection && related;
+      const relationshipEdge = relationshipProjection.edgeIds.has(edge.id);
+      const registeredFlowEdge = activeFlowProjection.edgeIds.has(edge.id);
+      const emphasized = activeFlow
+        ? registeredFlowEdge
+        : relationshipFocusNodeId
+          ? relationshipEdge
+          : focusSelection && related;
+      const muted = activeFlow
+        ? !registeredFlowEdge
+        : relationshipFocusNodeId
+          ? !relationshipEdge
+          : false;
       const sourceBundleCount = sourceBundles.get(`${edge.source}:${ports.sourcePort}`) || 1;
       const targetBundleCount = targetBundles.get(`${edge.target}:${ports.targetPort}`) || 1;
       const draftClass = edge.data?.__draftRemoval
@@ -1001,7 +1112,12 @@ function Viewer() {
         : edge.data?.__draftAddition
           ? 'is-pending-addition'
           : edge.data?.__draftChanges?.length ? 'is-pending-change' : '';
-      const className = [styled.className, draftClass, emphasized ? 'is-emphasized' : '']
+      const className = [
+        styled.className,
+        draftClass,
+        emphasized ? 'is-emphasized' : '',
+        muted ? 'is-muted' : '',
+      ]
         .filter(Boolean)
         .join(' ');
       return {
@@ -1029,7 +1145,17 @@ function Viewer() {
         },
       };
     });
-  }, [canvasEdges, canvasNodes, focusSelection, selectedEdgeId, selectedNodeId]);
+  }, [
+    activeFlow,
+    activeFlowProjection,
+    canvasEdges,
+    canvasNodes,
+    focusSelection,
+    relationshipFocusNodeId,
+    relationshipProjection,
+    selectedEdgeId,
+    selectedNodeId,
+  ]);
 
   const architectureViews = useMemo(() => ['current', 'target', 'compare'].map((key) => [
     key,
@@ -1060,9 +1186,13 @@ function Viewer() {
     if (!nextDiagramId) return;
     if (nextDiagramId === diagramRef.current) {
       if (focusNodeId && nodesRef.current.some((node) => node.id === focusNodeId)) {
+        setActiveFlowId(null);
+        setFlowOriginNodeId(null);
+        setSelectedFlowSourceNodeId(null);
         setSelectedRegionId(null);
         setSelectedEdgeId(null);
         setSelectedNodeId(focusNodeId);
+        setRelationshipFocusNodeId(focusNodeId);
         setFocusSelection(true);
       }
       return;
@@ -1122,16 +1252,36 @@ function Viewer() {
     const childOwnerIds = new Set(diagramCatalog.diagrams
       .filter((entry) => entry.parentDiagramId === diagramId && entry.ownerNodeId)
       .map((entry) => entry.ownerNodeId));
-    const semanticNodes = canvasNodes.map((node) => ({
-      ...node,
-      zIndex: 2,
-      data: {
-        ...node.data,
-        __hasChildDiagram: childOwnerIds.has(node.id),
-        __mutedByFocus: false,
-        __relatedByFocus: focusSelection && relatedNodeIds.has(node.id),
-      },
-    }));
+    const selectedFlowProjectionNodeId = activeFlow
+      ? projectionNodeForSource(activeFlow, selectedFlowSourceNodeId)
+      : null;
+    const semanticNodes = canvasNodes.map((node) => {
+      const registeredFlowStep = activeFlowProjection.nodeSteps.get(node.id) || null;
+      const relationshipRelated = relationshipProjection.nodeIds.has(node.id);
+      const muted = activeFlow
+        ? !registeredFlowStep
+        : relationshipFocusNodeId
+          ? !relationshipRelated
+          : false;
+      const related = activeFlow
+        ? Boolean(registeredFlowStep)
+        : relationshipFocusNodeId
+          ? relationshipRelated
+          : focusSelection && relatedNodeIds.has(node.id);
+      return {
+        ...node,
+        zIndex: registeredFlowStep ? 3 : 2,
+        data: {
+          ...node.data,
+          __hasChildDiagram: childOwnerIds.has(node.id),
+          __mutedByFocus: muted,
+          __relatedByFocus: related,
+          __relationshipFocusRoot: !activeFlow && node.id === relationshipFocusNodeId,
+          __flowStep: registeredFlowStep,
+          __flowSelected: node.id === selectedFlowProjectionNodeId,
+        },
+      };
+    });
     const layoutView = view === 'compare' ? 'target' : view;
     const activeLayout = layouts[layoutView] || EMPTY_LAYOUT;
     const regionNodes = buildGroupRegionNodes({
@@ -1147,6 +1297,8 @@ function Viewer() {
     });
     return [...regionNodes, ...semanticNodes];
   }, [
+    activeFlow,
+    activeFlowProjection,
     canvasEdges,
     canvasNodes,
     groups,
@@ -1159,8 +1311,11 @@ function Viewer() {
     nodes,
     previewRegionResize,
     regionPreview,
+    relationshipFocusNodeId,
+    relationshipProjection,
     saveRegionResize,
     selectedEdgeId,
+    selectedFlowSourceNodeId,
     selectedNodeId,
     selectedRegionId,
     t,
@@ -1535,35 +1690,46 @@ function Viewer() {
                   edgeTypes={edgeTypes}
                   onNodesChange={handleNodesChange}
                   onNodeClick={(_, node) => {
+                    if (activeFlow) {
+                      if (node.type === 'groupRegion') return;
+                      const flowNode = sourceNodeForProjection(activeFlow, node.id);
+                      if (flowNode) selectFlowStep(flowNode.sourceNodeId);
+                      return;
+                    }
                     if (node.type === 'groupRegion') {
                       setSelectedRegionId(node.id);
                       setSelectedNodeId(null);
                       setSelectedEdgeId(null);
+                      setRelationshipFocusNodeId(null);
                       setFocusSelection(false);
                       return;
                     }
                     setSelectedRegionId(null);
                     setSelectedEdgeId(null);
                     setSelectedNodeId(node.id);
+                    setRelationshipFocusNodeId(node.id);
                     setFocusSelection(true);
                   }}
                   onNodeDoubleClick={(_, node) => {
-                    if (node.type === 'groupRegion') return;
+                    if (activeFlow || node.type === 'groupRegion') return;
                     const child = diagramCatalog.diagrams.find((entry) => (
                       entry.parentDiagramId === diagramId && entry.ownerNodeId === node.id
                     ));
                     if (child) selectDiagram(child.id);
                   }}
                   onEdgeClick={(_, edge) => {
+                    if (activeFlow) return;
                     setSelectedRegionId(null);
                     setSelectedNodeId(null);
                     setSelectedEdgeId(edge.id);
                     setFocusSelection(true);
                   }}
                   onPaneClick={() => {
+                    if (activeFlow) return;
                     setSelectedRegionId(null);
                     setSelectedNodeId(null);
                     setSelectedEdgeId(null);
+                    setRelationshipFocusNodeId(null);
                     setFocusSelection(false);
                   }}
                   onNodeDragStart={beginCanvasNodeDrag}
@@ -1620,7 +1786,15 @@ function Viewer() {
           )}
 
           {!inspectorCollapsed && (
-            pendingLayerOpen && draftProjection.totalCount ? (
+            activeFlow ? (
+              <BusinessFlowPanel
+                flow={activeFlow}
+                originNodeName={flowOriginNode?.data?.name || flowOriginNodeId}
+                selectedSourceNodeId={selectedFlowSourceNodeId}
+                onSelectSourceNode={selectFlowStep}
+                onExit={exitRegisteredFlow}
+              />
+            ) : pendingLayerOpen && draftProjection.totalCount ? (
               <PendingChangesInspector
                 projection={draftProjection}
                 onClose={() => setPendingLayerOpen(false)}
@@ -1642,6 +1816,9 @@ function Viewer() {
                 onOpenRelated={selectDiagram}
                 canCorrect={!readOnlyHistorical && view !== 'compare'}
                 onCorrectNode={() => setCorrectionNodeId(selectedNode.id)}
+                relationshipFocused={relationshipFocusNodeId === selectedNode?.id}
+                availableFlows={availableFocusedFlows}
+                onStartFlow={startRegisteredFlow}
               />
             )
           )}

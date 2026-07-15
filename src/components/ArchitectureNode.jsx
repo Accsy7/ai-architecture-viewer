@@ -22,6 +22,8 @@ export default function ArchitectureNode({ id, data, selected }) {
     selected ? 'is-selected' : '',
     data.__mutedByFocus ? 'is-muted-by-focus' : '',
     data.__relatedByFocus ? 'is-related-by-focus' : '',
+    data.__relationshipFocusRoot ? 'is-relationship-focus-root' : '',
+    data.__flowSelected ? 'is-flow-selected' : '',
     editable ? 'is-editable' : '',
     data.__draftAddition ? 'is-pending-addition' : '',
     data.__draftRemoval ? 'is-pending-removal' : '',
@@ -45,6 +47,11 @@ export default function ArchitectureNode({ id, data, selected }) {
       <Handle id="bottom" className="node-handle node-handle-bottom" type="source" position={Position.Bottom} isConnectable={editable} />
       <Handle id="left" className="node-handle node-handle-left" type="source" position={Position.Left} isConnectable={editable} />
       <div className="node-badges">
+        {data.__flowStep && (
+          <span className="business-flow-node-badge" title={t('flow.canvasStep')}>
+            {t('flow.stepShort', { step: data.__flowStep })}
+          </span>
+        )}
         {draftChanges.length > 0 && (
           <span className={`pending-node-badge is-${draftCategory || 'module-changed'}`}>
             {t(`pending.category.${draftCategory || 'module-changed'}`)} · {draftChanges.length}

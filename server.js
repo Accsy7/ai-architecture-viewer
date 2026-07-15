@@ -45,6 +45,10 @@ const {
   resolveArchitectureCatalog,
 } = require('./schema/architecture-catalog-contract.cjs');
 const {
+  REGISTERED_FLOW_SCHEMA_VERSION,
+  resolveRegisteredFlowRegistry,
+} = require('./schema/registered-flow-contract.cjs');
+const {
   ANALYSIS_SCHEMA_VERSION,
   AGENT_TASK_TYPES,
   createEmptyAnalysis,
@@ -84,6 +88,7 @@ const PROJECT_FILES = Object.freeze({
   layout: 'viewer-layout.json',
   config: 'viewer.config.json',
   catalog: 'architecture-catalog.json',
+  registeredFlows: 'registered-business-flows.json',
   analysis: 'analysis.json',
 });
 const VIEWER_CONFIG_SCHEMA_VERSION = '1.0.0';
@@ -191,6 +196,13 @@ function resolveCatalogFile(value = process.env.CATALOG_FILE, projectDirectory =
   return resolveProjectFile(value, projectDirectory, PROJECT_FILES.catalog);
 }
 
+function resolveRegisteredFlowsFile(
+  value = process.env.REGISTERED_FLOWS_FILE,
+  projectDirectory = resolveProjectDirectory(),
+) {
+  return resolveProjectFile(value, projectDirectory, PROJECT_FILES.registeredFlows);
+}
+
 function resolveAnalysisFile(value = process.env.ANALYSIS_FILE, projectDirectory = resolveProjectDirectory()) {
   return resolveProjectFile(value, projectDirectory, PROJECT_FILES.analysis);
 }
@@ -287,6 +299,28 @@ function readArchitectureCatalog(
     }
     throw new ContractError(`无法读取本地架构目录：${error.message}`, 'ARCHITECTURE_CATALOG_READ_FAILED', 500);
   }
+}
+
+function readRegisteredFlows(file, context) {
+  if (!fs.existsSync(file)) {
+    return {
+      schemaVersion: REGISTERED_FLOW_SCHEMA_VERSION,
+      diagramId: context.diagramId,
+      view: context.view,
+      flows: [],
+    };
+  }
+  let raw;
+  try {
+    raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (error) {
+    throw new ContractError(
+      `无法读取登记业务流：${error.message}`,
+      'REGISTERED_FLOW_READ_FAILED',
+      500,
+    );
+  }
+  return resolveRegisteredFlowRegistry(raw, context);
 }
 
 function diagramFrom(url, catalog) {
@@ -3265,6 +3299,7 @@ function createServer(options = {}) {
     : (options.stateFile || options.layoutFile
       ? path.join(path.dirname(stateFile), PROJECT_FILES.catalog)
       : resolveCatalogFile(undefined, projectRoot));
+  const registeredFlowsFile = resolveRegisteredFlowsFile(options.registeredFlowsFile, projectRoot);
   const analysisFile = options.analysisFile !== undefined
     ? resolveAnalysisFile(options.analysisFile, projectRoot)
     : (options.stateFile || options.layoutFile
@@ -3551,6 +3586,18 @@ function createServer(options = {}) {
 
       if (req.method === 'GET' && pathname === '/api/diagrams') {
         return json(res, 200, publicArchitectureCatalog(readArchitectureCatalog(catalogFile, stateFile, layoutFile)));
+      }
+
+      if (req.method === 'GET' && pathname === '/api/registered-flows') {
+        const view = viewFrom(requestUrl);
+        const catalog = readArchitectureCatalog(catalogFile, stateFile, layoutFile);
+        const diagram = diagramFrom(requestUrl, catalog);
+        return json(res, 200, readRegisteredFlows(registeredFlowsFile, {
+          catalog,
+          diagramId: diagram.id,
+          view,
+          readState,
+        }));
       }
 
       if (req.method === 'GET' && pathname === '/api/state') {

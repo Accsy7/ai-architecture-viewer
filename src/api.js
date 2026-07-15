@@ -49,6 +49,8 @@ export const getSkills = () => request('/api/skills');
 
 export const getDiagramCatalog = () => request('/api/diagrams');
 
+export const getRegisteredFlows = (view, diagram) => request(lanePath('/api/registered-flows', view, diagram));
+
 export const getViewerLayout = (view, diagram) => request(lanePath('/api/layout', view, diagram));
 
 export const putViewerLayout = (view, layout, positions, diagram, containers) =>
