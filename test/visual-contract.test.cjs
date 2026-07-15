@@ -54,6 +54,24 @@ test('language switch renders one alternate-language text button', () => {
   assert.match(component, /language === 'zh' \? 'en' : 'zh'/);
 });
 
+test('header localization is reactive without entering project data or navigation state', () => {
+  const app = read('src/ViewerApp.jsx');
+  assert.match(app, /import \{ resolveLocalizedConfigText \} from '\.\/localized-config\.mjs'/);
+  const start = app.indexOf('const localizedHeader = useMemo');
+  const end = app.indexOf('const editContext', start);
+  const localization = app.slice(start, end);
+  assert.notEqual(start, -1);
+  assert.match(localization, /config\.eyebrow/);
+  assert.match(localization, /config\.viewerName/);
+  assert.match(localization, /config\.scopeNote/);
+  assert.match(localization, /language/);
+  assert.doesNotMatch(localization, /projectName|selectedDiagram|nodes|edges|documents|evidence/);
+  assert.doesNotMatch(localization, /setView|setDiagramId|setSelectedNodeId|setRelationshipFocusNodeId|setActiveFlowId/);
+  assert.match(app, /<span className="eyebrow">\{localizedHeader\.eyebrow\}<\/span>/);
+  assert.match(app, /<h1>\{localizedHeader\.viewerName\}<\/h1>/);
+  assert.match(app, /<p>\{localizedHeader\.scopeNote\}<\/p>/);
+});
+
 test('compact draft notice excludes category chips and provenance explanations', () => {
   const source = read('src/components/PendingChangesLayer.jsx');
   const start = source.indexOf('export default function PendingChangesSummary');

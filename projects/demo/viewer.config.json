@@ -2,9 +2,18 @@
   "schemaVersion": "1.0.0",
   "projectId": "demo",
   "projectName": "Synthetic Support Assistant",
-  "viewerName": "AI Architecture Viewer",
-  "eyebrow": "PUBLIC MVP · SYNTHETIC DEMO",
-  "scopeNote": "A fictional support assistant used to demonstrate evidence-backed architecture proposals. No customer, production, or personal data is included.",
+  "viewerName": {
+    "zh": "AI 架构查看器",
+    "en": "AI Architecture Viewer"
+  },
+  "eyebrow": {
+    "zh": "PUBLIC MVP · 合成演示",
+    "en": "PUBLIC MVP · SYNTHETIC DEMO"
+  },
+  "scopeNote": {
+    "zh": "一个用于演示基于证据的架构提案的虚构支持助手；不包含客户、生产或个人数据。",
+    "en": "A fictional support assistant used to demonstrate evidence-backed architecture proposals. No customer, production, or personal data is included."
+  },
   "defaultLanguage": "zh",
   "defaultFocusNodeId": "request-intake",
   "views": {

@@ -214,6 +214,29 @@ function requiredConfigText(value, field, maxLength = 240) {
   return value.trim();
 }
 
+function localizedConfigText(value, field, maxLength) {
+  if (typeof value === 'string') return requiredConfigText(value, field, maxLength);
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new ContractError(`查看器配置 ${field} 无效`, 'VIEWER_CONFIG_INVALID', 500, { field });
+  }
+  const localized = {};
+  for (const language of ['zh', 'en']) {
+    if (value[language] === undefined || value[language] === null) continue;
+    localized[language] = requiredConfigText(value[language], `${field}.${language}`, maxLength);
+  }
+  if (!localized.zh && !localized.en) {
+    throw new ContractError(`查看器配置 ${field} 无效`, 'VIEWER_CONFIG_INVALID', 500, { field });
+  }
+  return localized;
+}
+
+function resolvedConfigText(value, language = 'zh') {
+  if (typeof value === 'string') return value;
+  const preferredLanguage = language === 'en' ? 'en' : 'zh';
+  const alternateLanguage = preferredLanguage === 'en' ? 'zh' : 'en';
+  return value?.[preferredLanguage] || value?.[alternateLanguage] || '';
+}
+
 function readViewerConfig(configFile) {
   let raw;
   try {
@@ -272,9 +295,9 @@ function readViewerConfig(configFile) {
     schemaVersion: VIEWER_CONFIG_SCHEMA_VERSION,
     projectId,
     projectName: requiredConfigText(raw.projectName, 'projectName', 80),
-    viewerName: requiredConfigText(raw.viewerName, 'viewerName', 80),
-    eyebrow: requiredConfigText(raw.eyebrow, 'eyebrow', 120),
-    scopeNote: requiredConfigText(raw.scopeNote, 'scopeNote', 320),
+    viewerName: localizedConfigText(raw.viewerName, 'viewerName', 80),
+    eyebrow: localizedConfigText(raw.eyebrow, 'eyebrow', 120),
+    scopeNote: localizedConfigText(raw.scopeNote, 'scopeNote', 320),
     defaultLanguage,
     defaultFocusNodeId,
     views,
@@ -3342,7 +3365,7 @@ function createServer(options = {}) {
           project: {
             id: config.projectId,
             name: config.projectName,
-            scopeNote: config.scopeNote,
+            scopeNote: resolvedConfigText(config.scopeNote, config.defaultLanguage || 'zh'),
           },
           diagrams: publicArchitectureCatalog(catalog),
           selected: {
@@ -3967,7 +3990,7 @@ if (require.main === module) {
   const server = createServer({ stateFile, documentsFile, layoutFile, configFile, catalogFile, projectRoot, workspaceRoot });
   server.listen(port, HOST, () => {
     const address = server.address();
-    console.log(`${config.projectName} ${config.viewerName}：http://${HOST}:${address.port}`);
+    console.log(`${config.projectName} ${resolvedConfigText(config.viewerName, config.defaultLanguage || 'zh')}：http://${HOST}:${address.port}`);
     console.log(`状态文件：${stateFile}`);
     console.log(`文档注册表：${documentsFile}`);
     console.log(`查看器排版：${layoutFile}`);

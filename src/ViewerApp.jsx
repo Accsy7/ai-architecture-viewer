@@ -53,6 +53,7 @@ import ProposalReviewDialog from './components/ProposalReviewDialog.jsx';
 import SmartArchitectureEdge from './components/SmartArchitectureEdge.jsx';
 import ViewerDetailPanel from './components/ViewerDetailPanel.jsx';
 import { I18nProvider, LanguageSwitch, useI18n } from './i18n.jsx';
+import { resolveLocalizedConfigText } from './localized-config.mjs';
 import { buildDraftChangeProjection, decorateFlowWithDraftChanges } from './pending-changes.mjs';
 import { buildReviewRecords } from './review-records.mjs';
 import {
@@ -82,9 +83,12 @@ const clampInspectorWidth = (value) => Math.max(280, Math.min(640, Number(value)
 const DEFAULT_CONFIG = {
   projectId: 'project',
   projectName: 'Project',
-  viewerName: 'AI 架构查看器',
-  eyebrow: 'PROJECT ARCHITECTURE',
-  scopeNote: '用于理解、核对与讨论项目架构。',
+  viewerName: { zh: 'AI 架构查看器', en: 'AI Architecture Viewer' },
+  eyebrow: { zh: '项目架构', en: 'PROJECT ARCHITECTURE' },
+  scopeNote: {
+    zh: '用于理解、核对与讨论项目架构。',
+    en: 'For understanding, verifying, and discussing project architecture.',
+  },
   defaultFocusNodeId: null,
   defaultLanguage: null,
   views: {
@@ -1473,15 +1477,33 @@ function Viewer() {
           ? t(view === 'target' ? 'shell.mode.targetDraft' : 'shell.mode.currentDraft', { revision: lane.published.revision })
           : t(view === 'target' ? 'shell.mode.formalTarget' : 'shell.mode.formalCurrent', { revision: lane.published.revision });
 
+  const localizedHeader = useMemo(() => ({
+    eyebrow: resolveLocalizedConfigText(
+      config.eyebrow,
+      language,
+      resolveLocalizedConfigText(DEFAULT_CONFIG.eyebrow, language),
+    ),
+    viewerName: resolveLocalizedConfigText(
+      config.viewerName,
+      language,
+      resolveLocalizedConfigText(DEFAULT_CONFIG.viewerName, language),
+    ),
+    scopeNote: resolveLocalizedConfigText(
+      config.scopeNote,
+      language,
+      resolveLocalizedConfigText(DEFAULT_CONFIG.scopeNote, language),
+    ),
+  }), [config.eyebrow, config.scopeNote, config.viewerName, language]);
+
   const editContext = useMemo(() => ({ editable: false, onResizeEnd: () => {} }), []);
 
   return (
     <div className="app-shell">
       <header className="topbar">
         <div>
-          <span className="eyebrow">{config.eyebrow}</span>
-          <h1>{config.viewerName}</h1>
-          <p>{config.scopeNote}</p>
+          <span className="eyebrow">{localizedHeader.eyebrow}</span>
+          <h1>{localizedHeader.viewerName}</h1>
+          <p>{localizedHeader.scopeNote}</p>
         </div>
         <div className="top-actions">
           <LanguageSwitch />
