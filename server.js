@@ -1146,7 +1146,7 @@ function submitAgentArtifact(analysis, runId, incoming, { projectRoot, diagram }
   return { analysis: next, artifact, proposal };
 }
 
-function agentRunResponse(analysis, runId) {
+function agentRunResponse(analysis, runId, { activeTargetDraftId = null } = {}) {
   const run = analysis.agentRuns.find((item) => item.id === runId);
   if (!run) throw new ContractError('未找到该智能体运行', 'AGENT_RUN_NOT_FOUND', 404);
   return {
@@ -1160,6 +1160,14 @@ function agentRunResponse(analysis, runId) {
       status: proposal.status,
       reviewedAt: proposal.reviewedAt,
       application: clone(proposal.application),
+      publication: proposal.view === 'target'
+        && proposal.status === 'accepted'
+        && proposal.application?.draftId === activeTargetDraftId
+        ? {
+          status: 'awaiting-publication',
+          summary: proposal.summary,
+        }
+        : null,
     })),
     permissions: {
       canSubmit: run.status !== 'reviewed',
@@ -1826,7 +1834,13 @@ function createServer(options = {}) {
 
       const agentRunMatch = /^\/api\/agent\/runs\/([a-z0-9][a-z0-9._-]{0,79})$/.exec(pathname);
       if (req.method === 'GET' && agentRunMatch) {
-        return json(res, 200, agentRunResponse(readAnalysis(analysisFile), agentRunMatch[1]));
+        const analysis = readAnalysis(analysisFile);
+        const run = analysis.agentRuns.find((item) => item.id === agentRunMatch[1]);
+        if (!run) throw new ContractError('未找到该智能体运行', 'AGENT_RUN_NOT_FOUND', 404);
+        const catalog = readArchitectureCatalog(catalogFile, stateFile, layoutFile);
+        const diagram = agentDiagram(catalog, run.diagramId);
+        const activeTargetDraftId = readState(diagram.statePath).target.draft?.draftId || null;
+        return json(res, 200, agentRunResponse(analysis, run.id, { activeTargetDraftId }));
       }
 
       const agentArtifactMatch = /^\/api\/agent\/runs\/([a-z0-9][a-z0-9._-]{0,79})\/artifacts$/.exec(pathname);
@@ -1854,21 +1868,12 @@ function createServer(options = {}) {
         const catalog = readArchitectureCatalog(catalogFile, stateFile, layoutFile);
         const diagram = agentDiagram(catalog, requestUrl.searchParams.get('diagram'));
         const lane = readState(diagram.statePath).target;
-        const analysis = readAnalysis(analysisFile);
-        const accepted = analysis.proposals.filter((proposal) => (
-          proposal.diagramId === diagram.id
-          && proposal.view === 'target'
-          && proposal.status === 'accepted'
-        ));
-        const approvedDraft = lane.draft && accepted.some((proposal) => proposal.application?.draftId === lane.draft.draftId)
-          ? lane.draft
-          : null;
         return json(res, 200, {
           protocolVersion: AI_CODING_PROTOCOL_VERSION,
           diagramId: diagram.id,
-          approvalStatus: approvedDraft ? 'human-approved-draft' : 'published-target',
-          approvedProposalIds: accepted.map((proposal) => proposal.id),
-          architecture: compactAgentArchitecture(approvedDraft || lane.published),
+          approvalStatus: 'published-target',
+          baselineStatus: 'formal-baseline',
+          architecture: compactAgentArchitecture(lane.published),
           agentCanPublish: false,
         });
       }

@@ -23,6 +23,9 @@ All notable changes to AI Architecture Viewer are documented in this file.
   reports must reference code facts.
 - Agent submissions still cannot approve or publish. Human acceptance creates
   only a draft, and publication remains a separate human-confirmed action.
+- `get_approved_target` returns only the latest user-published formal target.
+  Accepted drafts remain `awaiting-publication` review state and are never
+  exposed to coding agents as executable target graphs.
 
 ## [0.2.0] - 2026-07-14
 
@@ -62,7 +65,8 @@ All notable changes to AI Architecture Viewer are documented in this file.
   when their run was created.
 - Every run accepts only its declared artifact types, and each submission must
   carry a manifest covering all referenced evidence.
-- `get_approved_target` never returns an unrelated, unapproved target draft.
+- `get_approved_target` never returns a target draft; only the published formal
+  target is available as an executable agent baseline.
 
 ## [0.1.0] - 2026-07-14
 

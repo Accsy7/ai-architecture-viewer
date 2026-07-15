@@ -399,10 +399,17 @@ test('a concept project can complete the target-proposal loop from user-confirme
   assert.equal(accepted.payload.lane.published.graph.nodes.length, 0, 'acceptance must not alter the published target');
   assert.equal(accepted.payload.lane.draft.graph.nodes[0].id, 'human-decision-boundary');
 
-  const approvedDraft = await request(fixture.baseUrl, '/api/agent/approved-target');
-  assert.equal(approvedDraft.payload.approvalStatus, 'human-approved-draft');
-  assert.equal(approvedDraft.payload.architecture.representation, 'semantic-graph-v1');
-  assert.equal(approvedDraft.payload.architecture.graph.nodes[0].position, undefined);
+  const formalTargetBeforePublish = await request(fixture.baseUrl, '/api/agent/approved-target');
+  assert.equal(formalTargetBeforePublish.payload.approvalStatus, 'published-target');
+  assert.equal(formalTargetBeforePublish.payload.baselineStatus, 'formal-baseline');
+  assert.equal(formalTargetBeforePublish.payload.architecture.revisionId, accepted.payload.lane.published.revisionId);
+  assert.equal(formalTargetBeforePublish.payload.architecture.graph.nodes.length, 0);
+  assert.equal('approvedProposalIds' in formalTargetBeforePublish.payload, false);
+
+  const reviewBeforePublish = await request(fixture.baseUrl, `/api/agent/runs/${run.id}`);
+  const acceptedProposal = reviewBeforePublish.payload.proposals.find((item) => item.id === proposal.id);
+  assert.equal(acceptedProposal.publication.status, 'awaiting-publication');
+  assert.equal(acceptedProposal.publication.summary, proposal.summary);
 
   const lane = accepted.payload.lane;
   const published = await request(fixture.baseUrl, '/api/publish?view=target', {
@@ -421,10 +428,14 @@ test('a concept project can complete the target-proposal loop from user-confirme
 
   const approvedTarget = await request(fixture.baseUrl, '/api/agent/approved-target');
   assert.equal(approvedTarget.payload.approvalStatus, 'published-target');
+  assert.equal(approvedTarget.payload.baselineStatus, 'formal-baseline');
   assert.equal(approvedTarget.payload.architecture.graph.nodes[0].id, 'human-decision-boundary');
   assert.equal(approvedTarget.payload.architecture.graph.nodes[0].data.authorization, 'Only the user may approve and publish.');
   assert.equal(JSON.stringify(approvedTarget.payload.architecture).includes('position'), false);
   assert.equal(JSON.stringify(approvedTarget.payload.architecture).includes('documentRefs'), false);
+
+  const reviewAfterPublish = await request(fixture.baseUrl, `/api/agent/runs/${run.id}`);
+  assert.equal(reviewAfterPublish.payload.proposals[0].publication, null);
 });
 
 test('a Markdown design can support a target proposal without any code repository', async (t) => {
@@ -661,7 +672,7 @@ test('architecture snapshots become additive semantic diffs and never remove omi
   assert.equal(proposal.changes[0].targetId, 'processing-module');
 });
 
-test('approved target never exposes an unrelated unapproved draft', async (t) => {
+test('approved target always exposes only the published formal baseline', async (t) => {
   const fixture = await startFixture(t);
   const target = await request(fixture.baseUrl, '/api/state?view=target');
   assert.equal(target.response.status, 200);
@@ -670,6 +681,7 @@ test('approved target never exposes an unrelated unapproved draft', async (t) =>
   const approved = await request(fixture.baseUrl, '/api/agent/approved-target');
   assert.equal(approved.response.status, 200);
   assert.equal(approved.payload.approvalStatus, 'published-target');
+  assert.equal(approved.payload.baselineStatus, 'formal-baseline');
   assert.equal(approved.payload.architecture.revisionId, target.payload.published.revisionId);
   assert.deepEqual(
     approved.payload.architecture.graph.nodes.map((node) => node.id),

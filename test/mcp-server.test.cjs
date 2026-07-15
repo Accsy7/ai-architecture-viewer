@@ -51,6 +51,9 @@ test('MCP stdio server exposes the governed external-agent tool surface', async 
     assert.equal(tools.tools.some((tool) => (
       tool.name.startsWith('approve_') || tool.name.startsWith('publish_')
     )), false);
+    const approvedTargetTool = tools.tools.find((tool) => tool.name === 'get_approved_target');
+    assert.match(approvedTargetTool.description, /only the latest human-published formal target baseline/i);
+    assert.match(approvedTargetTool.description, /accepted but unpublished drafts are excluded/i);
 
     const result = await client.callTool({
       name: 'get_current_architecture',
@@ -62,6 +65,20 @@ test('MCP stdio server exposes the governed external-agent tool surface', async 
     assert.ok(payload.published.graph.nodes.length > 0);
     assert.equal(payload.published.representation, 'semantic-graph-v1');
     assert.equal(JSON.stringify(payload.published).includes('position'), false);
+
+    const targetContextResult = await client.callTool({
+      name: 'get_project_context',
+      arguments: { diagramId: 'system-overview', view: 'target' },
+    });
+    const targetContext = JSON.parse(targetContextResult.content[0].text);
+    const formalTargetResult = await client.callTool({
+      name: 'get_approved_target',
+      arguments: { diagramId: 'system-overview' },
+    });
+    const formalTarget = JSON.parse(formalTargetResult.content[0].text);
+    assert.equal(formalTarget.approvalStatus, 'published-target');
+    assert.equal(formalTarget.baselineStatus, 'formal-baseline');
+    assert.equal(formalTarget.architecture.revisionId, targetContext.selected.published.revisionId);
   } finally {
     await client.close();
   }

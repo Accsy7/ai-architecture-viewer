@@ -129,7 +129,9 @@ Codex 桌面应用、CLI 和 IDE 扩展共享 MCP 配置。参阅 [Codex MCP 官
 | `submit_change_proposal` | 提交目标架构变更 | 否，只进入收件箱 |
 | `submit_implementation_report` | 提交实施结果、测试和偏离 | 否 |
 | `get_review_status` | 查询人工审阅结果 | 否 |
-| `get_approved_target` | 以精简语义图读取人工已接受的目标草案或正式目标 | 否 |
+| `get_approved_target` | 以精简语义图读取最近一次由用户发布的正式目标基线 | 否 |
+
+接受提案只会把变更写入目标草案，并不授权智能体据此开发。`get_review_status` 会把这种状态标为 `awaiting-publication`；只有用户再次明确发布后，`get_approved_target` 才会返回新版本。未发布草案不会作为可执行目标图输出。
 
 ## 命令行与文件后备入口
 

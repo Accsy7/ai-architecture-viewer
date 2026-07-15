@@ -9,8 +9,8 @@ Verify what was actually built and make all architecture drift visible to the us
 
 ## Workflow
 
-1. When AI Architecture Viewer MCP tools are available, call `get_approved_target` and `get_project_context`, then call `create_agent_run` with task type `implementation-reconcile`. Retain the returned run ID.
-2. Read the approved request, approved architecture proposal, base snapshot, and repository revision.
+1. When AI Architecture Viewer MCP tools are available, call `get_approved_target` and `get_project_context`, then call `create_agent_run` with task type `implementation-reconcile`. Retain the returned run ID. Treat only the returned `published-target` / `formal-baseline` as executable; an accepted proposal with `awaiting-publication` review status is still a draft and must not start implementation.
+2. Read the approved request, published formal target, base snapshot, and repository revision.
 3. Inspect the actual worktree or revision diff. Include uncommitted changes when they are in scope and identify them as uncommitted.
 4. Run the relevant tests, builds, checks, or safe diagnostics. Record command, outcome, and a concise result; never hide failures.
 5. Map implementation evidence to each acceptance criterion and approved architecture change.

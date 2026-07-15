@@ -99,13 +99,14 @@ function registerTool(server, name, config, handler) {
 }
 
 const server = new McpServer(
-  { name: 'ai-architecture-viewer', version: '0.2.0' },
+  { name: 'ai-architecture-viewer', version: '0.3.0' },
   {
     instructions: [
       'Use this server as an external visual architecture handoff for coding agents.',
       'Call get_project_context before creating a run.',
       'Create a run before submitting evidence-backed artifacts.',
       'Evidence paths must be relative to the configured code workspace root.',
+      'Only a published target is an executable architecture baseline; an accepted draft still awaits human publication.',
       'Agents may submit snapshots, proposals, and implementation reports, but cannot approve or publish architecture.',
     ].join(' '),
   },
@@ -200,8 +201,8 @@ registerTool(server, 'get_review_status', {
 }, ({ runId }) => viewerRequest(`/api/agent/runs/${encodeURIComponent(runId)}`));
 
 registerTool(server, 'get_approved_target', {
-  title: 'Get human-approved target',
-  description: 'Read the latest human-approved target draft when present, otherwise the published target baseline, as a compact semantic graph. This tool cannot publish it.',
+  title: 'Get published formal target baseline',
+  description: 'Read only the latest human-published formal target baseline as a compact semantic graph. Accepted but unpublished drafts are excluded and remain visible only as awaiting-publication review status.',
   inputSchema: z.object({ diagramId: z.string().optional() }),
   annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
 }, ({ diagramId }) => viewerRequest(`/api/agent/approved-target${query({ diagram: diagramId })}`));

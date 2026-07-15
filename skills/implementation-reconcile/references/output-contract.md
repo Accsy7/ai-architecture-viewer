@@ -4,7 +4,7 @@ Produce artifacts compatible with protocol version `1.1.0`.
 
 ## implementation-report.json
 
-Reference the approved request and proposal. Record implementation status, resulting revision, changed files, test results, acceptance-criterion results, architecture drift, unresolved items, and the related evidence manifest.
+Reference the approved request and the user-published formal target baseline. Never use an accepted but unpublished draft as the implementation contract. Record implementation status, resulting revision, changed files, test results, acceptance-criterion results, architecture drift, unresolved items, and the related evidence manifest.
 
 Status values are `complete`, `partial`, and `blocked`. Test outcomes are `passed`, `failed`, and `not-run`. Drift kinds are `missing`, `extra`, `changed`, and `unverified`.
 

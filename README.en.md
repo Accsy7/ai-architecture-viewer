@@ -129,7 +129,9 @@ The client asks you to trust a new local MCP server on first use. See the [offic
 | `submit_change_proposal` | Submit a target architecture change | No; enters the inbox only |
 | `submit_implementation_report` | Submit implementation results, checks, and drift | No |
 | `get_review_status` | Read human review outcomes | No |
-| `get_approved_target` | Read the accepted target draft or published target as a compact semantic graph | No |
+| `get_approved_target` | Read the latest user-published formal target baseline as a compact semantic graph | No |
+
+Accepting a proposal only applies its changes to the target draft; it does not authorize an agent to implement that draft. `get_review_status` marks this state as `awaiting-publication`. `get_approved_target` switches to the new version only after the user explicitly publishes it, and never returns an unpublished draft as an executable target graph.
 
 ## CLI and file fallback
 
