@@ -3,7 +3,7 @@
 [简体中文](README.md)
 
 [![CI](https://github.com/Accsy7/ai-architecture-viewer/actions/workflows/ci.yml/badge.svg)](https://github.com/Accsy7/ai-architecture-viewer/actions/workflows/ci.yml)
-![Version: v0.3.0](https://img.shields.io/badge/version-v0.3.0-2f6f5e)
+![Version: v0.4.0](https://img.shields.io/badge/version-v0.4.0-2f6f5e)
 [![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-7c6f64)](LICENSE)
 
 > **License:** Source code is available only for the noncommercial purposes defined by the [PolyForm Noncommercial License 1.0.0](LICENSE). Derivative versions must retain the attribution in [NOTICE](NOTICE) and follow the [Project Name and Brand Usage Policy](TRADEMARKS.en.md).
@@ -16,15 +16,19 @@ It does not embed a model, require a model API key, or scan a repository on an a
 
 All bundled screens and data are fictional. No customer, production, or personal data is included.
 
-## What the v0.3.0 MVP does
+## What the v0.4.0 MVP does
 
 - Lets external agents read published stable IDs, responsibilities, relationships, and boundaries as a compact semantic graph without retransmitting layout data.
 - Supports concept projects without a code repository by accepting target proposals from user-confirmed discussion or Markdown design material.
-- Creates a traceable run for each discovery, planning, or reconciliation task and locks the architecture baseline used by that run.
+- Creates a traceable run for each discovery, planning, or reconciliation task. An implementation run additionally locks the published target's diagram ID, revision, revision ID, and semantic hash—never a draft.
 - Distinguishes four visible basis types: user confirmation, design document, code fact, and agent inference.
 - Verifies file-based paths, line ranges, and content hashes; rejects escaped, sensitive, or stale material.
 - Allows discussion and design material to support target design, but never as proof of current implementation.
 - Converts agent architecture snapshots into semantic diffs. Existing nodes omitted from a snapshot are never removed automatically.
+- Requires an implementation run to submit a complete `code-fact`-backed resulting snapshot before a report that references both that snapshot and the formal-target lock.
+- Computes `missing / extra / changed / unverified` drift on the server by stable ID, including responsibilities, authorization boundaries, relationship endpoints and types, and controlled boundary posture instead of trusting agent self-report alone.
+- Cross-checks every server result against the implementation report. Unexplained, unreported, or unverified drift blocks “complete/aligned”; explained drift never rewrites the target automatically.
+- Returns a low-context summary from `get_review_status` by default and loads per-item target, actual, evidence, and explanation detail only when requested.
 - Places architecture proposals in a human inbox with per-change evidence and submitter provenance.
 - Reserves acceptance and rejection for the user. Acceptance writes only a draft; publication requires a second explicit human action.
 - Keeps current architecture, target architecture, diffs, drafts, and immutable revision history.
@@ -36,19 +40,25 @@ All bundled screens and data are fictional. No customer, production, or personal
 flowchart LR
     U["User and agent confirm the goal"] --> C["Discussion / Markdown design"]
     C --> T["Submit target proposal"]
-    R["Repository code facts"] --> S["Submit current snapshot or implementation report"]
+    R["Repository code facts"] --> S["Submit current snapshot"]
     T --> V["Viewer labels the basis and renders diffs"]
-    S --> V
+    S -->|Discovery| V
     V --> H{"Human review"}
     H -->|Reject| U
     H -->|Accept| D["Write architecture draft"]
     D --> P{"Human publication"}
     P --> G["Published target and history"]
-    G --> A["Agent reads compact target and implements"]
+    G --> A["Implementation run locks formal target and implements"]
     A --> R
+    S -->|Implementation| X["Server computes drift by stable ID"]
+    G --> X
+    X --> I["Submit report and cross-check claims"]
+    I --> V
 ```
 
 The capability boundary is explicit: the MCP server exposes no `approve` or `publish` tool. Agents investigate, reason, and submit; people decide and publish.
+
+“Explained drift” means the report accounts for a difference; it does not mean the architecture target changed. Making the code the new target still requires a target proposal, draft acceptance, and explicit human publication.
 
 | Basis type | Meaning | Proves current implementation? |
 | --- | --- | --- |
@@ -124,11 +134,11 @@ The client asks you to trust a new local MCP server on first use. See the [offic
 | --- | --- | --- |
 | `get_project_context` | Read the project, diagrams, baseline, and collaboration boundaries | No |
 | `get_current_architecture` | Read the current published architecture as a compact semantic graph | No |
-| `create_agent_run` | Create a traceable run and lock its baseline | No |
+| `create_agent_run` | Create a traceable run; implementation runs lock the formal target revision and semantic hash | No |
 | `submit_architecture_snapshot` | Submit current-state understanding and evidence | No; creates candidate diffs only |
 | `submit_change_proposal` | Submit a target architecture change | No; enters the inbox only |
 | `submit_implementation_report` | Submit implementation results, checks, and drift | No |
-| `get_review_status` | Read human review outcomes | No |
+| `get_review_status` | Read compact review/reconciliation status and request per-drift details only when needed | No |
 | `get_approved_target` | Read the latest user-published formal target baseline as a compact semantic graph | No |
 
 Accepting a proposal only applies its changes to the target draft; it does not authorize an agent to implement that draft. `get_review_status` marks this state as `awaiting-publication`. `get_approved_target` switches to the new version only after the user explicitly publishes it, and never returns an unpublished draft as an executable target graph.
@@ -163,7 +173,7 @@ npm run protocol:validate -- ai-coding/path/to/artifact.json
 
 - `architecture-discovery`: inspect a user-authorized repository scope and submit a current architecture snapshot with evidence.
 - `architecture-change-plan`: form options, target changes, and acceptance criteria from confirmed discussion, design documents, or code facts; concept projects require no code repository.
-- `implementation-reconcile`: compare actual code with the human-approved architecture and submit checks, completion status, and all drift.
+- `implementation-reconcile`: compare actual code with the run-locked published formal target, submit the resulting snapshot first, then submit checks, completion status, and all drift.
 
 Skills prefer MCP and fall back to JSON files plus the CLI. They cannot accept their own proposals, alter published architecture, or approve implementation for the user.
 
@@ -203,7 +213,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development conventions, [SECURITY.md
 - Default examples and documents must be fictional or explicitly authorized for public release.
 - Never commit credentials, access tokens, customer material, internal paths, or architecture data that has not been de-identified.
 - Agents may submit structured candidates only. Acceptance and publication require human actions.
-- v0.3.0 binds to `127.0.0.1` only. Mutation APIs do not yet provide authentication, CSRF protection, or multi-user authorization; do not proxy the service to a LAN or the public internet.
+- v0.4.0 binds to `127.0.0.1` only. Mutation APIs do not yet provide authentication, CSRF protection, or multi-user authorization; do not proxy the service to a LAN or the public internet.
 - Source code uses the [PolyForm Noncommercial License 1.0.0](LICENSE). It is source-available, not OSI open source. Commercial use requires separate written authorization; see [COMMERCIAL_LICENSE.en.md](COMMERCIAL_LICENSE.en.md).
 - Derivative works are allowed, but public modified versions must retain [NOTICE](NOTICE) attribution and follow [TRADEMARKS.en.md](TRADEMARKS.en.md): use a different name and logo and do not imply official status or endorsement.
 - Third-party dependencies remain subject to their own licenses.

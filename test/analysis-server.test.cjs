@@ -19,7 +19,12 @@ function hash(content) {
   return crypto.createHash('sha256').update(content, 'utf8').digest('hex');
 }
 
-function createFixture({ separateWorkspace = false, withoutCodeRepository = false, clearTargetDraft = false } = {}) {
+function createFixture({
+  separateWorkspace = false,
+  withoutCodeRepository = false,
+  clearTargetDraft = false,
+  targetFromCurrent = false,
+} = {}) {
   const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'architecture-agent-server-'));
   const workspaceRoot = separateWorkspace
     ? fs.mkdtempSync(path.join(os.tmpdir(), 'architecture-agent-workspace-'))
@@ -40,9 +45,17 @@ function createFixture({ separateWorkspace = false, withoutCodeRepository = fals
   fs.mkdirSync(path.dirname(designFile), { recursive: true });
   fs.mkdirSync(staticRoot, { recursive: true });
   fs.copyFileSync(V2_STATE, stateFile);
-  if (clearTargetDraft) {
+  if (clearTargetDraft || targetFromCurrent) {
     const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
-    state.target.draft = null;
+    if (clearTargetDraft) state.target.draft = null;
+    if (targetFromCurrent) {
+      state.target.published.revision = 1;
+      state.target.published.publishedAt = NOW;
+      state.target.published.publishedBy = 'user';
+      state.target.published.graph = structuredClone(state.current.published.graph);
+      state.target.published.graph.nodes.forEach((node) => { node.data.horizon = '近期'; });
+      state.target.draft = null;
+    }
     fs.writeFileSync(stateFile, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
   }
   fs.copyFileSync(DEMO_CONFIG, configFile);
@@ -257,6 +270,105 @@ function implementationReport() {
   };
 }
 
+function implementationEvidenceManifest(sourceContent, overrides = {}) {
+  return {
+    schemaVersion: '1.2.0',
+    artifactType: 'evidence-manifest',
+    artifactId: overrides.artifactId || 'evidence-implementation-v12',
+    createdAt: NOW,
+    projectRevision: { kind: 'workspace', value: overrides.revision || 'implementation-workspace' },
+    entries: [{
+      id: overrides.evidenceId || 'evidence-service-behavior',
+      sourceKind: 'workspace-file',
+      basis: 'code-fact',
+      path: 'src/service.js',
+      lineStart: 1,
+      lineEnd: 3,
+      summary: 'The implementation evidence supports the submitted architecture snapshot.',
+      contentHash: hash(sourceContent),
+    }],
+  };
+}
+
+function implementationSnapshot(formalArchitecture, overrides = {}) {
+  const nodes = formalArchitecture.graph.nodes.map((node) => ({
+    id: node.id,
+    name: node.data.name,
+    purpose: node.data.purpose,
+    technical: node.data.technical,
+    product: node.data.product,
+    authorization: node.data.authorization,
+    evidenceIds: ['evidence-service-behavior'],
+  }));
+  const edges = formalArchitecture.graph.edges.map((edge) => ({
+    id: edge.id,
+    source: edge.source,
+    target: edge.target,
+    label: edge.data.label,
+    relationType: edge.data.relationType,
+    controlledBoundaryPosture: edge.data.controlledBoundaryPosture,
+    evidenceIds: ['evidence-service-behavior'],
+  }));
+  return {
+    schemaVersion: '1.2.0',
+    artifactType: 'architecture-snapshot',
+    artifactId: overrides.artifactId || 'snapshot-implementation-v12',
+    createdAt: NOW,
+    project: {
+      name: 'Implementation fixture',
+      revision: { kind: 'workspace', value: overrides.revision || 'implementation-workspace' },
+    },
+    scope: { included: ['src'], excluded: ['node_modules'] },
+    nodes,
+    edges,
+    assumptions: [],
+    unknowns: [],
+    evidenceManifest: 'evidence-manifest.json',
+  };
+}
+
+function implementationReportV12(run, snapshot, overrides = {}) {
+  return {
+    schemaVersion: '1.2.0',
+    artifactType: 'implementation-report',
+    artifactId: overrides.artifactId || 'report-implementation-v12',
+    createdAt: NOW,
+    requestId: 'request-implementation-v12',
+    approvedTarget: structuredClone(run.approvedTarget),
+    status: overrides.status || 'partial',
+    resultingRevision: structuredClone(snapshot.project.revision),
+    changedFiles: ['src/service.js'],
+    tests: overrides.tests || [{ command: 'npm test', outcome: 'passed', summary: 'All observed checks passed.' }],
+    acceptanceResults: overrides.acceptanceResults || [{
+      criterion: 'The implementation is reconciled with the published formal target.',
+      status: 'satisfied',
+      evidenceIds: ['evidence-service-behavior'],
+    }],
+    drift: overrides.drift || [],
+    unresolved: overrides.unresolved || [],
+    evidenceManifest: 'evidence-manifest.json',
+    resultingSnapshotArtifactId: snapshot.artifactId,
+  };
+}
+
+function advanceFormalTarget(stateFile) {
+  const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+  const prior = structuredClone(state.target.published);
+  state.target.history.push(prior);
+  state.target.published = {
+    ...prior,
+    revision: prior.revision + 1,
+    revisionId: `target-r${prior.revision + 1}`,
+    parentRevisionId: prior.revisionId,
+    origin: 'publish',
+    restoredFromRevisionId: null,
+    message: 'Advance formal target during implementation',
+    publishedAt: '2026-07-15T00:00:00.000Z',
+    publishedBy: 'user',
+  };
+  fs.writeFileSync(stateFile, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+}
+
 async function createRun(baseUrl, overrides = {}) {
   const result = await request(baseUrl, '/api/agent/runs', {
     method: 'POST',
@@ -269,7 +381,7 @@ async function createRun(baseUrl, overrides = {}) {
       ...overrides,
     }),
   });
-  assert.equal(result.response.status, 201);
+  assert.equal(result.response.status, 201, JSON.stringify(result.payload));
   return result.payload.run;
 }
 
@@ -599,18 +711,39 @@ test('agent runs reject mismatched artifact types and incomplete evidence manife
   assert.equal(incomplete.payload.code, 'AGENT_EVIDENCE_MANIFEST_INCOMPLETE');
 });
 
-test('implementation runs expose concise check and drift summaries for the human workspace', async (t) => {
-  const fixture = await startFixture(t);
+test('implementation runs lock the published target and complete only after an aligned code-fact snapshot', async (t) => {
+  const fixture = await startFixture(t, { targetFromCurrent: true });
   const run = await createRun(fixture.baseUrl, {
     taskType: 'implementation-reconcile',
     view: 'current',
-    summary: 'Reconcile implemented code with the approved target.',
+    summary: 'Reconcile implemented code with the published formal target.',
   });
+  assert.equal(run.approvedTarget.status, 'formal-baseline');
+  assert.equal(run.approvedTarget.diagramId, run.diagramId);
+  assert.equal(run.approvedTarget.revision, 1);
+  assert.equal(run.approvedTarget.revisionId, 'target-r1');
+  assert.match(run.approvedTarget.semanticHash, /^[a-f0-9]{64}$/);
+
+  const approved = await request(fixture.baseUrl, '/api/agent/approved-target');
+  assert.deepEqual(run.approvedTarget, approved.payload.formalBaseline);
+  const snapshot = implementationSnapshot(approved.payload.architecture);
+  const snapshotSubmitted = await request(fixture.baseUrl, `/api/agent/runs/${run.id}/artifacts`, {
+    method: 'POST',
+    body: body({
+      artifact: snapshot,
+      evidenceManifest: implementationEvidenceManifest(fixture.sourceContent),
+    }),
+  });
+  assert.equal(snapshotSubmitted.response.status, 201, JSON.stringify(snapshotSubmitted.payload));
+
+  const reportArtifact = implementationReportV12(run, snapshot, { status: 'complete' });
   const submitted = await request(fixture.baseUrl, `/api/agent/runs/${run.id}/artifacts`, {
     method: 'POST',
     body: body({
-      artifact: implementationReport(),
-      evidenceManifest: evidenceManifest(fixture.sourceContent, { artifactId: 'evidence-implementation-run' }),
+      artifact: reportArtifact,
+      evidenceManifest: implementationEvidenceManifest(fixture.sourceContent, {
+        artifactId: 'evidence-implementation-report-v12',
+      }),
     }),
   });
   assert.equal(submitted.response.status, 201, JSON.stringify(submitted.payload));
@@ -618,15 +751,212 @@ test('implementation runs expose concise check and drift summaries for the human
   assert.equal(submitted.payload.proposals.length, 0);
   const report = submitted.payload.artifacts.find((artifact) => artifact.artifactType === 'implementation-report');
   assert.deepEqual(report.summary, {
-    status: 'partial',
+    status: 'complete',
     changedFileCount: 1,
     passedCheckCount: 1,
     failedCheckCount: 0,
     acceptedCriterionCount: 1,
     criterionCount: 1,
-    driftCount: 1,
-    unresolvedCount: 1,
+    driftCount: 0,
+    unresolvedCount: 0,
   });
+  assert.equal(submitted.payload.run.reconciliation.status, 'aligned');
+  assert.equal(submitted.payload.run.reconciliation.completionEligible, true);
+  assert.equal('drift' in submitted.payload.run.reconciliation, false, 'default review response stays compact');
+
+  const detailed = await request(fixture.baseUrl, `/api/agent/runs/${run.id}?details=reconciliation`);
+  assert.equal(detailed.payload.run.reconciliation.status, 'aligned');
+  assert.deepEqual(detailed.payload.run.reconciliation.drift, []);
+  assert.equal(detailed.payload.run.reconciliation.crossCheck.matches, true);
+});
+
+test('server reconciliation saves missing, extra, semantic, boundary, and unverified drift with explanations', async (t) => {
+  const fixture = await startFixture(t, { targetFromCurrent: true });
+  const run = await createRun(fixture.baseUrl, {
+    taskType: 'implementation-reconcile',
+    view: 'current',
+  });
+  const approved = await request(fixture.baseUrl, '/api/agent/approved-target');
+  const snapshot = implementationSnapshot(approved.payload.architecture, { artifactId: 'snapshot-drift-v12' });
+  snapshot.edges = snapshot.edges.filter((edge) => edge.id !== 'edge-input-processing');
+  snapshot.nodes.find((node) => node.id === 'processing-module').authorization = 'Implementation bypasses the confirmed boundary.';
+  snapshot.edges.find((edge) => edge.id === 'edge-processing-output').controlledBoundaryPosture = 'controlled';
+  snapshot.nodes.push({
+    id: 'extra-module',
+    name: 'Extra module',
+    purpose: 'An implementation responsibility outside the formal target.',
+    technical: 'Observed module',
+    product: 'Unplanned behavior',
+    authorization: 'Not yet approved',
+    evidenceIds: ['evidence-service-behavior'],
+  });
+  const snapshotSubmitted = await request(fixture.baseUrl, `/api/agent/runs/${run.id}/artifacts`, {
+    method: 'POST',
+    body: body({
+      artifact: snapshot,
+      evidenceManifest: implementationEvidenceManifest(fixture.sourceContent, { artifactId: 'evidence-drift-snapshot' }),
+    }),
+  });
+  assert.equal(snapshotSubmitted.response.status, 201, JSON.stringify(snapshotSubmitted.payload));
+
+  const report = implementationReportV12(run, snapshot, {
+    artifactId: 'report-drift-v12',
+    drift: [
+      { kind: 'missing', targetId: 'edge-input-processing', summary: 'The implementation omitted this relationship.', evidenceIds: ['evidence-service-behavior'] },
+      { kind: 'extra', targetId: 'extra-module', summary: 'The implementation added an unplanned module.', evidenceIds: ['evidence-service-behavior'] },
+      { kind: 'changed', targetId: 'processing-module', summary: 'The implemented authority boundary differs.', evidenceIds: ['evidence-service-behavior'] },
+      { kind: 'changed', targetId: 'edge-processing-output', summary: 'The controlled boundary was weakened.', evidenceIds: ['evidence-service-behavior'] },
+      { kind: 'unverified', targetId: 'output-module', summary: 'The output behavior needs additional human verification.', evidenceIds: [] },
+    ],
+    unresolved: ['The unverified output behavior remains open.'],
+  });
+  const reportSubmitted = await request(fixture.baseUrl, `/api/agent/runs/${run.id}/artifacts`, {
+    method: 'POST',
+    body: body({
+      artifact: report,
+      evidenceManifest: implementationEvidenceManifest(fixture.sourceContent, { artifactId: 'evidence-drift-report' }),
+    }),
+  });
+  assert.equal(reportSubmitted.response.status, 201, JSON.stringify(reportSubmitted.payload));
+
+  const detailed = await request(fixture.baseUrl, `/api/agent/runs/${run.id}?details=reconciliation`);
+  const reconciliation = detailed.payload.run.reconciliation;
+  assert.equal(reconciliation.status, 'unresolved-drift');
+  assert.deepEqual(reconciliation.counts, {
+    missing: 1,
+    extra: 1,
+    changed: 2,
+    unverified: 1,
+    unexplained: 0,
+    unreported: 0,
+    unsupported: 0,
+  });
+  assert.equal(reconciliation.crossCheck.matches, true);
+  assert.equal(reconciliation.completionEligible, false);
+  assert.equal(reconciliation.drift.every((item) => item.id.startsWith('drift-')), true);
+  assert.equal(reconciliation.drift.every((item) => item.explanation.status === 'agent-explained'), true);
+  const boundaryDrift = reconciliation.drift.find((item) => item.targetId === 'edge-processing-output');
+  assert.equal(boundaryDrift.targetType, 'edge');
+  assert.deepEqual(boundaryDrift.changedFields, ['controlledBoundaryPosture']);
+  assert.equal(boundaryDrift.target.controlledBoundaryPosture, 'blocked');
+  assert.equal(boundaryDrift.actual.controlledBoundaryPosture, 'controlled');
+  assert.ok(boundaryDrift.evidenceIds.includes('evidence-service-behavior'));
+
+  const analysis = await request(fixture.baseUrl, '/api/analysis');
+  const stored = analysis.payload.runs.find((item) => item.id === run.id).reconciliation;
+  assert.equal(stored.drift.length, 5, 'the local human workspace receives full drift detail');
+});
+
+test('a complete implementation report is rejected when server-computed drift is not reported', async (t) => {
+  const fixture = await startFixture(t, { targetFromCurrent: true });
+  const run = await createRun(fixture.baseUrl, { taskType: 'implementation-reconcile', view: 'current' });
+  const approved = await request(fixture.baseUrl, '/api/agent/approved-target');
+  const snapshot = implementationSnapshot(approved.payload.architecture, { artifactId: 'snapshot-unreported-v12' });
+  snapshot.nodes.find((node) => node.id === 'processing-module').purpose = 'An implementation purpose that differs from the formal target.';
+  const snapshotSubmitted = await request(fixture.baseUrl, `/api/agent/runs/${run.id}/artifacts`, {
+    method: 'POST',
+    body: body({
+      artifact: snapshot,
+      evidenceManifest: implementationEvidenceManifest(fixture.sourceContent, { artifactId: 'evidence-unreported-snapshot' }),
+    }),
+  });
+  assert.equal(snapshotSubmitted.response.status, 201);
+
+  const rejected = await request(fixture.baseUrl, `/api/agent/runs/${run.id}/artifacts`, {
+    method: 'POST',
+    body: body({
+      artifact: implementationReportV12(run, snapshot, { status: 'complete' }),
+      evidenceManifest: implementationEvidenceManifest(fixture.sourceContent, { artifactId: 'evidence-unreported-report' }),
+    }),
+  });
+  assert.equal(rejected.response.status, 422);
+  assert.equal(rejected.payload.code, 'AGENT_IMPLEMENTATION_DRIFT_UNRESOLVED');
+  assert.equal(rejected.payload.details.counts.changed, 1);
+  assert.equal(rejected.payload.details.counts.unreported, 1);
+});
+
+test('fully explained drift can complete implementation without being mislabeled as target alignment', async (t) => {
+  const fixture = await startFixture(t, { targetFromCurrent: true });
+  const run = await createRun(fixture.baseUrl, { taskType: 'implementation-reconcile', view: 'current' });
+  const approvedBefore = await request(fixture.baseUrl, '/api/agent/approved-target');
+  const snapshot = implementationSnapshot(approvedBefore.payload.architecture, { artifactId: 'snapshot-explained-v12' });
+  snapshot.nodes.find((node) => node.id === 'processing-module').purpose = 'A deliberately deviating implementation responsibility.';
+  const snapshotSubmitted = await request(fixture.baseUrl, `/api/agent/runs/${run.id}/artifacts`, {
+    method: 'POST',
+    body: body({
+      artifact: snapshot,
+      evidenceManifest: implementationEvidenceManifest(fixture.sourceContent, { artifactId: 'evidence-explained-snapshot' }),
+    }),
+  });
+  assert.equal(snapshotSubmitted.response.status, 201);
+
+  const report = implementationReportV12(run, snapshot, {
+    status: 'complete',
+    artifactId: 'report-explained-v12',
+    drift: [{
+      kind: 'changed',
+      targetId: 'processing-module',
+      summary: 'The implementation intentionally uses a different responsibility and requires a future target proposal.',
+      evidenceIds: ['evidence-service-behavior'],
+    }],
+  });
+  const accepted = await request(fixture.baseUrl, `/api/agent/runs/${run.id}/artifacts`, {
+    method: 'POST',
+    body: body({
+      artifact: report,
+      evidenceManifest: implementationEvidenceManifest(fixture.sourceContent, { artifactId: 'evidence-explained-report' }),
+    }),
+  });
+  assert.equal(accepted.response.status, 201, JSON.stringify(accepted.payload));
+  assert.equal(accepted.payload.run.reconciliation.status, 'explained-drift');
+  assert.equal(accepted.payload.run.reconciliation.completionEligible, true);
+
+  const approvedAfter = await request(fixture.baseUrl, '/api/agent/approved-target');
+  assert.deepEqual(approvedAfter.payload.formalBaseline, approvedBefore.payload.formalBaseline);
+  assert.equal(
+    approvedAfter.payload.architecture.graph.nodes.find((node) => node.id === 'processing-module').data.purpose,
+    approvedBefore.payload.architecture.graph.nodes.find((node) => node.id === 'processing-module').data.purpose,
+    'an explained implementation deviation must not rewrite the formal target',
+  );
+});
+
+test('implementation reports require a snapshot first and stale formal target locks cannot submit', async (t) => {
+  const fixture = await startFixture(t, { targetFromCurrent: true });
+  const approved = await request(fixture.baseUrl, '/api/agent/approved-target');
+  const snapshot = implementationSnapshot(approved.payload.architecture, { artifactId: 'snapshot-order-v12' });
+  const run = await createRun(fixture.baseUrl, { taskType: 'implementation-reconcile', view: 'current' });
+  const legacyBypass = await request(fixture.baseUrl, `/api/agent/runs/${run.id}/artifacts`, {
+    method: 'POST',
+    body: body({
+      artifact: implementationReport(),
+      evidenceManifest: evidenceManifest(fixture.sourceContent, { artifactId: 'evidence-legacy-bypass' }),
+    }),
+  });
+  assert.equal(legacyBypass.response.status, 422);
+  assert.equal(legacyBypass.payload.code, 'AGENT_PROTOCOL_UPGRADE_REQUIRED');
+
+  const reportFirst = await request(fixture.baseUrl, `/api/agent/runs/${run.id}/artifacts`, {
+    method: 'POST',
+    body: body({
+      artifact: implementationReportV12(run, snapshot),
+      evidenceManifest: implementationEvidenceManifest(fixture.sourceContent, { artifactId: 'evidence-report-first' }),
+    }),
+  });
+  assert.equal(reportFirst.response.status, 422);
+  assert.equal(reportFirst.payload.code, 'AGENT_RESULTING_SNAPSHOT_REQUIRED');
+
+  advanceFormalTarget(fixture.stateFile);
+  const stale = await request(fixture.baseUrl, `/api/agent/runs/${run.id}/artifacts`, {
+    method: 'POST',
+    body: body({
+      artifact: snapshot,
+      evidenceManifest: implementationEvidenceManifest(fixture.sourceContent, { artifactId: 'evidence-stale-target' }),
+    }),
+  });
+  assert.equal(stale.response.status, 409);
+  assert.equal(stale.payload.code, 'AGENT_APPROVED_TARGET_STALE');
+  assert.equal(stale.payload.details.expected.revisionId, 'target-r1');
+  assert.equal(stale.payload.details.actual.revisionId, 'target-r2');
 });
 
 test('architecture snapshots become additive semantic diffs and never remove omitted nodes', async (t) => {
@@ -682,6 +1012,8 @@ test('approved target always exposes only the published formal baseline', async 
   assert.equal(approved.response.status, 200);
   assert.equal(approved.payload.approvalStatus, 'published-target');
   assert.equal(approved.payload.baselineStatus, 'formal-baseline');
+  assert.equal(approved.payload.formalBaseline.revisionId, target.payload.published.revisionId);
+  assert.match(approved.payload.formalBaseline.semanticHash, /^[a-f0-9]{64}$/);
   assert.equal(approved.payload.architecture.revisionId, target.payload.published.revisionId);
   assert.deepEqual(
     approved.payload.architecture.graph.nodes.map((node) => node.id),
@@ -709,7 +1041,7 @@ test('skill catalog API exposes the three bundled workflows without absolute pat
   const fixture = await startFixture(t);
   const result = await request(fixture.baseUrl, '/api/skills');
   assert.equal(result.response.status, 200);
-  assert.equal(result.payload.protocolVersion, '1.1.0');
+  assert.equal(result.payload.protocolVersion, '1.2.0');
   assert.deepEqual(result.payload.skills.map((skill) => skill.id), [
     'architecture-discovery',
     'architecture-change-plan',

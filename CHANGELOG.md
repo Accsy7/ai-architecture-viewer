@@ -2,6 +2,39 @@
 
 All notable changes to AI Architecture Viewer are documented in this file.
 
+## [0.4.0] - 2026-07-15
+
+### Added
+
+- Exact formal-target locks for every new implementation reconciliation run,
+  including diagram ID, published revision, revision ID, and semantic hash.
+- Server-computed implementation reconciliation by stable ID across modules,
+  responsibilities, authorization boundaries, relationships, relation types,
+  and controlled boundary posture.
+- Persisted `missing`, `extra`, `changed`, and `unverified` drift with stable
+  drift IDs, target and actual values, code evidence, and explanation status.
+- Cross-checking between computed drift and agent implementation reports, plus
+  a completion gate for unreported, unsupported, unexplained, or unverified
+  results.
+- Detailed reconciliation cards in the existing agent workbench and compact,
+  opt-in MCP review details to reduce repeated agent context.
+
+### Protocol and compatibility
+
+- Exchange protocol `1.2.0` replaces the ambiguous implementation-report
+  proposal reference with an exact `approvedTarget` descriptor and
+  `resultingSnapshotArtifactId`.
+- New implementation runs require a code-fact snapshot before their report and
+  reject stale target locks. Stored v0.2/v0.3 analysis data and protocol 1.0/1.1
+  artifacts remain readable through migration.
+- Snapshot relationships can now carry `controlledBoundaryPosture`; protocol
+  1.2 implementation snapshots require it for boundary-aware comparison.
+
+### Governance
+
+- An explained deviation remains distinct from alignment and never rewrites the
+  published target. MCP still exposes no approval or publication capability.
+
 ## [0.3.0] - 2026-07-15
 
 ### Added

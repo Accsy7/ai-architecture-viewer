@@ -2,6 +2,7 @@
 
 const path = require('path');
 const {
+  BOUNDARY_POSTURES,
   BUILD_STRATEGIES,
   ContractError,
   RELATION_TYPES,
@@ -9,7 +10,7 @@ const {
 } = require('./state-contract.cjs');
 const { validateExchangeArtifact } = require('./ai-coding-exchange-contract.cjs');
 
-const ANALYSIS_SCHEMA_VERSION = '2.1.0';
+const ANALYSIS_SCHEMA_VERSION = '2.2.0';
 const MAX_SOURCE_COUNT = 500;
 const MAX_EVIDENCE_COUNT = 5000;
 const MAX_PROPOSAL_COUNT = 500;
@@ -53,6 +54,10 @@ const AGENT_TASK_TYPES = new Set([
 const AGENT_RUN_STATUSES = new Set(['active', 'submitted', 'reviewed', 'failed']);
 const CHANGE_KINDS = new Set(['add', 'update', 'remove']);
 const CHANGE_TARGET_TYPES = new Set(['node', 'edge']);
+const RECONCILIATION_STATUSES = new Set(['aligned', 'explained-drift', 'unresolved-drift']);
+const RECONCILIATION_DRIFT_KINDS = new Set(['missing', 'extra', 'changed', 'unverified']);
+const RECONCILIATION_SOURCES = new Set(['server-computed', 'agent-declared', 'evidence-check']);
+const RECONCILIATION_EXPLANATION_STATUSES = new Set(['unexplained', 'agent-explained']);
 const TARGET_HORIZONS = new Set(['近期', '后续', '远期']);
 
 const NODE_SEMANTIC_FIELDS = new Set([
@@ -75,7 +80,8 @@ const REQUIRED_NODE_SEMANTIC_FIELDS = [
   'product',
   'authorization',
 ];
-const EDGE_SEMANTIC_FIELDS = new Set(['label', 'relationType']);
+const EDGE_SEMANTIC_FIELDS = new Set(['label', 'relationType', 'controlledBoundaryPosture']);
+const REQUIRED_EDGE_SEMANTIC_FIELDS = ['label', 'relationType'];
 
 function fail(message, code = 'ANALYSIS_VALIDATION_ERROR', status = 422, details) {
   throw new ContractError(message, code, status, details);
@@ -326,7 +332,7 @@ function validateEdgeSemanticData(data, dataPath, { requireComplete = false } = 
   assertKeys(data, EDGE_SEMANTIC_FIELDS, dataPath, { patch: true });
   if (!Object.keys(data).length) fail(`${dataPath} 至少需要一个语义字段`);
   if (requireComplete) {
-    for (const field of EDGE_SEMANTIC_FIELDS) {
+    for (const field of REQUIRED_EDGE_SEMANTIC_FIELDS) {
       if (!Object.prototype.hasOwnProperty.call(data, field)) {
         fail(`${dataPath}.${field} 是新增关系的必填字段`);
       }
@@ -337,6 +343,12 @@ function validateEdgeSemanticData(data, dataPath, { requireComplete = false } = 
   }
   if (Object.prototype.hasOwnProperty.call(data, 'relationType') && !RELATION_TYPES.has(data.relationType)) {
     fail(`${dataPath}.relationType 不是支持的关系类型`);
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(data, 'controlledBoundaryPosture')
+    && !BOUNDARY_POSTURES.has(data.controlledBoundaryPosture)
+  ) {
+    fail(`${dataPath}.controlledBoundaryPosture 不是支持的受控边界姿态`);
   }
   return data;
 }
@@ -431,6 +443,237 @@ function validateProposalOrigin(origin, originPath = 'proposal.origin') {
   return origin;
 }
 
+function validateApprovedTarget(target, targetPath = 'agentRun.approvedTarget') {
+  if (target === null) return target;
+  assertObject(target, targetPath);
+  assertKeys(target, new Set([
+    'status',
+    'diagramId',
+    'revision',
+    'revisionId',
+    'semanticHash',
+  ]), targetPath);
+  if (target.status !== 'formal-baseline') fail(`${targetPath}.status 必须是 formal-baseline`);
+  assertStableId(target.diagramId, `${targetPath}.diagramId`);
+  assertBaseRevision(target.revision, `${targetPath}.revision`);
+  assertStableId(target.revisionId, `${targetPath}.revisionId`);
+  assertHash(target.semanticHash, `${targetPath}.semanticHash`);
+  return target;
+}
+
+function sameApprovedTarget(left, right) {
+  if (!left || !right) return left === right;
+  return ['status', 'diagramId', 'revision', 'revisionId', 'semanticHash']
+    .every((field) => left[field] === right[field]);
+}
+
+function validateReconciliationEvidenceIds(value, valuePath) {
+  assertArray(value, valuePath, { max: 64 });
+  const ids = new Set();
+  value.forEach((id, index) => {
+    assertStableId(id, `${valuePath}[${index}]`);
+    if (ids.has(id)) fail(`${valuePath} 不得包含重复证据 ID ${id}`);
+    ids.add(id);
+  });
+}
+
+function validateReconciliationElement(element, elementPath) {
+  if (element === null) return element;
+  assertObject(element, elementPath);
+  if (element.targetType === 'node') {
+    assertKeys(element, new Set([
+      'id', 'targetType', 'name', 'purpose', 'technical', 'product', 'authorization', 'evidenceIds',
+    ]), elementPath);
+    assertStableId(element.id, `${elementPath}.id`);
+    for (const field of ['name', 'purpose', 'technical', 'product', 'authorization']) {
+      assertText(element[field], `${elementPath}.${field}`, { max: field === 'purpose' ? 2000 : 500 });
+    }
+  } else if (element.targetType === 'edge') {
+    assertKeys(element, new Set([
+      'id', 'targetType', 'source', 'target', 'label', 'relationType', 'controlledBoundaryPosture', 'evidenceIds',
+    ]), elementPath);
+    assertStableId(element.id, `${elementPath}.id`);
+    assertStableId(element.source, `${elementPath}.source`);
+    assertStableId(element.target, `${elementPath}.target`);
+    if (element.source === element.target) fail(`${elementPath} 不允许关系自连接`);
+    assertText(element.label, `${elementPath}.label`, { max: 240 });
+    if (!RELATION_TYPES.has(element.relationType)) fail(`${elementPath}.relationType 不是支持的关系类型`);
+    if (!BOUNDARY_POSTURES.has(element.controlledBoundaryPosture)) {
+      fail(`${elementPath}.controlledBoundaryPosture 不是支持的受控边界姿态`);
+    }
+  } else {
+    fail(`${elementPath}.targetType 必须是 node 或 edge`);
+  }
+  validateReconciliationEvidenceIds(element.evidenceIds, `${elementPath}.evidenceIds`);
+  return element;
+}
+
+function validateReconciliationExplanation(explanation, explanationPath) {
+  assertObject(explanation, explanationPath);
+  assertKeys(explanation, new Set(['status', 'summary', 'evidenceIds']), explanationPath);
+  if (!RECONCILIATION_EXPLANATION_STATUSES.has(explanation.status)) {
+    fail(`${explanationPath}.status 不是支持的解释状态`);
+  }
+  if (explanation.summary !== null) assertText(explanation.summary, `${explanationPath}.summary`, { max: 1000 });
+  if (explanation.status === 'agent-explained' && explanation.summary === null) {
+    fail(`${explanationPath} 的智能体解释必须包含摘要`);
+  }
+  if (explanation.status === 'unexplained' && explanation.summary !== null) {
+    fail(`${explanationPath} 的未解释状态不得伪造解释摘要`);
+  }
+  validateReconciliationEvidenceIds(explanation.evidenceIds, `${explanationPath}.evidenceIds`);
+  return explanation;
+}
+
+function validateReconciliationDrift(item, itemPath) {
+  assertObject(item, itemPath);
+  assertKeys(item, new Set([
+    'id',
+    'kind',
+    'source',
+    'targetType',
+    'targetId',
+    'summary',
+    'changedFields',
+    'target',
+    'actual',
+    'evidenceIds',
+    'explanation',
+  ]), itemPath);
+  assertStableId(item.id, `${itemPath}.id`);
+  if (!RECONCILIATION_DRIFT_KINDS.has(item.kind)) fail(`${itemPath}.kind 不是支持的偏离类型`);
+  if (!RECONCILIATION_SOURCES.has(item.source)) fail(`${itemPath}.source 不是支持的偏离来源`);
+  if (!CHANGE_TARGET_TYPES.has(item.targetType)) fail(`${itemPath}.targetType 必须是 node 或 edge`);
+  assertStableId(item.targetId, `${itemPath}.targetId`);
+  assertText(item.summary, `${itemPath}.summary`, { max: 1000 });
+  assertArray(item.changedFields, `${itemPath}.changedFields`, { max: 16 });
+  const changedFields = new Set();
+  item.changedFields.forEach((field, index) => {
+    assertText(field, `${itemPath}.changedFields[${index}]`, { max: 80 });
+    if (changedFields.has(field)) fail(`${itemPath}.changedFields 不得重复字段 ${field}`);
+    changedFields.add(field);
+  });
+  validateReconciliationElement(item.target, `${itemPath}.target`);
+  validateReconciliationElement(item.actual, `${itemPath}.actual`);
+  if (item.target && (item.target.id !== item.targetId || item.target.targetType !== item.targetType)) {
+    fail(`${itemPath}.target 必须与偏离目标一致`);
+  }
+  if (item.actual && (item.actual.id !== item.targetId || item.actual.targetType !== item.targetType)) {
+    fail(`${itemPath}.actual 必须与偏离目标一致`);
+  }
+  if (item.kind === 'missing' && (!item.target || item.actual !== null)) {
+    fail(`${itemPath} 的 missing 偏离必须只有目标项`);
+  }
+  if (item.kind === 'extra' && (item.target !== null || !item.actual)) {
+    fail(`${itemPath} 的 extra 偏离必须只有实际项`);
+  }
+  if (item.kind === 'changed' && (!item.target || !item.actual || !item.changedFields.length)) {
+    fail(`${itemPath} 的 changed 偏离必须包含目标项、实际项和变化字段`);
+  }
+  if (item.kind === 'unverified' && !item.target && !item.actual) {
+    fail(`${itemPath} 的 unverified 偏离至少需要目标项或实际项`);
+  }
+  validateReconciliationEvidenceIds(item.evidenceIds, `${itemPath}.evidenceIds`);
+  validateReconciliationExplanation(item.explanation, `${itemPath}.explanation`);
+  return item;
+}
+
+function validateReconciliation(reconciliation, reconciliationPath = 'agentRun.reconciliation') {
+  if (reconciliation === null) return reconciliation;
+  assertObject(reconciliation, reconciliationPath);
+  assertKeys(reconciliation, new Set([
+    'status',
+    'target',
+    'snapshotArtifactId',
+    'reportArtifactId',
+    'computedAt',
+    'counts',
+    'drift',
+    'crossCheck',
+    'completionEligible',
+  ]), reconciliationPath);
+  if (!RECONCILIATION_STATUSES.has(reconciliation.status)) {
+    fail(`${reconciliationPath}.status 不是支持的核验状态`);
+  }
+  validateApprovedTarget(reconciliation.target, `${reconciliationPath}.target`);
+  if (reconciliation.target === null) fail(`${reconciliationPath}.target 必须锁定正式目标`);
+  assertStableId(reconciliation.snapshotArtifactId, `${reconciliationPath}.snapshotArtifactId`);
+  assertStableId(reconciliation.reportArtifactId, `${reconciliationPath}.reportArtifactId`);
+  assertTimestamp(reconciliation.computedAt, `${reconciliationPath}.computedAt`);
+  assertObject(reconciliation.counts, `${reconciliationPath}.counts`);
+  const countKeys = ['missing', 'extra', 'changed', 'unverified', 'unexplained', 'unreported', 'unsupported'];
+  assertKeys(reconciliation.counts, new Set(countKeys), `${reconciliationPath}.counts`);
+  countKeys.forEach((key) => assertBaseRevision(reconciliation.counts[key], `${reconciliationPath}.counts.${key}`));
+
+  assertArray(reconciliation.drift, `${reconciliationPath}.drift`, { max: 2000 });
+  const driftIds = new Set();
+  reconciliation.drift.forEach((item, index) => {
+    validateReconciliationDrift(item, `${reconciliationPath}.drift[${index}]`);
+    if (driftIds.has(item.id)) fail(`${reconciliationPath}.drift 不得包含重复偏离 ID ${item.id}`);
+    driftIds.add(item.id);
+  });
+
+  assertObject(reconciliation.crossCheck, `${reconciliationPath}.crossCheck`);
+  assertKeys(reconciliation.crossCheck, new Set(['matches', 'unreported', 'unsupported']), `${reconciliationPath}.crossCheck`);
+  if (typeof reconciliation.crossCheck.matches !== 'boolean') fail(`${reconciliationPath}.crossCheck.matches 必须是布尔值`);
+  assertArray(reconciliation.crossCheck.unreported, `${reconciliationPath}.crossCheck.unreported`, { max: 2000 });
+  reconciliation.crossCheck.unreported.forEach((id, index) => {
+    assertStableId(id, `${reconciliationPath}.crossCheck.unreported[${index}]`);
+    if (!driftIds.has(id)) fail(`${reconciliationPath}.crossCheck.unreported 引用了未知偏离 ${id}`);
+  });
+  assertArray(reconciliation.crossCheck.unsupported, `${reconciliationPath}.crossCheck.unsupported`, { max: 100 });
+  reconciliation.crossCheck.unsupported.forEach((item, index) => {
+    const itemPath = `${reconciliationPath}.crossCheck.unsupported[${index}]`;
+    assertObject(item, itemPath);
+    assertKeys(item, new Set(['id', 'kind', 'targetId', 'summary']), itemPath);
+    assertStableId(item.id, `${itemPath}.id`);
+    if (!RECONCILIATION_DRIFT_KINDS.has(item.kind)) fail(`${itemPath}.kind 不是支持的偏离类型`);
+    assertStableId(item.targetId, `${itemPath}.targetId`);
+    assertText(item.summary, `${itemPath}.summary`, { max: 1000 });
+  });
+
+  const expectedCounts = {
+    missing: reconciliation.drift.filter((item) => item.kind === 'missing').length,
+    extra: reconciliation.drift.filter((item) => item.kind === 'extra').length,
+    changed: reconciliation.drift.filter((item) => item.kind === 'changed').length,
+    unverified: reconciliation.drift.filter((item) => item.kind === 'unverified').length,
+    unexplained: reconciliation.drift.filter((item) => item.explanation.status === 'unexplained').length,
+    unreported: reconciliation.crossCheck.unreported.length,
+    unsupported: reconciliation.crossCheck.unsupported.length,
+  };
+  countKeys.forEach((key) => {
+    if (reconciliation.counts[key] !== expectedCounts[key]) {
+      fail(`${reconciliationPath}.counts.${key} 与偏离明细不一致`);
+    }
+  });
+  const crossCheckMatches = !expectedCounts.unreported && !expectedCounts.unsupported;
+  if (reconciliation.crossCheck.matches !== crossCheckMatches) {
+    fail(`${reconciliationPath}.crossCheck.matches 与交叉核验明细不一致`);
+  }
+  const unresolved = Boolean(
+    expectedCounts.unverified
+    || expectedCounts.unexplained
+    || expectedCounts.unreported
+    || expectedCounts.unsupported
+  );
+  if (reconciliation.status === 'aligned' && reconciliation.drift.length) {
+    fail(`${reconciliationPath} 的 aligned 状态不得包含偏离`);
+  }
+  if (reconciliation.status === 'explained-drift' && (!reconciliation.drift.length || unresolved)) {
+    fail(`${reconciliationPath} 的 explained-drift 状态只能包含已解释且已交叉核对的偏离`);
+  }
+  if (reconciliation.status === 'unresolved-drift' && !unresolved) {
+    fail(`${reconciliationPath} 的 unresolved-drift 状态必须包含未解决项`);
+  }
+  if (typeof reconciliation.completionEligible !== 'boolean') {
+    fail(`${reconciliationPath}.completionEligible 必须是布尔值`);
+  }
+  if (reconciliation.completionEligible && reconciliation.status === 'unresolved-drift') {
+    fail(`${reconciliationPath} 存在未解决偏离时不得标记可完成`);
+  }
+  return reconciliation;
+}
+
 function validateAgentRun(run, runPath = 'agentRun') {
   assertObject(run, runPath);
   assertKeys(run, new Set([
@@ -448,6 +691,8 @@ function validateAgentRun(run, runPath = 'agentRun') {
     'submittedAt',
     'summary',
     'artifactIds',
+    'approvedTarget',
+    'reconciliation',
   ]), runPath);
   assertStableId(run.id, `${runPath}.id`);
   assertText(run.agentName, `${runPath}.agentName`, { max: 120 });
@@ -469,6 +714,17 @@ function validateAgentRun(run, runPath = 'agentRun') {
     if (artifactIds.has(id)) fail(`${runPath}.artifactIds 不得包含重复工件 ${id}`);
     artifactIds.add(id);
   });
+  validateApprovedTarget(run.approvedTarget, `${runPath}.approvedTarget`);
+  validateReconciliation(run.reconciliation, `${runPath}.reconciliation`);
+  if (run.taskType !== 'implementation-reconcile' && (run.approvedTarget !== null || run.reconciliation !== null)) {
+    fail(`${runPath} 只有 implementation-reconcile 运行可以包含正式目标锁和实施核验`);
+  }
+  if (run.approvedTarget && run.approvedTarget.diagramId !== run.diagramId) {
+    fail(`${runPath}.approvedTarget.diagramId 必须与运行架构图一致`);
+  }
+  if (run.reconciliation && !sameApprovedTarget(run.approvedTarget, run.reconciliation.target)) {
+    fail(`${runPath}.reconciliation.target 必须与运行锁定的正式目标一致`);
+  }
   if (Date.parse(run.updatedAt) < Date.parse(run.createdAt)) fail(`${runPath}.updatedAt 不得早于 createdAt`);
   if (run.status === 'active' && run.submittedAt !== null) fail(`${runPath} 的活动运行不得包含 submittedAt`);
   if (run.status !== 'active' && run.submittedAt === null) fail(`${runPath} 的已提交运行必须包含 submittedAt`);
@@ -605,6 +861,16 @@ function validateAnalysis(analysis) {
         fail(`analysis.agentRuns[${index}].artifactIds 引用了不属于该运行的工件 ${artifactId}`);
       }
     });
+    if (run.reconciliation) {
+      const snapshot = artifactsById.get(run.reconciliation.snapshotArtifactId);
+      const report = artifactsById.get(run.reconciliation.reportArtifactId);
+      if (!snapshot || snapshot.runId !== run.id || snapshot.artifactType !== 'architecture-snapshot') {
+        fail(`analysis.agentRuns[${index}].reconciliation.snapshotArtifactId 必须引用该运行的架构快照`);
+      }
+      if (!report || report.runId !== run.id || report.artifactType !== 'implementation-report') {
+        fail(`analysis.agentRuns[${index}].reconciliation.reportArtifactId 必须引用该运行的实施报告`);
+      }
+    }
   });
 
   const sourcesById = new Map();
@@ -667,7 +933,7 @@ function migrateAnalysis(value) {
     validateAnalysis(incoming);
     return incoming;
   }
-  if (!['1.0.0', '2.0.0'].includes(incoming?.schemaVersion)) {
+  if (!['1.0.0', '2.0.0', '2.1.0'].includes(incoming?.schemaVersion)) {
     fail(
       `analysis.schemaVersion 无法迁移到 ${ANALYSIS_SCHEMA_VERSION}`,
       'ANALYSIS_SCHEMA_VERSION_MISMATCH',
@@ -698,16 +964,23 @@ function migrateAnalysis(value) {
       basis,
     };
   });
+  const migratedRuns = incoming.schemaVersion === '1.0.0'
+    ? []
+    : (incoming.agentRuns || []).map((run) => ({
+      ...run,
+      approvedTarget: run.approvedTarget || null,
+      reconciliation: run.reconciliation || null,
+    }));
   const migrated = {
     ...incoming,
     schemaVersion: ANALYSIS_SCHEMA_VERSION,
     sources: migratedSources,
     evidence: migratedEvidence,
-    agentRuns: incoming.schemaVersion === '1.0.0' ? [] : (incoming.agentRuns || []),
+    agentRuns: migratedRuns,
     artifacts: incoming.schemaVersion === '1.0.0' ? [] : (incoming.artifacts || []),
     proposals: (incoming.proposals || []).map((proposal) => ({ ...proposal, origin: null })),
   };
-  if (incoming.schemaVersion === '2.0.0') migrated.proposals = incoming.proposals || [];
+  if (['2.0.0', '2.1.0'].includes(incoming.schemaVersion)) migrated.proposals = incoming.proposals || [];
   validateAnalysis(migrated);
   return migrated;
 }
@@ -743,17 +1016,21 @@ module.exports = {
   MAX_SOURCE_BYTES,
   MAX_SOURCE_COUNT,
   PROPOSAL_STATUSES,
+  RECONCILIATION_DRIFT_KINDS,
+  RECONCILIATION_STATUSES,
   SOURCE_TYPES,
   SOURCE_KINDS,
   createEmptyAnalysis,
   migrateAnalysis,
   validateAnalysis,
+  validateApprovedTarget,
   validateAgentArtifact,
   validateAgentRun,
   validateApplication,
   validateEvidence,
   validateProposal,
   validateProposalChange,
+  validateReconciliation,
   validateSource,
   validateSourcePath,
 };

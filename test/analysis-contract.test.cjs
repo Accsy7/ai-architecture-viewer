@@ -119,7 +119,7 @@ test('analysis contract migrates v1 workbench data without inventing agent prove
   assert.equal(migrated.evidence[0].basis, 'design-document');
 });
 
-test('analysis contract migrates v0.2 sources and evidence without losing proposal provenance', () => {
+test('analysis contract migrates v0.2 and v0.3 runs without losing proposal provenance', () => {
   const legacy = validAnalysis();
   legacy.schemaVersion = '2.0.0';
   delete legacy.sources[0].sourceKind;
@@ -175,8 +175,18 @@ test('analysis contract migrates v0.2 sources and evidence without losing propos
   assert.equal(migrated.schemaVersion, ANALYSIS_SCHEMA_VERSION);
   assert.equal(migrated.proposals[0].origin.runId, 'run-one');
   assert.equal(migrated.agentRuns.length, 1);
+  assert.equal(migrated.agentRuns[0].approvedTarget, null);
+  assert.equal(migrated.agentRuns[0].reconciliation, null);
   assert.equal(migrated.artifacts.length, 1);
   assert.equal(migrated.evidence[0].basis, 'design-document');
+
+  const v03 = structuredClone(legacy);
+  v03.schemaVersion = '2.1.0';
+  const migratedV03 = migrateAnalysis(v03);
+  assert.equal(migratedV03.schemaVersion, ANALYSIS_SCHEMA_VERSION);
+  assert.equal(migratedV03.agentRuns[0].approvedTarget, null);
+  assert.equal(migratedV03.agentRuns[0].reconciliation, null);
+  assert.equal(migratedV03.proposals[0].origin.runId, 'run-one');
 });
 
 test('analysis contract stores discussion evidence without pretending it has a file location', () => {
@@ -260,7 +270,9 @@ test('analysis contract only permits semantic node and edge patches', () => {
       },
     },
   }];
-  contractError(() => validateAnalysis(edgeRouting), 'ANALYSIS_PATCH_FIELD_FORBIDDEN');
+  assert.doesNotThrow(() => validateAnalysis(edgeRouting));
+  edgeRouting.proposals[0].changes[0].patch.data.controlledBoundaryPosture = 'open';
+  contractError(() => validateAnalysis(edgeRouting));
 
   const reroutedEdge = validAnalysis();
   reroutedEdge.proposals[0].changes = [{

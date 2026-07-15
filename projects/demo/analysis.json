@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "2.1.0",
+  "schemaVersion": "2.2.0",
   "baseRevision": 0,
   "lastUpdated": "2026-07-14T00:00:00.000Z",
   "sources": [
@@ -146,7 +146,9 @@
       "artifactIds": [
         "evidence-demo-evaluation",
         "proposal-add-evaluation-gate"
-      ]
+      ],
+      "approvedTarget": null,
+      "reconciliation": null
     }
   ],
   "artifacts": [

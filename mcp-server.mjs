@@ -99,7 +99,7 @@ function registerTool(server, name, config, handler) {
 }
 
 const server = new McpServer(
-  { name: 'ai-architecture-viewer', version: '0.3.0' },
+  { name: 'ai-architecture-viewer', version: '0.4.0' },
   {
     instructions: [
       'Use this server as an external visual architecture handoff for coding agents.',
@@ -107,6 +107,7 @@ const server = new McpServer(
       'Create a run before submitting evidence-backed artifacts.',
       'Evidence paths must be relative to the configured code workspace root.',
       'Only a published target is an executable architecture baseline; an accepted draft still awaits human publication.',
+      'Implementation runs lock that published target, submit a code-fact snapshot first, and rely on server-computed reconciliation before completion.',
       'Agents may submit snapshots, proposals, and implementation reports, but cannot approve or publish architecture.',
     ].join(' '),
   },
@@ -146,7 +147,7 @@ registerTool(server, 'get_current_architecture', {
 
 registerTool(server, 'create_agent_run', {
   title: 'Create agent architecture run',
-  description: 'Create a traceable run and lock its architecture baseline before submitting any architecture artifact.',
+  description: 'Create a traceable run and lock its architecture baseline. Implementation runs also lock the exact published formal target revision and semantic hash.',
   inputSchema: z.object({
     agentName: z.string().min(1).max(120),
     agentClient: z.string().min(1).max(80).describe('Client identity such as codex or claude-code.'),
@@ -174,7 +175,7 @@ async function submit(runId, artifact, evidenceManifest) {
 
 registerTool(server, 'submit_architecture_snapshot', {
   title: 'Submit architecture snapshot',
-  description: 'Submit a code-fact-backed current architecture snapshot. Discussion and design intent cannot be used as proof of implementation. Omitted nodes are never removed automatically.',
+  description: 'Submit a code-fact-backed current architecture snapshot. For implementation runs this must come before the report and include relationship boundary posture. Discussion and design intent cannot prove implementation.',
   inputSchema: submissionSchema,
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
 }, ({ runId, artifact, evidenceManifest }) => submit(runId, artifact, evidenceManifest));
@@ -188,21 +189,28 @@ registerTool(server, 'submit_change_proposal', {
 
 registerTool(server, 'submit_implementation_report', {
   title: 'Submit implementation reconciliation report',
-  description: 'Submit a code-fact-backed report of changes, checks, acceptance results, and architecture drift for human inspection.',
+  description: 'Submit a code-fact-backed report that references the run-locked formal target and prior resulting snapshot. The server independently computes and cross-checks drift before allowing complete status.',
   inputSchema: submissionSchema,
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
 }, ({ runId, artifact, evidenceManifest }) => submit(runId, artifact, evidenceManifest));
 
 registerTool(server, 'get_review_status', {
   title: 'Get review status',
-  description: 'Read submitted artifacts and proposal review outcomes for a single agent run.',
-  inputSchema: z.object({ runId: z.string().min(1) }),
+  description: 'Read compact artifact, proposal, and server-computed reconciliation status for one run. Request reconciliation details only when individual drift evidence is needed.',
+  inputSchema: z.object({
+    runId: z.string().min(1),
+    includeReconciliationDetails: z.boolean().optional(),
+  }),
   annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
-}, ({ runId }) => viewerRequest(`/api/agent/runs/${encodeURIComponent(runId)}`));
+}, ({ runId, includeReconciliationDetails }) => viewerRequest(
+  `/api/agent/runs/${encodeURIComponent(runId)}${query({
+    details: includeReconciliationDetails ? 'reconciliation' : undefined,
+  })}`,
+));
 
 registerTool(server, 'get_approved_target', {
   title: 'Get published formal target baseline',
-  description: 'Read only the latest human-published formal target baseline as a compact semantic graph. Accepted but unpublished drafts are excluded and remain visible only as awaiting-publication review status.',
+  description: 'Read only the latest human-published formal target baseline, including revision identity and semantic hash, as a compact semantic graph. Accepted but unpublished drafts are excluded.',
   inputSchema: z.object({ diagramId: z.string().optional() }),
   annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
 }, ({ diagramId }) => viewerRequest(`/api/agent/approved-target${query({ diagram: diagramId })}`));

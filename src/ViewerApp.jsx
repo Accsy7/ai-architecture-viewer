@@ -89,7 +89,7 @@ const EMPTY_REGISTRY = {
 };
 
 const EMPTY_ANALYSIS = {
-  schemaVersion: '2.1.0',
+  schemaVersion: '2.2.0',
   baseRevision: 0,
   lastUpdated: null,
   sources: [],
@@ -109,7 +109,7 @@ const EMPTY_ANALYSIS = {
 
 const EMPTY_SKILL_CATALOG = {
   schemaVersion: '1.0.0',
-  protocolVersion: '1.1.0',
+  protocolVersion: '1.2.0',
   skills: [],
 };
 

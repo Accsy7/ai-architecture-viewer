@@ -2,8 +2,8 @@
 
 const path = require('path');
 
-const AI_CODING_PROTOCOL_VERSION = '1.1.0';
-const SUPPORTED_PROTOCOL_VERSIONS = new Set(['1.0.0', AI_CODING_PROTOCOL_VERSION]);
+const AI_CODING_PROTOCOL_VERSION = '1.2.0';
+const SUPPORTED_PROTOCOL_VERSIONS = new Set(['1.0.0', '1.1.0', AI_CODING_PROTOCOL_VERSION]);
 const ARTIFACT_TYPES = new Set([
   'task-request',
   'evidence-manifest',
@@ -12,6 +12,7 @@ const ARTIFACT_TYPES = new Set([
   'implementation-report',
 ]);
 const RELATION_TYPES = new Set(['flow', 'support', 'reference', 'governance', 'handoff']);
+const BOUNDARY_POSTURES = new Set(['none', 'controlled', 'blocked']);
 const REVISION_KINDS = new Set(['git-commit', 'workspace', 'release']);
 const STABLE_ID = /^[a-z0-9][a-z0-9._-]{0,79}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
@@ -101,6 +102,18 @@ function revision(value, valuePath) {
   keys(value, new Set(['kind', 'value']), valuePath);
   if (!REVISION_KINDS.has(value.kind)) fail(`${valuePath}.kind is not supported`);
   text(value.value, `${valuePath}.value`, { max: 160 });
+}
+
+function approvedTarget(value, valuePath) {
+  object(value, valuePath);
+  keys(value, new Set(['status', 'diagramId', 'revision', 'revisionId', 'semanticHash']), valuePath);
+  if (value.status !== 'formal-baseline') fail(`${valuePath}.status must be formal-baseline`);
+  stableId(value.diagramId, `${valuePath}.diagramId`);
+  if (!Number.isSafeInteger(value.revision) || value.revision < 0) fail(`${valuePath}.revision must be a non-negative integer`);
+  stableId(value.revisionId, `${valuePath}.revisionId`);
+  if (typeof value.semanticHash !== 'string' || !SHA256.test(value.semanticHash)) {
+    fail(`${valuePath}.semanticHash must be SHA-256`);
+  }
 }
 
 function evidenceIds(value, valuePath, { min = 1 } = {}) {
@@ -231,7 +244,9 @@ function validateArchitectureSnapshot(value) {
   list(value.edges, 'artifact.edges', { max: 1000 }).forEach((edge, index) => {
     const edgePath = `artifact.edges[${index}]`;
     object(edge, edgePath);
-    keys(edge, new Set(['id', 'source', 'target', 'label', 'relationType', 'evidenceIds']), edgePath);
+    keys(edge, new Set([
+      'id', 'source', 'target', 'label', 'relationType', 'controlledBoundaryPosture', 'evidenceIds',
+    ]), edgePath);
     stableId(edge.id, `${edgePath}.id`);
     if (edgeIds.has(edge.id)) fail(`artifact.edges contains duplicate ID ${edge.id}`);
     edgeIds.add(edge.id);
@@ -241,6 +256,12 @@ function validateArchitectureSnapshot(value) {
     if (!nodeIds.has(edge.source) || !nodeIds.has(edge.target)) fail(`${edgePath} references an unknown node`);
     text(edge.label, `${edgePath}.label`, { max: 240 });
     if (!RELATION_TYPES.has(edge.relationType)) fail(`${edgePath}.relationType is not supported`);
+    if (value.schemaVersion === AI_CODING_PROTOCOL_VERSION && !BOUNDARY_POSTURES.has(edge.controlledBoundaryPosture)) {
+      fail(`${edgePath}.controlledBoundaryPosture is required by protocol ${AI_CODING_PROTOCOL_VERSION}`);
+    }
+    if (edge.controlledBoundaryPosture !== undefined && !BOUNDARY_POSTURES.has(edge.controlledBoundaryPosture)) {
+      fail(`${edgePath}.controlledBoundaryPosture is not supported`);
+    }
     evidenceIds(edge.evidenceIds, `${edgePath}.evidenceIds`);
   });
   textList(value.assumptions, 'artifact.assumptions');
@@ -302,11 +323,23 @@ function validateImplementationReport(value) {
   common(value, 'implementation-report');
   keys(value, new Set([
     'schemaVersion', 'artifactType', 'artifactId', 'createdAt', 'requestId', 'approvedProposalId',
+    'approvedTarget',
     'status', 'resultingRevision', 'changedFiles', 'tests', 'acceptanceResults', 'drift',
-    'unresolved', 'evidenceManifest', 'resultingSnapshot',
+    'unresolved', 'evidenceManifest', 'resultingSnapshot', 'resultingSnapshotArtifactId',
   ]), 'artifact');
   stableId(value.requestId, 'artifact.requestId');
-  stableId(value.approvedProposalId, 'artifact.approvedProposalId');
+  if (value.schemaVersion === AI_CODING_PROTOCOL_VERSION) {
+    if (value.approvedProposalId !== undefined || value.resultingSnapshot !== undefined) {
+      fail(`protocol ${AI_CODING_PROTOCOL_VERSION} implementation reports must use approvedTarget and resultingSnapshotArtifactId`);
+    }
+    approvedTarget(value.approvedTarget, 'artifact.approvedTarget');
+    stableId(value.resultingSnapshotArtifactId, 'artifact.resultingSnapshotArtifactId');
+  } else {
+    if (value.approvedTarget !== undefined || value.resultingSnapshotArtifactId !== undefined) {
+      fail('legacy implementation reports must use approvedProposalId and resultingSnapshot');
+    }
+    stableId(value.approvedProposalId, 'artifact.approvedProposalId');
+  }
   if (!['complete', 'partial', 'blocked'].includes(value.status)) fail('artifact.status is not supported');
   revision(value.resultingRevision, 'artifact.resultingRevision');
   list(value.changedFiles, 'artifact.changedFiles').forEach((item, index) => relativePath(item, `artifact.changedFiles[${index}]`));
@@ -340,7 +373,9 @@ function validateImplementationReport(value) {
   });
   textList(value.unresolved, 'artifact.unresolved');
   relativePath(value.evidenceManifest, 'artifact.evidenceManifest');
-  relativePath(value.resultingSnapshot, 'artifact.resultingSnapshot');
+  if (value.schemaVersion !== AI_CODING_PROTOCOL_VERSION) {
+    relativePath(value.resultingSnapshot, 'artifact.resultingSnapshot');
+  }
 
   if (value.status === 'complete') {
     if (!value.tests.length || value.tests.some((test) => test.outcome !== 'passed')) {

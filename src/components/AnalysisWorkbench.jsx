@@ -39,6 +39,19 @@ const PROPOSAL_STATUS = {
   rejected: '已拒绝',
 };
 
+const RECONCILIATION_STATUS = {
+  aligned: { label: '与正式目标一致', tone: 'confirmed' },
+  'explained-drift': { label: '存在已解释偏离', tone: 'draft' },
+  'unresolved-drift': { label: '存在未解决偏离', tone: 'rejected' },
+};
+
+const DRIFT_KIND = {
+  missing: { label: '缺失', tone: 'rejected' },
+  extra: { label: '额外', tone: 'ai' },
+  changed: { label: '已改变', tone: 'draft' },
+  unverified: { label: '未核验', tone: 'neutral' },
+};
+
 function asList(value) {
   return Array.isArray(value) ? value : [];
 }
@@ -100,6 +113,109 @@ function EmptyState({ children }) {
   return <p className="analysis-empty">{children}</p>;
 }
 
+function ReconciliationElement({ label, element }) {
+  if (!element) {
+    return (
+      <div className="analysis-reconciliation-element is-empty">
+        <span>{label}</span>
+        <p>无</p>
+      </div>
+    );
+  }
+  const isEdge = element.targetType === 'edge';
+  return (
+    <div className="analysis-reconciliation-element">
+      <span>{label}</span>
+      <strong>{isEdge ? `${element.source} → ${element.target}` : element.name}</strong>
+      <p>{isEdge
+        ? `${element.label} · ${element.relationType} · 边界 ${element.controlledBoundaryPosture}`
+        : element.purpose}</p>
+      {!isEdge && <small>权限边界：{element.authorization}</small>}
+      {asList(element.evidenceIds).length > 0 && (
+        <code>{element.evidenceIds.join(' · ')}</code>
+      )}
+    </div>
+  );
+}
+
+function ReconciliationPanel({ run }) {
+  const reconciliation = run.reconciliation;
+  if (!reconciliation) return null;
+  const status = RECONCILIATION_STATUS[reconciliation.status] || {
+    label: reconciliation.status || '等待核验',
+    tone: 'neutral',
+  };
+  const counts = reconciliation.counts || {};
+  const drift = asList(reconciliation.drift);
+  const unsupported = asList(reconciliation.crossCheck?.unsupported);
+  const hasDetails = Array.isArray(reconciliation.drift);
+  return (
+    <section className={`analysis-reconciliation analysis-reconciliation--${reconciliation.status || 'pending'}`}>
+      <div className="analysis-reconciliation__heading">
+        <div>
+          <span className="analysis-reconciliation__kicker">SERVER RECONCILIATION</span>
+          <strong>实施偏离核验</strong>
+        </div>
+        <span className={`analysis-badge analysis-badge--${status.tone}`}>{status.label}</span>
+      </div>
+      <p>
+        {reconciliation.status === 'aligned' && '服务端按稳定 ID 核对后，实施快照与运行锁定的正式目标一致。'}
+        {reconciliation.status === 'explained-drift' && '偏离已由实施报告逐项解释并交叉核对；这些解释不会自动修改正式目标。'}
+        {reconciliation.status === 'unresolved-drift' && '仍有未解释、未报告或未核验项，不能显示为完成或一致。'}
+      </p>
+      <div className="analysis-reconciliation-counts" aria-label="实施偏离分类统计">
+        {Object.entries(DRIFT_KIND).map(([kind, meta]) => (
+          <span key={kind}><b>{counts[kind] || 0}</b>{meta.label}</span>
+        ))}
+        <span><b>{counts.unexplained || 0}</b>未解释</span>
+      </div>
+      {!hasDetails && <small className="analysis-reconciliation__compact-note">当前为精简摘要；按需读取核验详情可查看逐项证据。</small>}
+      {hasDetails && drift.length > 0 && (
+        <div className="analysis-drift-list">
+          {drift.map((item) => {
+            const kind = DRIFT_KIND[item.kind] || { label: item.kind, tone: 'neutral' };
+            return (
+              <article className="analysis-drift-item" key={item.id}>
+                <div className="analysis-drift-item__heading">
+                  <div>
+                    <span className={`analysis-badge analysis-badge--${kind.tone}`}>{kind.label}</span>
+                    <strong>{item.targetType === 'edge' ? '关系' : '模块'} · {item.targetId}</strong>
+                  </div>
+                  <code>{item.id}</code>
+                </div>
+                <p>{item.summary}</p>
+                {asList(item.changedFields).length > 0 && (
+                  <div className="analysis-drift-fields">
+                    {item.changedFields.map((field) => <span key={field}>{field}</span>)}
+                  </div>
+                )}
+                <div className="analysis-reconciliation-elements">
+                  <ReconciliationElement label="正式目标" element={item.target} />
+                  <ReconciliationElement label="实施快照" element={item.actual} />
+                </div>
+                <div className={`analysis-drift-explanation is-${item.explanation?.status || 'unexplained'}`}>
+                  <strong>{item.explanation?.status === 'agent-explained' ? '智能体解释已核对' : '尚未解释'}</strong>
+                  <p>{item.explanation?.summary || '实施报告没有覆盖这项服务端计算出的偏离。'}</p>
+                  {asList(item.explanation?.evidenceIds).length > 0 && (
+                    <code>{item.explanation.evidenceIds.join(' · ')}</code>
+                  )}
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      )}
+      {hasDetails && !drift.length && <p className="analysis-reconciliation__aligned-note">没有检测到模块、职责、权限或关系边界偏离。</p>}
+      {unsupported.length > 0 && (
+        <div className="analysis-reconciliation-unsupported">
+          <strong>报告中有 {unsupported.length} 项声明无法由快照对比支持</strong>
+          {unsupported.map((item) => <p key={item.id}>{item.kind} · {item.targetId}：{item.summary}</p>)}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function RunList({ runs, integration, busy, onRefresh, onCopyConnection }) {
   return (
     <>
@@ -139,6 +255,15 @@ function RunList({ runs, integration, busy, onRefresh, onCopyConnection }) {
                 <StatusBadge status={run.status || 'active'} type="run" />
               </div>
               {run.summary && <p>{run.summary}</p>}
+              {run.approvedTarget && (
+                <div className="analysis-target-lock">
+                  <div>
+                    <span>已锁定正式目标</span>
+                    <strong>{run.approvedTarget.diagramId} · {run.approvedTarget.revisionId}</strong>
+                  </div>
+                  <code title={run.approvedTarget.semanticHash}>{run.approvedTarget.semanticHash.slice(0, 12)}…</code>
+                </div>
+              )}
               <div className="analysis-meta-row">
                 <span>{TASK_TYPE[run.taskType] || run.taskType}</span>
                 <span>{run.agentClient || '未知客户端'}</span>
@@ -156,6 +281,7 @@ function RunList({ runs, integration, busy, onRefresh, onCopyConnection }) {
                   ))}
                 </div>
               )}
+              <ReconciliationPanel run={run} />
               <small className="analysis-run-time">更新于 {formatTime(run.updatedAt || run.createdAt)}</small>
             </article>
           );

@@ -1,6 +1,6 @@
 ---
 name: architecture-change-plan
-description: Turn a user's product goal into an evidence-backed, reviewable target architecture proposal for AI Architecture Viewer. Use before AI coding begins, when comparing implementation options, defining scope and acceptance criteria, or revising an approved target. Do not use it to implement code.
+description: Turn a user's product goal into an evidence-backed, reviewable target architecture proposal for AI Architecture Viewer. Use before AI coding begins, when comparing implementation options, defining scope and acceptance criteria, or revising a published target. Do not use it to implement code.
 ---
 
 # Architecture Change Plan

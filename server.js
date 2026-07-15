@@ -102,6 +102,8 @@ const AGENT_NODE_DATA_FIELDS = new Set([
   'focus', 'buildStrategy', 'aiCollaboration', 'relatedDiagramId', 'relatedNodeId',
 ]);
 const AGENT_EDGE_DATA_FIELDS = new Set(['label', 'relationType', 'controlledBoundaryPosture']);
+const RECONCILIATION_NODE_FIELDS = ['name', 'purpose', 'technical', 'product', 'authorization'];
+const RECONCILIATION_EDGE_FIELDS = ['source', 'target', 'label', 'relationType', 'controlledBoundaryPosture'];
 
 function parsePort(value) {
   const port = value === undefined || value === '' ? DEFAULT_PORT : Number(value);
@@ -663,7 +665,8 @@ function createAgentRun(incoming, catalog) {
   if (incoming.taskType !== 'architecture-change-plan' && view !== 'current') {
     throw new ContractError('项目理解和实施核验只能提交到当前架构视图', 'AGENT_VIEW_INVALID', 422);
   }
-  const lane = readState(diagram.statePath)[view];
+  const state = readState(diagram.statePath);
+  const lane = state[view];
   const now = new Date().toISOString();
   return {
     id: `run-${crypto.randomUUID().toLowerCase()}`,
@@ -682,6 +685,10 @@ function createAgentRun(incoming, catalog) {
       ? null
       : requiredAgentText(incoming.summary, 'summary', 1000),
     artifactIds: [],
+    approvedTarget: incoming.taskType === 'implementation-reconcile'
+      ? formalTargetDescriptor(diagram.id, state.target.published)
+      : null,
+    reconciliation: null,
   };
 }
 
@@ -1015,7 +1022,13 @@ function snapshotProposal(artifact, run, graph) {
         patch: {
           source: edge.source,
           target: edge.target,
-          data: { label: edge.label, relationType: edge.relationType },
+          data: {
+            label: edge.label,
+            relationType: edge.relationType,
+            ...(edge.controlledBoundaryPosture === undefined
+              ? {}
+              : { controlledBoundaryPosture: edge.controlledBoundaryPosture }),
+          },
         },
       });
       return;
@@ -1028,6 +1041,12 @@ function snapshotProposal(artifact, run, graph) {
     const patchData = {};
     if (existing.data?.label !== edge.label) patchData.label = edge.label;
     if (existing.data?.relationType !== edge.relationType) patchData.relationType = edge.relationType;
+    if (
+      edge.controlledBoundaryPosture !== undefined
+      && existing.data?.controlledBoundaryPosture !== edge.controlledBoundaryPosture
+    ) {
+      patchData.controlledBoundaryPosture = edge.controlledBoundaryPosture;
+    }
     if (Object.keys(patchData).length) {
       changes.push({
         id: changeIdForArtifact(artifact.artifactId, 'update', 'edge', edge.id),
@@ -1064,6 +1083,385 @@ function snapshotProposal(artifact, run, graph) {
     application: null,
     origin: proposalOrigin(run, artifact),
   };
+}
+
+function reconciliationId(kind, targetType, targetId) {
+  const digest = crypto.createHash('sha256')
+    .update(`${kind}:${targetType}:${targetId}`)
+    .digest('hex')
+    .slice(0, 20);
+  return `drift-${digest}`;
+}
+
+function unsupportedDriftId(item, index) {
+  const digest = crypto.createHash('sha256')
+    .update(`${index}:${item.kind}:${item.targetId}:${item.summary}`)
+    .digest('hex')
+    .slice(0, 20);
+  return `unsupported-${digest}`;
+}
+
+function targetNodeElement(node) {
+  return {
+    id: node.id,
+    targetType: 'node',
+    name: node.data.name,
+    purpose: node.data.purpose,
+    technical: node.data.technical,
+    product: node.data.product,
+    authorization: node.data.authorization,
+    evidenceIds: [],
+  };
+}
+
+function targetEdgeElement(edge) {
+  return {
+    id: edge.id,
+    targetType: 'edge',
+    source: edge.source,
+    target: edge.target,
+    label: edge.data.label,
+    relationType: edge.data.relationType,
+    controlledBoundaryPosture: edge.data.controlledBoundaryPosture,
+    evidenceIds: [],
+  };
+}
+
+function actualNodeElement(node) {
+  return {
+    id: node.id,
+    targetType: 'node',
+    name: node.name,
+    purpose: node.purpose,
+    technical: node.technical,
+    product: node.product,
+    authorization: node.authorization,
+    evidenceIds: clone(node.evidenceIds),
+  };
+}
+
+function actualEdgeElement(edge) {
+  return {
+    id: edge.id,
+    targetType: 'edge',
+    source: edge.source,
+    target: edge.target,
+    label: edge.label,
+    relationType: edge.relationType,
+    controlledBoundaryPosture: edge.controlledBoundaryPosture,
+    evidenceIds: clone(edge.evidenceIds),
+  };
+}
+
+function reconciliationElementKey(targetType, targetId) {
+  return `${targetType}:${targetId}`;
+}
+
+function hasSufficientCodeEvidence(analysis, element) {
+  if (!element?.evidenceIds?.length) return false;
+  const evidenceById = new Map(analysis.evidence.map((evidence) => [evidence.id, evidence]));
+  return element.evidenceIds.every((id) => {
+    const evidence = evidenceById.get(id);
+    return Boolean(
+      evidence
+      && evidence.sourceKind === 'workspace-file'
+      && evidence.basis === 'code-fact'
+      && evidence.path
+      && evidence.excerpt
+      && evidence.contentHash
+    );
+  });
+}
+
+function serverDriftItem({ kind, targetType, targetId, summary, changedFields = [], target, actual, source = 'server-computed' }) {
+  return {
+    id: reconciliationId(kind, targetType, targetId),
+    kind,
+    source,
+    targetType,
+    targetId,
+    summary,
+    changedFields,
+    target: target ? clone(target) : null,
+    actual: actual ? clone(actual) : null,
+    evidenceIds: clone(actual?.evidenceIds || []),
+    explanation: {
+      status: 'unexplained',
+      summary: null,
+      evidenceIds: [],
+    },
+  };
+}
+
+function buildImplementationReconciliation({ run, targetRevision, snapshot, report, analysis, computedAt }) {
+  const targetElements = new Map();
+  targetRevision.graph.nodes.forEach((node) => {
+    const element = targetNodeElement(node);
+    targetElements.set(reconciliationElementKey('node', element.id), element);
+  });
+  targetRevision.graph.edges.forEach((edge) => {
+    const element = targetEdgeElement(edge);
+    targetElements.set(reconciliationElementKey('edge', element.id), element);
+  });
+
+  const actualElements = new Map();
+  snapshot.nodes.forEach((node) => {
+    const element = actualNodeElement(node);
+    actualElements.set(reconciliationElementKey('node', element.id), element);
+  });
+  snapshot.edges.forEach((edge) => {
+    const element = actualEdgeElement(edge);
+    actualElements.set(reconciliationElementKey('edge', element.id), element);
+  });
+
+  const drift = [];
+  targetElements.forEach((target, key) => {
+    const actual = actualElements.get(key);
+    if (!actual) {
+      drift.push(serverDriftItem({
+        kind: 'missing',
+        targetType: target.targetType,
+        targetId: target.id,
+        summary: `实施后快照缺少正式目标中的${target.targetType === 'node' ? '模块' : '关系'} ${target.id}`,
+        target,
+        actual: null,
+      }));
+      return;
+    }
+    const fields = target.targetType === 'node' ? RECONCILIATION_NODE_FIELDS : RECONCILIATION_EDGE_FIELDS;
+    const changedFields = fields.filter((field) => target[field] !== actual[field]);
+    if (changedFields.length) {
+      drift.push(serverDriftItem({
+        kind: 'changed',
+        targetType: target.targetType,
+        targetId: target.id,
+        summary: `${target.targetType === 'node' ? '模块职责或权限边界' : '关系或受控边界'}与正式目标不同：${changedFields.join('、')}`,
+        changedFields,
+        target,
+        actual,
+      }));
+    }
+  });
+  actualElements.forEach((actual, key) => {
+    if (!targetElements.has(key)) {
+      drift.push(serverDriftItem({
+        kind: 'extra',
+        targetType: actual.targetType,
+        targetId: actual.id,
+        summary: `实施后快照包含正式目标之外的${actual.targetType === 'node' ? '模块' : '关系'} ${actual.id}`,
+        target: null,
+        actual,
+      }));
+    }
+    if (!hasSufficientCodeEvidence(analysis, actual)) {
+      drift.push(serverDriftItem({
+        kind: 'unverified',
+        source: 'evidence-check',
+        targetType: actual.targetType,
+        targetId: actual.id,
+        summary: `实施后快照中的 ${actual.id} 缺少可核验的 code-fact 证据`,
+        target: targetElements.get(key) || null,
+        actual,
+      }));
+    }
+  });
+
+  const explanations = new Map();
+  const unsupported = [];
+  report.drift.forEach((reported, index) => {
+    if (reported.kind === 'unverified') {
+      const elementCandidates = [...new Set([
+        ...[...targetElements.values()].filter((item) => item.id === reported.targetId).map((item) => reconciliationElementKey(item.targetType, item.id)),
+        ...[...actualElements.values()].filter((item) => item.id === reported.targetId).map((item) => reconciliationElementKey(item.targetType, item.id)),
+      ])];
+      if (elementCandidates.length === 1) {
+        const [key] = elementCandidates;
+        const target = targetElements.get(key) || null;
+        const actual = actualElements.get(key) || null;
+        const targetType = (target || actual).targetType;
+        let item = drift.find((candidate) => (
+          candidate.kind === 'unverified'
+          && candidate.targetType === targetType
+          && candidate.targetId === reported.targetId
+        ));
+        if (!item) {
+          item = serverDriftItem({
+            kind: 'unverified',
+            source: 'agent-declared',
+            targetType,
+            targetId: reported.targetId,
+            summary: `智能体声明 ${reported.targetId} 尚不能由当前证据充分核验`,
+            target,
+            actual,
+          });
+          drift.push(item);
+        }
+        if (!explanations.has(item.id)) {
+          explanations.set(item.id, reported);
+          return;
+        }
+      }
+    } else {
+      const candidates = drift.filter((item) => (
+        item.kind === reported.kind
+        && item.targetId === reported.targetId
+        && !explanations.has(item.id)
+      ));
+      if (candidates.length === 1) {
+        explanations.set(candidates[0].id, reported);
+        return;
+      }
+    }
+    unsupported.push({
+      id: unsupportedDriftId(reported, index),
+      kind: reported.kind,
+      targetId: reported.targetId,
+      summary: reported.summary,
+    });
+  });
+
+  const detailedDrift = drift
+    .map((item) => {
+      const explanation = explanations.get(item.id);
+      const explanationEvidenceIds = explanation ? clone(explanation.evidenceIds) : [];
+      return {
+        ...item,
+        evidenceIds: [...new Set([...item.evidenceIds, ...explanationEvidenceIds])],
+        explanation: explanation
+          ? {
+            status: 'agent-explained',
+            summary: explanation.summary,
+            evidenceIds: explanationEvidenceIds,
+          }
+          : item.explanation,
+      };
+    })
+    .sort((left, right) => (
+      ['missing', 'extra', 'changed', 'unverified'].indexOf(left.kind)
+      - ['missing', 'extra', 'changed', 'unverified'].indexOf(right.kind)
+      || left.targetType.localeCompare(right.targetType)
+      || left.targetId.localeCompare(right.targetId)
+    ));
+  const unreported = detailedDrift
+    .filter((item) => item.explanation.status === 'unexplained')
+    .map((item) => item.id);
+  const counts = {
+    missing: detailedDrift.filter((item) => item.kind === 'missing').length,
+    extra: detailedDrift.filter((item) => item.kind === 'extra').length,
+    changed: detailedDrift.filter((item) => item.kind === 'changed').length,
+    unverified: detailedDrift.filter((item) => item.kind === 'unverified').length,
+    unexplained: detailedDrift.filter((item) => item.explanation.status === 'unexplained').length,
+    unreported: unreported.length,
+    unsupported: unsupported.length,
+  };
+  const crossCheck = {
+    matches: !unreported.length && !unsupported.length,
+    unreported,
+    unsupported,
+  };
+  const unresolved = Boolean(counts.unverified || counts.unexplained || counts.unsupported);
+  const status = !detailedDrift.length && !unsupported.length
+    ? 'aligned'
+    : unresolved
+      ? 'unresolved-drift'
+      : 'explained-drift';
+  return {
+    status,
+    target: clone(run.approvedTarget),
+    snapshotArtifactId: snapshot.artifactId,
+    reportArtifactId: report.artifactId,
+    computedAt,
+    counts,
+    drift: detailedDrift,
+    crossCheck,
+    completionEligible: report.status === 'complete' && status !== 'unresolved-drift',
+  };
+}
+
+function assertImplementationTarget(run, state, artifact) {
+  if (run.taskType !== 'implementation-reconcile') return;
+  if (!run.approvedTarget) {
+    if (artifact.schemaVersion === AI_CODING_PROTOCOL_VERSION) {
+      throw new ContractError(
+        '旧实施运行没有正式目标锁，请创建新的 implementation-reconcile 运行',
+        'AGENT_APPROVED_TARGET_LOCK_REQUIRED',
+        409,
+      );
+    }
+    return;
+  }
+  if (artifact.schemaVersion !== AI_CODING_PROTOCOL_VERSION) {
+    throw new ContractError(
+      `新实施运行必须使用协议 ${AI_CODING_PROTOCOL_VERSION}，旧协议不能绕过正式目标核验`,
+      'AGENT_PROTOCOL_UPGRADE_REQUIRED',
+      422,
+      { requiredVersion: AI_CODING_PROTOCOL_VERSION },
+    );
+  }
+  const actualTarget = formalTargetDescriptor(run.diagramId, state.target.published);
+  if (!sameFormalTarget(run.approvedTarget, actualTarget)) {
+    throw new ContractError(
+      '运行锁定的正式目标已经变化，请基于新目标创建新的实施运行',
+      'AGENT_APPROVED_TARGET_STALE',
+      409,
+      { expected: clone(run.approvedTarget), actual: actualTarget },
+    );
+  }
+}
+
+function implementationArtifactRecords(analysis, run) {
+  return analysis.artifacts.filter((record) => record.runId === run.id);
+}
+
+function assertImplementationSequence(analysis, run, artifact) {
+  if (run.taskType !== 'implementation-reconcile' || !run.approvedTarget) return null;
+  const records = implementationArtifactRecords(analysis, run);
+  const snapshots = records.filter((record) => record.artifactType === 'architecture-snapshot');
+  const reports = records.filter((record) => record.artifactType === 'implementation-report');
+  if (artifact.artifactType === 'architecture-snapshot') {
+    if (reports.length) {
+      throw new ContractError('实施报告已经提交，不能再替换实施后快照；请创建新的运行', 'AGENT_IMPLEMENTATION_RUN_FINALIZED', 409);
+    }
+    if (snapshots.some((record) => record.id !== artifact.artifactId)) {
+      throw new ContractError('一个实施运行只能绑定一个实施后快照', 'AGENT_RESULTING_SNAPSHOT_CONFLICT', 409);
+    }
+    return null;
+  }
+  if (artifact.artifactType !== 'implementation-report') return null;
+  if (!snapshots.length) {
+    throw new ContractError(
+      '请先提交由 code-fact 支持的实施后架构快照，再提交实施报告',
+      'AGENT_RESULTING_SNAPSHOT_REQUIRED',
+      422,
+    );
+  }
+  if (snapshots.length !== 1 || snapshots[0].id !== artifact.resultingSnapshotArtifactId) {
+    throw new ContractError(
+      '实施报告引用的快照工件与该运行已提交的快照不一致',
+      'AGENT_RESULTING_SNAPSHOT_MISMATCH',
+      422,
+      { submittedSnapshotIds: snapshots.map((record) => record.id) },
+    );
+  }
+  if (!sameFormalTarget(run.approvedTarget, artifact.approvedTarget)) {
+    throw new ContractError(
+      '实施报告引用的正式目标与运行锁定目标不一致',
+      'AGENT_APPROVED_TARGET_MISMATCH',
+      422,
+      { expected: clone(run.approvedTarget), submitted: clone(artifact.approvedTarget) },
+    );
+  }
+  if (!sameJson(snapshots[0].artifact.project.revision, artifact.resultingRevision)) {
+    throw new ContractError(
+      '实施报告的结果版本与实施后快照版本不一致',
+      'AGENT_RESULTING_REVISION_MISMATCH',
+      422,
+    );
+  }
+  if (reports.some((record) => record.id !== artifact.artifactId)) {
+    throw new ContractError('一个实施运行只能绑定一份实施报告', 'AGENT_IMPLEMENTATION_REPORT_CONFLICT', 409);
+  }
+  return snapshots[0].artifact;
 }
 
 function addArtifactRecord(next, run, artifact, submittedAt) {
@@ -1110,6 +1508,8 @@ function submitAgentArtifact(analysis, runId, incoming, { projectRoot, diagram }
       headRevisionId: lane.published.revisionId,
     });
   }
+  assertImplementationTarget(run, state, artifact);
+  const resultingSnapshot = assertImplementationSequence(analysis, run, artifact);
 
   const submittedAt = new Date().toISOString();
   if (manifest) next = importAgentEvidence(next, manifest, projectRoot, submittedAt);
@@ -1142,17 +1542,72 @@ function submitAgentArtifact(analysis, runId, incoming, { projectRoot, diagram }
       proposal = existingProposal;
     }
   }
+  if (
+    targetRun.taskType === 'implementation-reconcile'
+    && targetRun.approvedTarget
+    && artifact.artifactType === 'implementation-report'
+  ) {
+    const reconciliation = buildImplementationReconciliation({
+      run: targetRun,
+      targetRevision: state.target.published,
+      snapshot: resultingSnapshot,
+      report: artifact,
+      analysis: next,
+      computedAt: submittedAt,
+    });
+    if (artifact.status === 'complete' && !reconciliation.completionEligible) {
+      throw new ContractError(
+        '实施结果仍有未解释、未报告或未核验偏离，不能标记为完成',
+        'AGENT_IMPLEMENTATION_DRIFT_UNRESOLVED',
+        422,
+        {
+          status: reconciliation.status,
+          counts: reconciliation.counts,
+          crossCheck: reconciliation.crossCheck,
+        },
+      );
+    }
+    targetRun.reconciliation = reconciliation;
+  }
   validateAnalysis(next);
   return { analysis: next, artifact, proposal };
 }
 
-function agentRunResponse(analysis, runId, { activeTargetDraftId = null } = {}) {
+function reconciliationSummary(reconciliation) {
+  if (!reconciliation) return null;
+  return {
+    status: reconciliation.status,
+    targetRevisionId: reconciliation.target.revisionId,
+    snapshotArtifactId: reconciliation.snapshotArtifactId,
+    reportArtifactId: reconciliation.reportArtifactId,
+    computedAt: reconciliation.computedAt,
+    counts: clone(reconciliation.counts),
+    crossCheckMatches: reconciliation.crossCheck.matches,
+    completionEligible: reconciliation.completionEligible,
+    detailAvailable: true,
+  };
+}
+
+function publicAgentRun(run, { includeReconciliationDetails = false } = {}) {
+  return {
+    ...clone(run),
+    reconciliation: includeReconciliationDetails
+      ? clone(run.reconciliation)
+      : reconciliationSummary(run.reconciliation),
+  };
+}
+
+function agentRunResponse(
+  analysis,
+  runId,
+  { activeTargetDraftId = null, includeReconciliationDetails = false } = {},
+) {
   const run = analysis.agentRuns.find((item) => item.id === runId);
   if (!run) throw new ContractError('未找到该智能体运行', 'AGENT_RUN_NOT_FOUND', 404);
   return {
     protocolVersion: AI_CODING_PROTOCOL_VERSION,
     analysisRevision: analysis.baseRevision,
-    run: clone(run),
+    run: publicAgentRun(run, { includeReconciliationDetails }),
     artifacts: analysis.artifacts.filter((record) => record.runId === run.id).map(publicArtifactRecord),
     proposals: analysis.proposals.filter((proposal) => proposal.origin?.runId === run.id).map((proposal) => ({
       id: proposal.id,
@@ -1560,6 +2015,37 @@ function compactAgentArchitecture(revision) {
   };
 }
 
+function canonicalAgentSemanticGraph(revision) {
+  const graph = compactAgentArchitecture(revision).graph;
+  const canonicalize = (value) => {
+    if (Array.isArray(value)) return value.map(canonicalize);
+    if (!isPlainObject(value)) return value;
+    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalize(value[key])]));
+  };
+  return canonicalize({
+    nodes: [...graph.nodes].sort((left, right) => left.id.localeCompare(right.id)),
+    edges: [...graph.edges].sort((left, right) => left.id.localeCompare(right.id)),
+  });
+}
+
+function formalTargetDescriptor(diagramId, revision) {
+  const semanticHash = crypto.createHash('sha256')
+    .update(JSON.stringify(canonicalAgentSemanticGraph(revision)))
+    .digest('hex');
+  return {
+    status: 'formal-baseline',
+    diagramId,
+    revision: revision.revision,
+    revisionId: revision.revisionId,
+    semanticHash,
+  };
+}
+
+function sameFormalTarget(left, right) {
+  return Boolean(left && right) && ['status', 'diagramId', 'revision', 'revisionId', 'semanticHash']
+    .every((field) => left[field] === right[field]);
+}
+
 function addedDocumentRefs(beforeGraph, afterGraph) {
   const before = new Map(beforeGraph.nodes.map((node) => [node.id, new Set(node.data.documentRefs || [])]));
   const added = [];
@@ -1813,6 +2299,9 @@ function createServer(options = {}) {
             supportedEvidenceBases: ['user-confirmed', 'design-document', 'code-fact', 'agent-inference'],
             conceptProjectsSupported: true,
             currentArchitectureRequiresCodeFacts: true,
+            implementationRequiresPublishedTarget: true,
+            implementationSnapshotFirst: true,
+            serverComputedReconciliation: true,
             evidencePathsAreWorkspaceRelative: true,
             separateWorkspaceConfigured: workspaceRoot !== projectRoot,
             humanReviewRequired: true,
@@ -1840,7 +2329,14 @@ function createServer(options = {}) {
         const catalog = readArchitectureCatalog(catalogFile, stateFile, layoutFile);
         const diagram = agentDiagram(catalog, run.diagramId);
         const activeTargetDraftId = readState(diagram.statePath).target.draft?.draftId || null;
-        return json(res, 200, agentRunResponse(analysis, run.id, { activeTargetDraftId }));
+        const details = requestUrl.searchParams.get('details');
+        if (details && details !== 'reconciliation') {
+          throw new ContractError('details 只支持 reconciliation', 'AGENT_REQUEST_INVALID', 400);
+        }
+        return json(res, 200, agentRunResponse(analysis, run.id, {
+          activeTargetDraftId,
+          includeReconciliationDetails: details === 'reconciliation',
+        }));
       }
 
       const agentArtifactMatch = /^\/api\/agent\/runs\/([a-z0-9][a-z0-9._-]{0,79})\/artifacts$/.exec(pathname);
@@ -1868,11 +2364,13 @@ function createServer(options = {}) {
         const catalog = readArchitectureCatalog(catalogFile, stateFile, layoutFile);
         const diagram = agentDiagram(catalog, requestUrl.searchParams.get('diagram'));
         const lane = readState(diagram.statePath).target;
+        const formalBaseline = formalTargetDescriptor(diagram.id, lane.published);
         return json(res, 200, {
           protocolVersion: AI_CODING_PROTOCOL_VERSION,
           diagramId: diagram.id,
           approvalStatus: 'published-target',
           baselineStatus: 'formal-baseline',
+          formalBaseline,
           architecture: compactAgentArchitecture(lane.published),
           agentCanPublish: false,
         });

@@ -1,6 +1,6 @@
 {
   "name": "ai-architecture-viewer",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "A local-first visual architecture handoff and review workbench for coding agents and humans.",
   "private": true,
   "license": "PolyForm-Noncommercial-1.0.0",

@@ -1,6 +1,6 @@
 # Change-plan output contract
 
-Produce artifacts compatible with protocol version `1.1.0`.
+Produce artifacts compatible with protocol version `1.2.0`.
 
 ## task-request.json
 
@@ -10,7 +10,7 @@ Capture the user's goal, constraints, non-goals, acceptance criteria, and unreso
 
 Reference the request and base snapshot. Include up to three options, one recommendation, risks, required decisions, and semantic changes. Each change needs a stable target, concise rationale, and evidence IDs.
 
-Allowed change kinds are `add`, `update`, and `remove`. Allowed targets are `node` and `edge`. Allowed relation types are `flow`, `support`, `reference`, `governance`, and `handoff`.
+Allowed change kinds are `add`, `update`, and `remove`. Allowed targets are `node` and `edge`. Allowed relation types are `flow`, `support`, `reference`, `governance`, and `handoff`; controlled boundary postures are `none`, `controlled`, and `blocked`.
 
 ## evidence-manifest.json
 

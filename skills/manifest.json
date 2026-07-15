@@ -1,6 +1,6 @@
 {
   "schemaVersion": "1.0.0",
-  "protocolVersion": "1.1.0",
+  "protocolVersion": "1.2.0",
   "skills": [
     {
       "id": "architecture-discovery",
@@ -24,10 +24,10 @@
       "id": "implementation-reconcile",
       "displayName": "实施结果核验",
       "stage": "verify",
-      "description": "由外部智能体核对实际代码、测试结果与已批准架构，并提交所有偏离。",
+      "description": "由外部智能体核对实际代码、测试结果与运行锁定的已发布正式目标，并提交服务端可交叉核验的全部偏离。",
       "skillPath": "implementation-reconcile/SKILL.md",
       "outputs": ["implementation-report.json", "architecture-snapshot.json", "evidence-manifest.json"],
-      "defaultPrompt": "请连接本项目的 AI Architecture Viewer MCP，读取并执行 skills/implementation-reconcile/SKILL.md；获取人工批准的目标，核对代码与测试，并提交实施报告、当前快照和全部偏离。"
+      "defaultPrompt": "请连接本项目的 AI Architecture Viewer MCP，读取并执行 skills/implementation-reconcile/SKILL.md；创建实施核验运行并锁定已发布正式目标，先提交由 code-fact 支持的实施后快照，再提交引用该快照的实施报告和全部偏离；不要批准、发布或改写正式目标。"
     }
   ]
 }

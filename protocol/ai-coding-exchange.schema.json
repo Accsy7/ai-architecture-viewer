@@ -33,6 +33,18 @@
         "value": { "type": "string", "minLength": 1, "maxLength": 160 }
       }
     },
+    "approvedTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "diagramId", "revision", "revisionId", "semanticHash"],
+      "properties": {
+        "status": { "const": "formal-baseline" },
+        "diagramId": { "$ref": "#/$defs/stableId" },
+        "revision": { "type": "integer", "minimum": 0 },
+        "revisionId": { "$ref": "#/$defs/stableId" },
+        "semanticHash": { "$ref": "#/$defs/hash" }
+      }
+    },
     "legacyEvidenceEntry": {
       "type": "object",
       "additionalProperties": false,
@@ -108,6 +120,7 @@
         "target": { "$ref": "#/$defs/stableId" },
         "label": { "type": "string", "minLength": 1, "maxLength": 240 },
         "relationType": { "enum": ["flow", "support", "reference", "governance", "handoff"] },
+        "controlledBoundaryPosture": { "enum": ["none", "controlled", "blocked"] },
         "evidenceIds": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/stableId" } }
       }
     },
@@ -173,7 +186,7 @@
       "additionalProperties": false,
       "required": ["schemaVersion", "artifactType", "artifactId", "createdAt", "goal", "constraints", "nonGoals", "acceptanceCriteria", "decisionsRequired"],
       "properties": {
-        "schemaVersion": { "enum": ["1.0.0", "1.1.0"] },
+        "schemaVersion": { "enum": ["1.0.0", "1.1.0", "1.2.0"] },
         "artifactType": { "const": "task-request" },
         "artifactId": { "$ref": "#/$defs/stableId" },
         "createdAt": { "type": "string", "format": "date-time" },
@@ -208,7 +221,7 @@
       "additionalProperties": false,
       "required": ["schemaVersion", "artifactType", "artifactId", "createdAt", "projectRevision", "entries"],
       "properties": {
-        "schemaVersion": { "const": "1.1.0" },
+        "schemaVersion": { "enum": ["1.1.0", "1.2.0"] },
         "artifactType": { "const": "evidence-manifest" },
         "artifactId": { "$ref": "#/$defs/stableId" },
         "createdAt": { "type": "string", "format": "date-time" },
@@ -221,7 +234,7 @@
       "additionalProperties": false,
       "required": ["schemaVersion", "artifactType", "artifactId", "createdAt", "project", "scope", "nodes", "edges", "assumptions", "unknowns", "evidenceManifest"],
       "properties": {
-        "schemaVersion": { "enum": ["1.0.0", "1.1.0"] },
+        "schemaVersion": { "enum": ["1.0.0", "1.1.0", "1.2.0"] },
         "artifactType": { "const": "architecture-snapshot" },
         "artifactId": { "$ref": "#/$defs/stableId" },
         "createdAt": { "type": "string", "format": "date-time" },
@@ -248,14 +261,20 @@
         "assumptions": { "type": "array", "items": { "type": "string", "minLength": 1, "maxLength": 1000 } },
         "unknowns": { "type": "array", "items": { "type": "string", "minLength": 1, "maxLength": 1000 } },
         "evidenceManifest": { "$ref": "#/$defs/relativePath" }
-      }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "schemaVersion": { "const": "1.2.0" } }, "required": ["schemaVersion"] },
+          "then": { "properties": { "edges": { "items": { "required": ["controlledBoundaryPosture"] } } } }
+        }
+      ]
     },
     "architectureProposal": {
       "type": "object",
       "additionalProperties": false,
       "required": ["schemaVersion", "artifactType", "artifactId", "createdAt", "requestId", "baseSnapshotId", "title", "summary", "options", "recommendedOptionId", "changes", "acceptanceCriteria", "risks", "decisionsRequired", "evidenceManifest"],
       "properties": {
-        "schemaVersion": { "enum": ["1.0.0", "1.1.0"] },
+        "schemaVersion": { "enum": ["1.0.0", "1.1.0", "1.2.0"] },
         "artifactType": { "const": "architecture-proposal" },
         "artifactId": { "$ref": "#/$defs/stableId" },
         "createdAt": { "type": "string", "format": "date-time" },
@@ -275,14 +294,15 @@
     "implementationReport": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["schemaVersion", "artifactType", "artifactId", "createdAt", "requestId", "approvedProposalId", "status", "resultingRevision", "changedFiles", "tests", "acceptanceResults", "drift", "unresolved", "evidenceManifest", "resultingSnapshot"],
+      "required": ["schemaVersion", "artifactType", "artifactId", "createdAt", "requestId", "status", "resultingRevision", "changedFiles", "tests", "acceptanceResults", "drift", "unresolved", "evidenceManifest"],
       "properties": {
-        "schemaVersion": { "enum": ["1.0.0", "1.1.0"] },
+        "schemaVersion": { "enum": ["1.0.0", "1.1.0", "1.2.0"] },
         "artifactType": { "const": "implementation-report" },
         "artifactId": { "$ref": "#/$defs/stableId" },
         "createdAt": { "type": "string", "format": "date-time" },
         "requestId": { "$ref": "#/$defs/stableId" },
         "approvedProposalId": { "$ref": "#/$defs/stableId" },
+        "approvedTarget": { "$ref": "#/$defs/approvedTarget" },
         "status": { "enum": ["complete", "partial", "blocked"] },
         "resultingRevision": { "$ref": "#/$defs/revision" },
         "changedFiles": { "type": "array", "items": { "$ref": "#/$defs/relativePath" } },
@@ -291,8 +311,22 @@
         "drift": { "type": "array", "items": { "$ref": "#/$defs/drift" } },
         "unresolved": { "type": "array", "items": { "type": "string", "minLength": 1, "maxLength": 1000 } },
         "evidenceManifest": { "$ref": "#/$defs/relativePath" },
-        "resultingSnapshot": { "$ref": "#/$defs/relativePath" }
-      }
+        "resultingSnapshot": { "$ref": "#/$defs/relativePath" },
+        "resultingSnapshotArtifactId": { "$ref": "#/$defs/stableId" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "schemaVersion": { "const": "1.2.0" } }, "required": ["schemaVersion"] },
+          "then": {
+            "required": ["approvedTarget", "resultingSnapshotArtifactId"],
+            "not": { "anyOf": [{ "required": ["approvedProposalId"] }, { "required": ["resultingSnapshot"] }] }
+          },
+          "else": {
+            "required": ["approvedProposalId", "resultingSnapshot"],
+            "not": { "anyOf": [{ "required": ["approvedTarget"] }, { "required": ["resultingSnapshotArtifactId"] }] }
+          }
+        }
+      ]
     }
   }
 }

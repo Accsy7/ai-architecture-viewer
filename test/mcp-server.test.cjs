@@ -53,7 +53,10 @@ test('MCP stdio server exposes the governed external-agent tool surface', async 
     )), false);
     const approvedTargetTool = tools.tools.find((tool) => tool.name === 'get_approved_target');
     assert.match(approvedTargetTool.description, /only the latest human-published formal target baseline/i);
-    assert.match(approvedTargetTool.description, /accepted but unpublished drafts are excluded/i);
+    assert.match(approvedTargetTool.description, /semantic hash/i);
+    const reviewStatusTool = tools.tools.find((tool) => tool.name === 'get_review_status');
+    assert.match(reviewStatusTool.description, /compact/i);
+    assert.ok(reviewStatusTool.inputSchema.properties.includeReconciliationDetails);
 
     const result = await client.callTool({
       name: 'get_current_architecture',
@@ -79,6 +82,8 @@ test('MCP stdio server exposes the governed external-agent tool surface', async 
     assert.equal(formalTarget.approvalStatus, 'published-target');
     assert.equal(formalTarget.baselineStatus, 'formal-baseline');
     assert.equal(formalTarget.architecture.revisionId, targetContext.selected.published.revisionId);
+    assert.equal(formalTarget.formalBaseline.revisionId, targetContext.selected.published.revisionId);
+    assert.match(formalTarget.formalBaseline.semanticHash, /^[a-f0-9]{64}$/);
   } finally {
     await client.close();
   }
